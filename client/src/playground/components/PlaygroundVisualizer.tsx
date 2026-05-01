@@ -23,6 +23,10 @@ const VISUALIZER_MODES: Array<{ id: VisualizerMode; label: string }> = [
   { id: "celestial_gyroscope", label: "Celestial Gyroscope" },
   { id: "chaos_bloom", label: "Chaos Bloom" },
   { id: "quantum_veil", label: "Quantum Veil" },
+  { id: "spectral_superformula", label: "Spectral Superformula" },
+  { id: "harmonic_lissajous_manifold", label: "Harmonic Lissajous Manifold" },
+  { id: "attractor_phase_weave", label: "Spectral Moire Tensor" },
+  { id: "spectral_implicit_isolines", label: "Spectral Implicit Isolines" },
 ];
 
 function clamp(value: number, min: number, max: number): number {
@@ -54,6 +58,46 @@ function findNextBeatIndex(
   return low;
 }
 
+function positiveMod(value: number, divisor: number): number {
+  if (!Number.isFinite(divisor) || divisor <= 0) return 0;
+  const wrapped = value % divisor;
+  return wrapped < 0 ? wrapped + divisor : wrapped;
+}
+
+function hashStringToUnit(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return ((hash >>> 0) % 1_000_000) / 1_000_000;
+}
+
+function estimateTempoBpm(
+  beats: Array<{ timeSeconds: number; strength: number }>,
+  fallbackBpm: number
+): number {
+  if (beats.length < 3) {
+    return fallbackBpm;
+  }
+  const intervals: number[] = [];
+  for (let i = 1; i < beats.length; i += 1) {
+    const delta = beats[i].timeSeconds - beats[i - 1].timeSeconds;
+    if (Number.isFinite(delta) && delta >= 0.2 && delta <= 2) {
+      intervals.push(delta);
+    }
+  }
+  if (intervals.length < 2) {
+    return fallbackBpm;
+  }
+  intervals.sort((a, b) => a - b);
+  const median = intervals[Math.floor(intervals.length / 2)] ?? 0;
+  if (!Number.isFinite(median) || median <= 0) {
+    return fallbackBpm;
+  }
+  return clamp(60 / median, 60, 220);
+}
+
 export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -78,6 +122,26 @@ export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): J
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0);
   const [songsPanelOpen, setSongsPanelOpen] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const tempoBpm = useMemo(() => {
+    const beats = trackData?.accentBeats ?? [];
+    return estimateTempoBpm(beats, runtimeConfig.playgroundTempoDefaultBpm);
+  }, [trackData]);
+
+  const beatPeriodSeconds = useMemo(() => {
+    const bpm = Math.max(1, tempoBpm);
+    return 60 / bpm;
+  }, [tempoBpm]);
+
+  const beatAnchorSeconds = useMemo(() => {
+    const beats = trackData?.accentBeats ?? [];
+    return beats.length > 0 ? beats[0].timeSeconds : 0;
+  }, [trackData]);
+
+  const baseVariationSeed = useMemo(() => {
+    if (!selectedSongId) return 0.5;
+    return hashStringToUnit(selectedSongId);
+  }, [selectedSongId]);
 
   const bindAudioElement = useCallback((node: HTMLAudioElement | null) => {
     audioRef.current = node;
@@ -250,6 +314,38 @@ export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): J
         frame: featuresRef.current,
         beatPulse: beatPulseRef.current,
         songProgress: duration > 0 ? clamp(currentTime / duration, 0, 1) : 0,
+        tempoBpm,
+        tempoNorm: clamp((tempoBpm - 80) / 100, 0, 1),
+        beatPhase: positiveMod(currentTime - beatAnchorSeconds, beatPeriodSeconds) / beatPeriodSeconds,
+        barPhase:
+          positiveMod(currentTime - beatAnchorSeconds, beatPeriodSeconds * 4) /
+          (beatPeriodSeconds * 4),
+        beatImpulse: (() => {
+          const beats = trackData?.accentBeats ?? [];
+          if (beats.length === 0) return 0;
+          const nextBeatTime = beats[beatIndexRef.current]?.timeSeconds;
+          const prevBeatTime = beats[Math.max(0, beatIndexRef.current - 1)]?.timeSeconds;
+          const deltaNext =
+            Number.isFinite(nextBeatTime) && nextBeatTime !== undefined
+              ? Math.abs(nextBeatTime - currentTime)
+              : Number.POSITIVE_INFINITY;
+          const deltaPrev =
+            Number.isFinite(prevBeatTime) && prevBeatTime !== undefined
+              ? Math.abs(prevBeatTime - currentTime)
+              : Number.POSITIVE_INFINITY;
+          const nearestDelta = Math.min(deltaNext, deltaPrev);
+          const window = Math.max(
+            0.03,
+            beatPeriodSeconds * runtimeConfig.playgroundBeatImpulseWindowRatio
+          );
+          const normalizedDistance = clamp(1 - nearestDelta / window, 0, 1);
+          return normalizedDistance * normalizedDistance;
+        })(),
+        variationAmount: runtimeConfig.playgroundVisualizerVariationAmount,
+        variationSeed:
+          baseVariationSeed +
+          hashStringToUnit(`${selectedSongId}:${Math.floor(currentTime / Math.max(0.2, beatPeriodSeconds * 4))}`),
+        overscanRatio: runtimeConfig.playgroundVisualizerOverscanRatio,
       });
 
       rafRef.current = window.requestAnimationFrame(tick);
@@ -262,7 +358,7 @@ export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): J
         rafRef.current = null;
       }
     };
-  }, [featuresRef, mode, trackData]);
+  }, [baseVariationSeed, beatAnchorSeconds, beatPeriodSeconds, featuresRef, mode, tempoBpm, trackData]);
 
   useEffect(() => {
     const audio = audioRef.current;

@@ -8,6 +8,14 @@ export interface VisualizerRenderContext {
   frame: MeydaFrame;
   beatPulse: number;
   songProgress: number;
+  tempoBpm: number;
+  tempoNorm: number;
+  beatPhase: number;
+  barPhase: number;
+  beatImpulse: number;
+  variationAmount: number;
+  variationSeed: number;
+  overscanRatio: number;
 }
 
 function normalized(value: number, max: number): number {
@@ -21,6 +29,21 @@ function clamp01(value: number): number {
 function wrap01(value: number): number {
   const wrapped = value % 1;
   return wrapped < 0 ? wrapped + 1 : wrapped;
+}
+
+function modSignal(
+  timeSeconds: number,
+  seed: number,
+  tempoBpm: number,
+  beatPhase: number,
+  variationAmount: number,
+  freqScale = 1
+): number {
+  const speed = (tempoBpm / 60) * freqScale;
+  const a = Math.sin((timeSeconds * speed + beatPhase) * Math.PI * 2 + seed * 5.7);
+  const b = Math.cos((timeSeconds * speed * 0.61 + beatPhase * 0.75) * Math.PI * 2 + seed * 9.3);
+  const c = Math.sin((timeSeconds * speed * 0.29 + beatPhase * 1.33) * Math.PI * 2 + seed * 13.1);
+  return (a * 0.55 + b * 0.3 + c * 0.15) * Math.max(0, variationAmount);
 }
 
 function energy(frame: MeydaFrame): { bass: number; mid: number; treble: number; total: number } {
@@ -82,8 +105,8 @@ function dynamics(frame: MeydaFrame): {
   centroid: number;
   rolloff: number;
   flatness: number;
-  beatNorm: number;
-  drive: number;
+  perceptualSpread: number;
+  perceptualSharpness: number;
   bassGate: number;
   trebleGate: number;
   e: { bass: number; mid: number; treble: number; total: number };
@@ -95,6 +118,8 @@ function dynamics(frame: MeydaFrame): {
   const centroid = normalized(frame.spectralCentroid, 9200);
   const rolloff = normalized(frame.spectralRolloff, 13000);
   const flatness = Math.max(0, Math.min(1, frame.spectralFlatness || 0));
+  const perceptualSpread = clamp01(frame.perceptualSpread || 0);
+  const perceptualSharpness = clamp01(frame.perceptualSharpness || 0);
   const bassGate = e.bass > 0.56 ? normalized(e.bass - 0.56, 0.44) : 0;
   const trebleGate = e.treble > 0.53 ? normalized(e.treble - 0.53, 0.47) : 0;
   const sampleBand = createSpectrumSampler(frame.amplitudeSpectrum);
@@ -105,8 +130,8 @@ function dynamics(frame: MeydaFrame): {
     centroid,
     rolloff,
     flatness,
-    beatNorm: 0,
-    drive: 0,
+    perceptualSpread,
+    perceptualSharpness,
     bassGate,
     trebleGate,
     e,
@@ -174,15 +199,33 @@ function drawHypotrochoid(
 }
 
 function drawPrismBloom(render: VisualizerRenderContext): void {
-  const { ctx, width, height, timeSeconds, frame, beatPulse } = render;
+  const {
+    ctx,
+    width,
+    height,
+    timeSeconds,
+    frame,
+    beatPulse,
+    beatImpulse,
+    beatPhase,
+    tempoBpm,
+    variationAmount,
+    variationSeed,
+  } = render;
   const d = dynamics(frame);
-  const beatNorm = clamp01(beatPulse * 0.9);
+  const beatNorm = clamp01(beatPulse * 0.65 + beatImpulse * 0.9);
+  const shapeWarp = modSignal(timeSeconds, variationSeed + 0.11, tempoBpm, beatPhase, variationAmount, 1.2);
   const drive = clamp01(d.e.total * 0.3 + d.rms * 0.32 + d.flux * 0.24 + beatNorm * 0.42);
   const centerX = width * 0.5;
   const centerY = height * 0.5;
-  const radius = Math.min(width, height) * (0.15 + d.rms * 0.09 + beatNorm * 0.06 + d.e.mid * 0.06);
+  const radius =
+    Math.min(width, height) *
+    (0.15 + d.rms * 0.08 + beatNorm * 0.04 + d.e.mid * 0.05 + shapeWarp * 0.028);
   const spokes = Math.round(84 + d.e.treble * 52 + d.flux * 36);
-  const spin = timeSeconds * (0.2 + d.e.treble * 0.74 + d.rms * 0.48 + beatNorm * 0.35);
+  const spin =
+    timeSeconds *
+      (0.2 + d.e.treble * 0.74 + d.rms * 0.48 + beatNorm * 0.35 + Math.abs(shapeWarp) * 0.42) +
+    shapeWarp * 1.3;
 
   ctx.fillStyle = `rgba(3, 8, 22, ${0.14 + (1 - d.e.total) * 0.14})`;
   ctx.fillRect(0, 0, width, height);
@@ -193,7 +236,7 @@ function drawPrismBloom(render: VisualizerRenderContext): void {
     centerX,
     centerY,
     radius * (1.28 + d.flux * 0.48 + roseMod * 0.34),
-    5 + Math.round(d.centroid * 6 + roseMod * 4),
+    5 + Math.round(d.centroid * 6 + roseMod * 4 + Math.max(-2, Math.min(2, shapeWarp * 3))),
     spin * (0.84 + d.centroid * 1.7) + roseMod * Math.PI,
     (timeSeconds * 42 + d.centroid * 160 + roseMod * 90) % 360,
     1 + d.rms * 2.7 + roseMod * 1.8,
@@ -206,12 +249,14 @@ function drawPrismBloom(render: VisualizerRenderContext): void {
     const bandB = d.sampleBand(ratio + timeSeconds * 0.015, 0.024);
     const band = clamp01(bandA * 0.72 + bandB * 0.28);
     const amp = clamp01(0.12 + band * 0.72 + drive * 0.6);
-    const curvature = 1 + d.rolloff * 0.35 + band * 0.42;
+    const curvature = 1 + d.rolloff * 0.35 + band * 0.42 + shapeWarp * 0.24;
     const angle =
       ratio * Math.PI * 2 +
       spin +
       Math.sin(timeSeconds * (0.3 + d.flux * 0.8) + ratio * Math.PI * 6) * (0.08 + band * 0.22);
-    const inner = radius * (0.52 + d.e.bass * 0.64 + d.bassGate * 0.26 + band * 0.2);
+    const inner =
+      radius *
+      (0.52 + d.e.bass * 0.64 + d.bassGate * 0.26 + band * 0.2 + shapeWarp * 0.08);
     const outer = inner + amp * Math.min(width, height) * (0.26 + d.flux * 0.34 + band * 0.22);
     const x1 = centerX + Math.cos(angle) * inner;
     const y1 = centerY + Math.sin(angle) * inner * (0.8 + d.flatness * 0.35);
@@ -259,12 +304,27 @@ function drawPrismBloom(render: VisualizerRenderContext): void {
 }
 
 function drawNebulaRibbons(render: VisualizerRenderContext): void {
-  const { ctx, width, height, timeSeconds, frame, beatPulse } = render;
+  const {
+    ctx,
+    width,
+    height,
+    timeSeconds,
+    frame,
+    beatPulse,
+    beatImpulse,
+    beatPhase,
+    barPhase,
+    tempoBpm,
+    variationAmount,
+    variationSeed,
+    overscanRatio,
+  } = render;
   const d = dynamics(frame);
-  const beatNorm = clamp01(beatPulse * 0.9);
+  const beatNorm = clamp01(beatPulse * 0.55 + beatImpulse * 1.05);
+  const ribbonWarp = modSignal(timeSeconds, variationSeed + 1.3, tempoBpm, beatPhase, variationAmount, 0.9);
   const drive = clamp01(d.e.total * 0.28 + d.rms * 0.32 + d.flux * 0.26 + beatNorm * 0.4);
   const ribbons = 10;
-  const span = width * 0.12;
+  const span = width * Math.max(0.12, overscanRatio);
   const baseY = height * 0.5;
 
   ctx.fillStyle = `rgba(2, 6, 18, ${0.1 + (1 - d.e.total) * 0.2})`;
@@ -274,8 +334,20 @@ function drawNebulaRibbons(render: VisualizerRenderContext): void {
     const layerN = layer / Math.max(1, ribbons - 1);
     const layerBand = d.sampleBand(layerN * 0.88 + d.centroid * 0.12, 0.08);
     const amplitude = height * (0.03 + layerN * 0.085 + d.e.mid * 0.18 + drive * 0.1 + layerBand * 0.09);
-    const waveFreq = 0.0019 + layerN * 0.0022 + d.e.treble * 0.0038 + d.flux * 0.0026 + layerBand * 0.0018;
-    const speed = 0.42 + layerN * 0.62 + d.e.bass * 1.18 + d.rms * 0.44 + layerBand * 0.4;
+    const waveFreq =
+      0.0019 +
+      layerN * 0.0022 +
+      d.e.treble * 0.0038 +
+      d.flux * 0.0026 +
+      layerBand * 0.0018 +
+      ribbonWarp * 0.0012;
+    const speed =
+      0.42 +
+      layerN * 0.62 +
+      d.e.bass * 1.18 +
+      d.rms * 0.44 +
+      layerBand * 0.4 +
+      Math.sin((barPhase + layerN) * Math.PI * 2) * 0.22;
     const hue = (timeSeconds * 28 + layer * 27 + beatNorm * 56 + layerBand * 92) % 360;
     const alpha = 0.05 + layerN * 0.08 + drive * 0.28 + layerBand * 0.16;
     const thickness = 1 + layerN * 5.8 + d.e.mid * 7 + d.rms * 3.8 + layerBand * 3.8;
@@ -295,7 +367,8 @@ function drawNebulaRibbons(render: VisualizerRenderContext): void {
         Math.sin(timeSeconds * 0.92 + d.centroid * Math.PI * 2.4) * height * 0.035 +
         Math.sin(p + layer * 0.6 + localBand * 2.8) * amplitude +
         Math.cos(secondary) * amplitude * (0.22 + d.e.bass * 0.16 + localBand * 0.18) +
-        harmonic;
+        harmonic +
+        Math.sin((beatPhase + xRatio * 0.5) * Math.PI * 2 + layerN * 6.4) * (6 + beatNorm * 16);
       if (x <= -span) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
@@ -326,11 +399,15 @@ function drawNebulaRibbons(render: VisualizerRenderContext): void {
     ctx.stroke();
   }
 
-  const sparks = Math.floor(24 + d.flux * 62 + beatNorm * 18);
+  const sparks = Math.floor(24 + d.flux * 62 + beatNorm * 18 + Math.abs(ribbonWarp) * 12);
   for (let i = 0; i < sparks; i += 1) {
     const t = i / Math.max(1, sparks - 1);
     const band = d.sampleBand(t + timeSeconds * 0.012, 0.02);
-    const x = (t * width + Math.sin(timeSeconds * 0.7 + i) * width * (0.05 + band * 0.04)) % width;
+    const rawX =
+      t * (width + span * 2) -
+      span +
+      Math.sin(timeSeconds * 0.7 + i + ribbonWarp * 2.2) * width * (0.05 + band * 0.04);
+    const x = rawX;
     const y =
       baseY +
       Math.sin(timeSeconds * (1.2 + d.flux * 2.5 + band * 1.4) + i * (0.72 + band * 0.2)) *
@@ -345,13 +422,29 @@ function drawNebulaRibbons(render: VisualizerRenderContext): void {
 }
 
 function drawPulseTunnel(render: VisualizerRenderContext): void {
-  const { ctx, width, height, timeSeconds, frame, beatPulse, songProgress } = render;
+  const {
+    ctx,
+    width,
+    height,
+    timeSeconds,
+    frame,
+    beatPulse,
+    songProgress,
+    beatImpulse,
+    beatPhase,
+    barPhase,
+    tempoBpm,
+    variationAmount,
+    variationSeed,
+    overscanRatio,
+  } = render;
   const d = dynamics(frame);
-  const beatNorm = clamp01(beatPulse * 0.9);
+  const beatNorm = clamp01(beatPulse * 0.6 + beatImpulse * 1.02);
+  const tunnelWarp = modSignal(timeSeconds, variationSeed + 2.7, tempoBpm, beatPhase, variationAmount, 1.4);
   const drive = clamp01(d.e.total * 0.26 + d.rms * 0.34 + d.flux * 0.24 + beatNorm * 0.4);
   const centerX = width * 0.5;
   const centerY = height * 0.5;
-  const maxRadius = Math.min(width, height) * 0.74;
+  const maxRadius = Math.min(width, height) * (0.74 + Math.max(0.04, overscanRatio * 0.2));
 
   ctx.fillStyle = `rgba(4, 6, 16, ${0.09 + (1 - d.e.total) * 0.2})`;
   ctx.fillRect(0, 0, width, height);
@@ -373,8 +466,17 @@ function drawPulseTunnel(render: VisualizerRenderContext): void {
 
     ctx.strokeStyle = `hsla(${hue}, 96%, ${58 + d.e.treble * 28 + band * 8}%, ${alpha})`;
     ctx.lineWidth = 0.8 + (1 - t) * (3.8 + d.e.mid * 7.4 + d.rms * 3.6 + band * 4.2);
+    const eccentricity = 1 + tunnelWarp * 0.22 + Math.sin((barPhase + ratio) * Math.PI * 2) * 0.08;
     ctx.beginPath();
-    ctx.arc(centerX, centerY, Math.max(2, radius), 0, Math.PI * 2);
+    ctx.ellipse(
+      centerX,
+      centerY,
+      Math.max(2, radius * (1 + eccentricity * 0.12)),
+      Math.max(2, radius * (1 - eccentricity * 0.12)),
+      beatPhase * Math.PI * 2 + tunnelWarp * 0.8,
+      0,
+      Math.PI * 2
+    );
     ctx.stroke();
   }
 
@@ -386,7 +488,8 @@ function drawPulseTunnel(render: VisualizerRenderContext): void {
     const orbit = ((timeSeconds * (0.14 + d.e.treble * 0.18 + band * 0.16) + seed * 0.0017) % 1) * Math.PI * 2;
     const distance =
       ((seed * 0.013 + timeSeconds * (0.04 + d.e.bass * 0.18 + beatNorm * 0.06 + band * 0.08)) % 1) *
-      maxRadius;
+      maxRadius *
+      (1 + overscanRatio * 0.25);
     const x = centerX + Math.cos(orbit) * distance;
     const y = centerY + Math.sin(orbit) * distance;
     const size = 0.45 + band * 2.9 + d.rms * 1 + beatNorm * 0.5;
@@ -400,7 +503,10 @@ function drawPulseTunnel(render: VisualizerRenderContext): void {
   for (let i = 0; i < beamCount; i += 1) {
     const ratio = i / beamCount;
     const band = d.sampleBand(ratio + timeSeconds * 0.02, 0.04);
-    const angle = ratio * Math.PI * 2 + timeSeconds * (0.3 + d.flux * 1.4 + band * 0.6);
+    const angle =
+      ratio * Math.PI * 2 +
+      timeSeconds * (0.3 + d.flux * 1.4 + band * 0.6 + Math.abs(tunnelWarp) * 0.6) +
+      Math.sin((beatPhase + ratio) * Math.PI * 2) * 0.14;
     const beamLength = maxRadius * (0.42 + d.bassGate * 0.52 + beatNorm * 0.08 + band * 0.22);
     const bend = Math.sin(timeSeconds * 1.4 + ratio * Math.PI * 4) * band * 0.4;
     const x2 = centerX + Math.cos(angle + bend) * beamLength;
@@ -428,9 +534,23 @@ function drawPulseTunnel(render: VisualizerRenderContext): void {
 }
 
 function drawLatticeDream(render: VisualizerRenderContext): void {
-  const { ctx, width, height, timeSeconds, frame, beatPulse } = render;
+  const {
+    ctx,
+    width,
+    height,
+    timeSeconds,
+    frame,
+    beatPulse,
+    beatImpulse,
+    beatPhase,
+    tempoNorm,
+    tempoBpm,
+    variationAmount,
+    variationSeed,
+  } = render;
   const d = dynamics(frame);
-  const beatNorm = clamp01(beatPulse * 0.9);
+  const beatNorm = clamp01(beatPulse * 0.55 + beatImpulse * 0.95);
+  const latticeWarp = modSignal(timeSeconds, variationSeed + 3.2, tempoBpm, beatPhase, variationAmount, 0.8);
   const drive = clamp01(d.e.total * 0.28 + d.rms * 0.3 + d.flux * 0.26 + beatNorm * 0.38);
   const cols = 26;
   const rows = 15;
@@ -455,13 +575,14 @@ function drawLatticeDream(render: VisualizerRenderContext): void {
         timeSeconds * (0.8 + d.e.treble * 3.2 + band * 1.4);
       const shiftY =
         Math.sin(phase) * (6 + d.e.bass * 16 + beatNorm * 9 + d.rms * 8 + band * 14) +
-        Math.cos(phase * (0.46 + bandCross * 0.36)) * (2 + band * 8);
+        Math.cos(phase * (0.46 + bandCross * 0.36 + latticeWarp * 0.08)) * (2 + band * 8);
       const shiftX =
         Math.cos(phase * (0.66 + d.rolloff * 0.4 + band * 0.25)) *
           (6 + d.e.mid * 14 + d.flux * 11 + bandCross * 12) +
-        Math.sin(phase * (0.34 + band * 0.24)) * (2 + bandCross * 7);
-      const x = px + shiftX;
-      const y = py + shiftY;
+        Math.sin(phase * (0.34 + band * 0.24 + latticeWarp * 0.05)) * (2 + bandCross * 7);
+      const shear = Math.sin((beatPhase + xRatio * 0.5 + yRatio * 0.5) * Math.PI * 2) * (5 + tempoNorm * 10);
+      const x = px + shiftX + shear * (0.4 + d.e.treble * 0.6);
+      const y = py + shiftY - shear * (0.18 + d.e.bass * 0.44);
       const hue = (timeSeconds * 32 + col * 8 + row * 10 + beatNorm * 90 + band * 110) % 360;
       const radius = 0.7 + d.e.total * 2 + beatNorm * 0.8 + d.trebleGate * 1.3 + band * 1.8;
 
@@ -471,7 +592,7 @@ function drawLatticeDream(render: VisualizerRenderContext): void {
         const nx =
           (col + 1) * xStep +
           Math.cos((col + 1) * (0.72 + d.centroid * 0.18) + phase) *
-            (5 + d.e.mid * 14 + d.flux * 11 + nextBand * 11);
+            (5 + d.e.mid * 14 + d.flux * 11 + nextBand * 11 + Math.abs(latticeWarp) * 6);
         const ny =
           py +
           Math.sin((col + 1) * (0.5 + nextBand * 0.2) + phase) *
@@ -507,9 +628,23 @@ function drawLatticeDream(render: VisualizerRenderContext): void {
 }
 
 function drawFractalAtlas(render: VisualizerRenderContext): void {
-  const { ctx, width, height, timeSeconds, frame, beatPulse, songProgress } = render;
+  const {
+    ctx,
+    width,
+    height,
+    timeSeconds,
+    frame,
+    beatPulse,
+    songProgress,
+    beatImpulse,
+    beatPhase,
+    tempoBpm,
+    variationAmount,
+    variationSeed,
+  } = render;
   const d = dynamics(frame);
-  const beatNorm = clamp01(beatPulse * 0.92);
+  const beatNorm = clamp01(beatPulse * 0.5 + beatImpulse * 1.1);
+  const fractalWarp = modSignal(timeSeconds, variationSeed + 4.1, tempoBpm, beatPhase, variationAmount, 1.1);
   const drive = clamp01(d.e.total * 0.28 + d.rms * 0.32 + d.flux * 0.26 + beatNorm * 0.42);
   const centerX = width * 0.5;
   const centerY = height * 0.5;
@@ -527,15 +662,17 @@ function drawFractalAtlas(render: VisualizerRenderContext): void {
     let zy = Math.sin(ratio * Math.PI * 2 + timeSeconds * 0.2) * (0.8 + band * 0.55);
     const cx =
       (Math.cos(timeSeconds * (0.23 + band * 0.3) + ratio * Math.PI * 2) * (0.42 + d.centroid * 0.34)) +
-      (songProgress - 0.5) * 0.14;
+      (songProgress - 0.5) * 0.14 +
+      fractalWarp * 0.09;
     const cy =
       (Math.sin(timeSeconds * (0.19 + band * 0.25) - ratio * Math.PI * 2) * (0.36 + d.flatness * 0.34)) +
-      (d.rolloff - 0.45) * 0.18;
+      (d.rolloff - 0.45) * 0.18 +
+      Math.sin((beatPhase + ratio) * Math.PI * 2) * 0.06;
 
     ctx.beginPath();
     for (let s = 0; s < steps; s += 1) {
       const r2 = zx * zx + zy * zy + 0.000001;
-      const twist = 0.62 + band * 0.76 + d.flux * 0.38;
+      const twist = 0.62 + band * 0.76 + d.flux * 0.38 + fractalWarp * 0.18;
       const nx = zx * zx - zy * zy + cx + Math.sin(r2 * twist + timeSeconds * 0.3) * 0.06;
       const ny = 2 * zx * zy + cy + Math.cos(r2 * (0.44 + band * 0.7) - timeSeconds * 0.22) * 0.06;
       zx = nx;
@@ -571,9 +708,23 @@ function drawFractalAtlas(render: VisualizerRenderContext): void {
 }
 
 function drawCelestialGyroscope(render: VisualizerRenderContext): void {
-  const { ctx, width, height, timeSeconds, frame, beatPulse } = render;
+  const {
+    ctx,
+    width,
+    height,
+    timeSeconds,
+    frame,
+    beatPulse,
+    beatImpulse,
+    beatPhase,
+    barPhase,
+    tempoBpm,
+    variationAmount,
+    variationSeed,
+  } = render;
   const d = dynamics(frame);
-  const beatNorm = clamp01(beatPulse * 0.9);
+  const beatNorm = clamp01(beatPulse * 0.55 + beatImpulse * 1.06);
+  const gyroWarp = modSignal(timeSeconds, variationSeed + 5.4, tempoBpm, beatPhase, variationAmount, 0.95);
   const drive = clamp01(d.e.total * 0.26 + d.rms * 0.3 + d.flux * 0.28 + beatNorm * 0.4);
   const cx = width * 0.5;
   const cy = height * 0.5;
@@ -588,7 +739,9 @@ function drawCelestialGyroscope(render: VisualizerRenderContext): void {
     const shellBand = d.sampleBand(shellRatio * 0.88 + timeSeconds * 0.008, 0.06);
     const major = baseRadius * (0.76 + shellRatio * 1.44 + shellBand * 0.28);
     const minor = major * (0.18 + d.flatness * 0.26 + shellBand * 0.12);
-    const precession = timeSeconds * (0.22 + shellRatio * 0.36 + d.flux * 1.2 + shellBand * 0.9);
+    const precession =
+      timeSeconds * (0.22 + shellRatio * 0.36 + d.flux * 1.2 + shellBand * 0.9 + Math.abs(gyroWarp) * 0.7) +
+      Math.sin((barPhase + shellRatio) * Math.PI * 2) * 0.42;
     const points = 240;
 
     ctx.beginPath();
@@ -596,7 +749,8 @@ function drawCelestialGyroscope(render: VisualizerRenderContext): void {
       const t = (i / points) * Math.PI * 2;
       const band = d.sampleBand(shellRatio * 0.7 + i / points * 0.26 + timeSeconds * 0.006, 0.018);
       const phase = t + precession;
-      const wobble = Math.sin(phase * (3 + band * 6) + shellRatio * 5) * (0.09 + band * 0.18);
+      const wobble =
+        Math.sin(phase * (3 + band * 6 + gyroWarp * 0.9) + shellRatio * 5) * (0.09 + band * 0.18);
       const x = Math.cos(phase) * (major + Math.cos(phase * (2.4 + band * 1.8)) * minor * (0.6 + band * 0.5));
       const y =
         Math.sin(phase) * (major * (0.42 + d.centroid * 0.5)) +
@@ -618,7 +772,10 @@ function drawCelestialGyroscope(render: VisualizerRenderContext): void {
   for (let m = 0; m < meridians; m += 1) {
     const ratio = m / meridians;
     const band = d.sampleBand(ratio + d.rolloff * 0.2 + timeSeconds * 0.01, 0.03);
-    const tilt = ratio * Math.PI * 2 + timeSeconds * (0.42 + band * 1.2);
+    const tilt =
+      ratio * Math.PI * 2 +
+      timeSeconds * (0.42 + band * 1.2 + Math.abs(gyroWarp) * 0.45) +
+      Math.sin((beatPhase + ratio) * Math.PI * 2) * 0.2;
     const points = 92;
     ctx.beginPath();
     for (let i = 0; i <= points; i += 1) {
@@ -638,9 +795,22 @@ function drawCelestialGyroscope(render: VisualizerRenderContext): void {
 }
 
 function drawChaosBloom(render: VisualizerRenderContext): void {
-  const { ctx, width, height, timeSeconds, frame, beatPulse } = render;
+  const {
+    ctx,
+    width,
+    height,
+    timeSeconds,
+    frame,
+    beatPulse,
+    beatImpulse,
+    beatPhase,
+    tempoBpm,
+    variationAmount,
+    variationSeed,
+  } = render;
   const d = dynamics(frame);
-  const beatNorm = clamp01(beatPulse * 0.94);
+  const beatNorm = clamp01(beatPulse * 0.52 + beatImpulse * 1.16);
+  const chaosWarp = modSignal(timeSeconds, variationSeed + 6.2, tempoBpm, beatPhase, variationAmount, 1.25);
   const drive = clamp01(d.e.total * 0.24 + d.rms * 0.34 + d.flux * 0.28 + beatNorm * 0.46);
   const cx = width * 0.5;
   const cy = height * 0.5;
@@ -657,10 +827,10 @@ function drawChaosBloom(render: VisualizerRenderContext): void {
     let y = Math.cos(ratio * 71.13 - timeSeconds * 0.08) * 0.4;
     let z = Math.sin(ratio * 91.27 + timeSeconds * 0.06) * 0.4;
 
-    const a = 10 + d.e.bass * 12 + band * 8;
-    const b = 28 + d.e.mid * 24 + band * 18;
-    const c = 8 / 3 + d.e.treble * 0.8 + band * 0.4;
-    const dt = 0.006 + d.rms * 0.003 + band * 0.004;
+    const a = 10 + d.e.bass * 12 + band * 8 + chaosWarp * 2.2;
+    const b = 28 + d.e.mid * 24 + band * 18 + Math.sin((beatPhase + ratio) * Math.PI * 2) * 4;
+    const c = 8 / 3 + d.e.treble * 0.8 + band * 0.4 + chaosWarp * 0.24;
+    const dt = 0.006 + d.rms * 0.003 + band * 0.004 + Math.abs(chaosWarp) * 0.0015;
 
     for (let s = 0; s < 42; s += 1) {
       const dx = a * (y - x);
@@ -684,9 +854,24 @@ function drawChaosBloom(render: VisualizerRenderContext): void {
 }
 
 function drawQuantumVeil(render: VisualizerRenderContext): void {
-  const { ctx, width, height, timeSeconds, frame, beatPulse } = render;
+  const {
+    ctx,
+    width,
+    height,
+    timeSeconds,
+    frame,
+    beatPulse,
+    beatImpulse,
+    beatPhase,
+    barPhase,
+    tempoBpm,
+    variationAmount,
+    variationSeed,
+    overscanRatio,
+  } = render;
   const d = dynamics(frame);
-  const beatNorm = clamp01(beatPulse * 0.9);
+  const beatNorm = clamp01(beatPulse * 0.58 + beatImpulse * 0.95);
+  const veilWarp = modSignal(timeSeconds, variationSeed + 7.9, tempoBpm, beatPhase, variationAmount, 0.75);
   const drive = clamp01(d.e.total * 0.25 + d.rms * 0.31 + d.flux * 0.28 + beatNorm * 0.42);
 
   ctx.fillStyle = `rgba(0, 0, 0, ${0.11 + (1 - d.e.total) * 0.12})`;
@@ -698,12 +883,18 @@ function drawQuantumVeil(render: VisualizerRenderContext): void {
     const band = d.sampleBand(layerRatio * 0.92 + timeSeconds * 0.007, 0.05);
     const hue = (timeSeconds * 38 + layer * 44 + band * 130) % 360;
     const amp = height * (0.035 + layerRatio * 0.048 + band * 0.08 + drive * 0.04);
-    const freq = 0.0018 + layerRatio * 0.0024 + d.centroid * 0.003 + band * 0.0032;
-    const speed = 0.36 + layerRatio * 0.58 + d.flux * 1.2 + band * 1.4;
+    const freq = 0.0018 + layerRatio * 0.0024 + d.centroid * 0.003 + band * 0.0032 + veilWarp * 0.0014;
+    const speed =
+      0.36 +
+      layerRatio * 0.58 +
+      d.flux * 1.2 +
+      band * 1.4 +
+      Math.sin((barPhase + layerRatio) * Math.PI * 2) * 0.24;
 
     ctx.beginPath();
-    for (let x = 0; x <= width; x += 8) {
-      const xr = x / Math.max(1, width);
+    const span = width * Math.max(0.1, overscanRatio);
+    for (let x = -span; x <= width + span; x += 8) {
+      const xr = (x + span) / Math.max(1, width + span * 2);
       const localBand = d.sampleBand(xr * 0.76 + layerRatio * 0.24 + timeSeconds * 0.012, 0.022);
       const p = x * freq + timeSeconds * speed;
       const q = x * freq * (0.43 + localBand * 0.36) - timeSeconds * (0.3 + layerRatio * 0.74);
@@ -713,7 +904,8 @@ function drawQuantumVeil(render: VisualizerRenderContext): void {
       const y =
         height * 0.5 +
         Math.sin(timeSeconds * 0.6 + layerRatio * Math.PI * 2) * height * 0.06 +
-        interference * amp;
+        interference * amp +
+        Math.sin((beatPhase + xr * 0.4) * Math.PI * 2) * (4 + beatNorm * 12);
 
       if (x === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
@@ -743,7 +935,259 @@ function drawQuantumVeil(render: VisualizerRenderContext): void {
   }
 }
 
+function drawSpectralSuperformula(render: VisualizerRenderContext): void {
+  const { ctx, width, height, timeSeconds, beatPhase, beatImpulse, frame } = render;
+  const d = dynamics(frame);
+  const cx = width * 0.5;
+  const cy = height * 0.5;
+  const low = d.sampleBand(0.1, 0.06);
+  const mid = d.sampleBand(0.4, 0.1);
+  const high = d.sampleBand(0.78, 0.08);
+  const phi = beatPhase * Math.PI * 2;
+
+  const superR = (theta: number, band: number): number => {
+    const m = 4 + 14 * band + 6 * d.flux + 3 * beatImpulse;
+    const n1 = 0.25 + 2.6 * (1 - d.flatness) + 1.2 * low;
+    const n2 = 0.35 + 3.2 * high + 1.0 * d.centroid;
+    const n3 = 0.35 + 3.2 * low + 1.0 * d.rolloff;
+    const a = 1 + 0.3 * Math.sin(phi + Math.PI * 2 * mid);
+    const b = 1 + 0.3 * Math.cos(phi + Math.PI * 2 * high);
+    const p1 = Math.pow(Math.abs(Math.cos((m * theta) / 4) / a), n2);
+    const p2 = Math.pow(Math.abs(Math.sin((m * theta) / 4) / b), n3);
+    return Math.pow(Math.max(0.00001, p1 + p2), -1 / n1);
+  };
+
+  ctx.fillStyle = `rgba(2, 6, 18, ${0.12 + (1 - d.e.total) * 0.14})`;
+  ctx.fillRect(0, 0, width, height);
+
+  const layers = 4;
+  const points = 680;
+  const base = Math.min(width, height) * 0.18;
+  for (let layer = 0; layer < layers; layer += 1) {
+    const lr = layer / Math.max(1, layers - 1);
+    ctx.beginPath();
+    for (let i = 0; i <= points; i += 1) {
+      const t = i / points;
+      const theta = t * Math.PI * 2;
+      const band = d.sampleBand(t + lr * 0.17 + timeSeconds * 0.008, 0.03);
+      const r = superR(theta + timeSeconds * (0.08 + 0.28 * d.flux + 0.16 * band), band);
+      const localRadius =
+        base * (1.1 + lr * 1.15) * r +
+        Math.sin(theta * (2 + 8 * band) + phi) * (8 + 22 * band + 10 * beatImpulse);
+      const x = cx + Math.cos(theta) * localRadius;
+      const y = cy + Math.sin(theta) * localRadius * (0.76 + d.flatness * 0.46 + band * 0.12);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = `hsla(${(timeSeconds * 38 + lr * 240 + high * 120) % 360}, 98%, ${55 + lr * 26}%, ${0.1 + d.flux * 0.28 + lr * 0.08})`;
+    ctx.lineWidth = 0.9 + d.rms * 1.6 + lr * 2.4;
+    ctx.stroke();
+  }
+}
+
+function drawHarmonicLissajousManifold(render: VisualizerRenderContext): void {
+  const { ctx, width, height, timeSeconds, beatPhase, beatImpulse, frame } = render;
+  const d = dynamics(frame);
+  const strands = 18;
+  const points = 480;
+  const phi = beatPhase * Math.PI * 2;
+
+  ctx.fillStyle = `rgba(4, 4, 16, ${0.12 + (1 - d.e.total) * 0.16})`;
+  ctx.fillRect(0, 0, width, height);
+
+  for (let i = 0; i < strands; i += 1) {
+    const sr = i / strands;
+    const b0 = d.sampleBand(sr, 0.02);
+    const b1 = d.sampleBand(sr + 0.33, 0.02);
+    const b2 = d.sampleBand(sr + 0.61, 0.02);
+    const alpha = 1 + 8 * b0 + 2.2 * beatImpulse;
+    const beta = 1 + 8 * b1 + 2.0 * d.flux;
+    const delta = phi + Math.PI * 2 * d.sampleBand(sr + 0.12, 0.02);
+    const epsilon = Math.PI * 2 * d.sampleBand(sr + 0.61, 0.02);
+    const ampX = width * (0.18 + 0.32 * b0);
+    const ampY = height * (0.16 + 0.3 * b2);
+    ctx.beginPath();
+    for (let p = 0; p <= points; p += 1) {
+      const t = p / points;
+      const w = timeSeconds * 0.45 + t * Math.PI * 2;
+      const x =
+        width * 0.5 +
+        ampX * Math.sin(alpha * w + delta) +
+        0.45 * ampX * Math.sin((alpha + beta) * w + delta + b1 * Math.PI);
+      const y =
+        height * 0.5 +
+        ampY * Math.sin(beta * w + epsilon) +
+        0.45 * ampY * Math.sin((2 * beta - alpha) * w + epsilon + b0 * Math.PI);
+      if (p === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = `hsla(${(sr * 360 + timeSeconds * 34 + b2 * 140) % 360}, 96%, ${56 + b2 * 32}%, ${0.08 + 0.28 * b0 + d.flux * 0.2})`;
+    ctx.lineWidth = 0.8 + d.rms * 1.1 + 2.2 * b1;
+    ctx.stroke();
+  }
+}
+
+function drawAttractorPhaseWeave(render: VisualizerRenderContext): void {
+  const { ctx, width, height, timeSeconds, beatPhase, beatImpulse, frame } = render;
+  const d = dynamics(frame);
+  const b12 = d.sampleBand(0.12, 0.05);
+  const b38 = d.sampleBand(0.38, 0.08);
+  const b67 = d.sampleBand(0.67, 0.08);
+  const b82 = d.sampleBand(0.82, 0.06);
+  const b93 = d.sampleBand(0.93, 0.04);
+  const phi = beatPhase * Math.PI * 2;
+  const a = 2 + 12 * b12 + 4 * d.flux;
+  const b = 1 + 10 * b38 + 3 * beatImpulse;
+  const c = 1 + 9 * b67 + 2 * d.centroid;
+  const dCoef = 0.2 + b82;
+  const e = 1 + 8 * b93 + 2 * d.rolloff;
+  const p1 = phi + Math.PI * 2 * d.sampleBand(0.14, 0.05);
+  const p2 = Math.PI * 2 * d.sampleBand(0.32, 0.06);
+  const p3 = Math.PI * 2 * d.sampleBand(0.58, 0.08);
+  const p4 = Math.PI * 2 * d.sampleBand(0.86, 0.05);
+
+  ctx.fillStyle = `rgba(2, 2, 12, ${0.12 + (1 - d.e.total) * 0.12})`;
+  ctx.fillRect(0, 0, width, height);
+
+  const evalField = (x: number, y: number): number => {
+    const xn = (x / width) * 2 - 1;
+    const yn = (y / height) * 2 - 1;
+    const t = timeSeconds * (0.22 + 0.8 * d.flux + 0.35 * beatImpulse);
+    return (
+      Math.sin(a * xn * yn + p1 + t) +
+      Math.sin(b * (xn * xn - yn * yn) + p2 - t * 0.7) +
+      Math.sin(c * (xn + yn) + p3 + t * 0.5) +
+      dCoef * Math.cos(e * xn * yn + p4 - t * 0.9)
+    );
+  };
+
+  const thresholds = [-1.2, -0.6, 0, 0.6, 1.2];
+  const step = 12;
+  for (let y = 0; y < height - step; y += step) {
+    for (let x = 0; x < width - step; x += step) {
+      const f00 = evalField(x, y);
+      const f10 = evalField(x + step, y);
+      const f11 = evalField(x + step, y + step);
+      const f01 = evalField(x, y + step);
+      for (let tIndex = 0; tIndex < thresholds.length; tIndex += 1) {
+        const th = thresholds[tIndex];
+        const s00 = f00 >= th;
+        const s10 = f10 >= th;
+        const s11 = f11 >= th;
+        const s01 = f01 >= th;
+        const changes =
+          Number(s00 !== s10) +
+          Number(s10 !== s11) +
+          Number(s11 !== s01) +
+          Number(s01 !== s00);
+        if (changes < 2) continue;
+        const band = d.sampleBand((x / width + y / height) * 0.5 + tIndex * 0.07, 0.03);
+        ctx.strokeStyle = `hsla(${(timeSeconds * 66 + tIndex * 50 + x * 0.08 + band * 140) % 360}, 96%, ${54 + band * 34}%, ${0.06 + 0.1 * tIndex + 0.2 * d.flux})`;
+        ctx.lineWidth = 0.6 + 0.9 * tIndex + 0.9 * d.rms + 0.8 * band;
+        ctx.beginPath();
+        ctx.moveTo(x, y + step * 0.5);
+        ctx.lineTo(x + step * 0.5, y);
+        ctx.lineTo(x + step, y + step * 0.5);
+        ctx.lineTo(x + step * 0.5, y + step);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawSpectralImplicitIsolines(render: VisualizerRenderContext): void {
+  const { ctx, width, height, timeSeconds, beatPhase, frame } = render;
+  const d = dynamics(frame);
+  const low = d.sampleBand(0.1, 0.06);
+  const mid = d.sampleBand(0.4, 0.1);
+  const high = d.sampleBand(0.78, 0.08);
+  const edge = d.sampleBand(0.92, 0.05);
+  const phi = beatPhase * Math.PI * 2;
+  const w1 = 1.4 + 7 * low;
+  const w2 = 1.4 + 7 * mid;
+  const w3 = 1.0 + 9 * high;
+  const w4 = 0.2 + 1.6 * edge;
+  const lambda = 0.2 + 1.1 * d.flux + 0.5 * render.beatImpulse;
+  const tau = 0.25 + 0.35 * Math.sin(phi) + 0.25 * d.sampleBand(0.55, 0.1);
+  const psi1 = Math.PI * 2 * d.sampleBand(0.15, 0.05);
+  const psi2 = Math.PI * 2 * d.sampleBand(0.35, 0.05);
+  const psi3 = Math.PI * 2 * d.sampleBand(0.65, 0.05);
+  const psi4 = Math.PI * 2 * d.sampleBand(0.85, 0.05);
+  const u1 = 0.06 + 0.22 * low;
+  const u2 = 0.04 + 0.18 * mid;
+  const u3 = 0.06 + 0.22 * high;
+  const u4 = 0.04 + 0.18 * edge;
+  const k1 = 1 + 7 * mid;
+  const k2 = 1 + 7 * high;
+  const q1 = Math.PI * 2 * d.sampleBand(0.22, 0.06);
+  const q2 = Math.PI * 2 * d.sampleBand(0.78, 0.06);
+  const impulseShape = render.beatImpulse * (0.4 + 0.8 * d.sampleBand(0.55, 0.1));
+  const g = 1 + 9 * d.sampleBand(0.72, 0.08);
+  const tauImpulse = render.beatImpulse * (0.15 + 0.25 * d.sampleBand(0.75, 0.08));
+
+  ctx.fillStyle = `rgba(4, 8, 20, ${0.11 + (1 - d.e.total) * 0.14})`;
+  ctx.fillRect(0, 0, width, height);
+
+  const evalImplicit = (x: number, y: number): number => {
+    const xn = (x / width) * 2 - 1;
+    const yn = (y / height) * 2 - 1;
+    const xw = xn * (1 + u1 * Math.sin(k1 * yn + q1)) + u2 * xn * yn;
+    const yw = yn * (1 + u3 * Math.cos(k2 * xn + q2)) + u4 * (xn * xn - yn * yn);
+    return (
+      Math.sin(w1 * xw + psi1) +
+      Math.sin(w2 * yw + psi2) +
+      Math.sin(w3 * (xw + yw) + psi3) +
+      lambda * Math.sin(w4 * (xw * xw - yw * yw) + psi4) +
+      impulseShape * Math.sin(g * (xw * xw + yw * yw) + phi * 2) -
+      (tau + tauImpulse)
+    );
+  };
+
+  const step = 14;
+  for (let y = 0; y < height - step; y += step) {
+    for (let x = 0; x < width - step; x += step) {
+      const f00 = evalImplicit(x, y);
+      const f10 = evalImplicit(x + step, y);
+      const f01 = evalImplicit(x, y + step);
+      const f11 = evalImplicit(x + step, y + step);
+      const signA = f00 >= 0;
+      const signB = f10 >= 0;
+      const signC = f11 >= 0;
+      const signD = f01 >= 0;
+      const changes = Number(signA !== signB) + Number(signB !== signC) + Number(signC !== signD) + Number(signD !== signA);
+      if (changes < 2) continue;
+      ctx.strokeStyle = `hsla(${(timeSeconds * 44 + x * 0.08 + y * 0.12 + high * 140) % 360}, 94%, ${56 + high * 28}%, ${0.08 + 0.3 * d.flux + 0.2 * (1 - d.flatness)})`;
+      ctx.lineWidth = 0.7 + 1.7 * d.rms + 1.4 * high;
+      ctx.beginPath();
+      ctx.moveTo(x, y + step * 0.5);
+      ctx.lineTo(x + step * 0.5, y);
+      ctx.lineTo(x + step, y + step * 0.5);
+      ctx.lineTo(x + step * 0.5, y + step);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+}
+
 export function renderVisualizer(mode: VisualizerMode, render: VisualizerRenderContext): void {
+  if (mode === "spectral_superformula") {
+    drawSpectralSuperformula(render);
+    return;
+  }
+  if (mode === "harmonic_lissajous_manifold") {
+    drawHarmonicLissajousManifold(render);
+    return;
+  }
+  if (mode === "attractor_phase_weave") {
+    drawAttractorPhaseWeave(render);
+    return;
+  }
+  if (mode === "spectral_implicit_isolines") {
+    drawSpectralImplicitIsolines(render);
+    return;
+  }
   if (mode === "fractal_atlas") {
     drawFractalAtlas(render);
     return;

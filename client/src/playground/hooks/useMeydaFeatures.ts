@@ -30,10 +30,14 @@ const EMPTY_FRAME: MeydaFrame = {
   spectralFlatness: 0,
   spectralRolloff: 0,
   spectralFlux: 0,
+  perceptualSpread: 0,
+  perceptualSharpness: 0,
   loudnessTotal: 0,
+  loudnessSpecific: [],
   energyBass: 0,
   energyMid: 0,
   energyTreble: 0,
+  chroma: [],
   amplitudeSpectrum: [],
 };
 
@@ -64,6 +68,9 @@ function normalizeFrame(raw: Record<string, unknown>): MeydaFrame {
   const loudness = raw.loudness as { total?: number; specific?: number[] } | undefined;
   const specific = Array.isArray(loudness?.specific)
     ? loudness.specific.filter((value): value is number => typeof value === "number")
+    : [];
+  const chroma = Array.isArray(raw.chroma)
+    ? raw.chroma.filter((value): value is number => typeof value === "number")
     : [];
   const bucket = Math.max(1, Math.floor(specific.length / 3));
   const bass =
@@ -98,13 +105,17 @@ function normalizeFrame(raw: Record<string, unknown>): MeydaFrame {
     spectralFlatness: clamp(Number(raw.spectralFlatness) || 0, 0, 1),
     spectralRolloff: Math.max(0, Number(raw.spectralRolloff) || 0),
     spectralFlux: Math.max(0, Number(raw.spectralFlux) || 0),
+    perceptualSpread: clamp(Number(raw.perceptualSpread) || 0, 0, 1),
+    perceptualSharpness: clamp(Number(raw.perceptualSharpness) || 0, 0, 1),
     loudnessTotal: Math.max(
       0,
       hasLoudnessSpecific ? Number(loudness?.total) || 0 : fallbackLoudnessTotal
     ),
+    loudnessSpecific: specific,
     energyBass: Math.max(0, hasLoudnessSpecific ? bass : spectrumBass),
     energyMid: Math.max(0, hasLoudnessSpecific ? mid : spectrumMid),
     energyTreble: Math.max(0, hasLoudnessSpecific ? treble : spectrumTreble),
+    chroma,
     amplitudeSpectrum,
   };
 }
@@ -131,11 +142,25 @@ function smoothFrame(previous: MeydaFrame, next: MeydaFrame, smoothing: number):
   const take = 1 - keep;
   const len = Math.max(previous.amplitudeSpectrum.length, next.amplitudeSpectrum.length);
   const spectrum: number[] = new Array<number>(len);
+  const loudnessSpecificLen = Math.max(previous.loudnessSpecific.length, next.loudnessSpecific.length);
+  const loudnessSpecific: number[] = new Array<number>(loudnessSpecificLen);
+  const chromaLen = Math.max(previous.chroma.length, next.chroma.length);
+  const chroma: number[] = new Array<number>(chromaLen);
 
   for (let i = 0; i < len; i += 1) {
     const prev = previous.amplitudeSpectrum[i] ?? 0;
     const curr = next.amplitudeSpectrum[i] ?? 0;
     spectrum[i] = prev * keep + curr * take;
+  }
+  for (let i = 0; i < loudnessSpecificLen; i += 1) {
+    const prev = previous.loudnessSpecific[i] ?? 0;
+    const curr = next.loudnessSpecific[i] ?? 0;
+    loudnessSpecific[i] = prev * keep + curr * take;
+  }
+  for (let i = 0; i < chromaLen; i += 1) {
+    const prev = previous.chroma[i] ?? 0;
+    const curr = next.chroma[i] ?? 0;
+    chroma[i] = prev * keep + curr * take;
   }
 
   return {
@@ -145,10 +170,14 @@ function smoothFrame(previous: MeydaFrame, next: MeydaFrame, smoothing: number):
     spectralFlatness: previous.spectralFlatness * keep + next.spectralFlatness * take,
     spectralRolloff: previous.spectralRolloff * keep + next.spectralRolloff * take,
     spectralFlux: previous.spectralFlux * keep + next.spectralFlux * take,
+    perceptualSpread: previous.perceptualSpread * keep + next.perceptualSpread * take,
+    perceptualSharpness: previous.perceptualSharpness * keep + next.perceptualSharpness * take,
     loudnessTotal: previous.loudnessTotal * keep + next.loudnessTotal * take,
+    loudnessSpecific,
     energyBass: previous.energyBass * keep + next.energyBass * take,
     energyMid: previous.energyMid * keep + next.energyMid * take,
     energyTreble: previous.energyTreble * keep + next.energyTreble * take,
+    chroma,
     amplitudeSpectrum: spectrum,
   };
 }
@@ -199,6 +228,10 @@ export function useMeydaFeatures(
       "spectralCentroid",
       "spectralFlatness",
       "spectralRolloff",
+      "loudness",
+      "perceptualSpread",
+      "perceptualSharpness",
+      "chroma",
     ],
     []
   );

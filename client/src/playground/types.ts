@@ -8,7 +8,11 @@ export type VisualizerMode =
   | "fractal_atlas"
   | "celestial_gyroscope"
   | "chaos_bloom"
-  | "quantum_veil";
+  | "quantum_veil"
+  | "spectral_superformula"
+  | "harmonic_lissajous_manifold"
+  | "attractor_phase_weave"
+  | "spectral_implicit_isolines";
 
 export interface PlaygroundSongSummary {
   beatEntryId: string;
@@ -25,10 +29,14 @@ export interface MeydaFrame {
   spectralFlatness: number;
   spectralRolloff: number;
   spectralFlux: number;
+  perceptualSpread: number;
+  perceptualSharpness: number;
   loudnessTotal: number;
+  loudnessSpecific: number[];
   energyBass: number;
   energyMid: number;
   energyTreble: number;
+  chroma: number[];
   amplitudeSpectrum: number[];
 }
 

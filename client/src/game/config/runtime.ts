@@ -83,7 +83,23 @@ export interface RuntimeConfig {
   playgroundBeatLookaheadSeconds: number;
   playgroundBeatLookbackSeconds: number;
   playgroundBeatStrengthBoost: number;
-  playgroundDefaultMode: "prism_bloom" | "nebula_ribbons" | "pulse_tunnel" | "lattice_dream";
+  playgroundTempoDefaultBpm: number;
+  playgroundBeatImpulseWindowRatio: number;
+  playgroundVisualizerVariationAmount: number;
+  playgroundVisualizerOverscanRatio: number;
+  playgroundDefaultMode:
+    | "prism_bloom"
+    | "nebula_ribbons"
+    | "pulse_tunnel"
+    | "lattice_dream"
+    | "fractal_atlas"
+    | "celestial_gyroscope"
+    | "chaos_bloom"
+    | "quantum_veil"
+    | "spectral_superformula"
+    | "harmonic_lissajous_manifold"
+    | "attractor_phase_weave"
+    | "spectral_implicit_isolines";
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -120,11 +136,31 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
 
 function parsePlaygroundMode(
   value: string | undefined
-): "prism_bloom" | "nebula_ribbons" | "pulse_tunnel" | "lattice_dream" {
+):
+  | "prism_bloom"
+  | "nebula_ribbons"
+  | "pulse_tunnel"
+  | "lattice_dream"
+  | "fractal_atlas"
+  | "celestial_gyroscope"
+  | "chaos_bloom"
+  | "quantum_veil"
+  | "spectral_superformula"
+  | "harmonic_lissajous_manifold"
+  | "attractor_phase_weave"
+  | "spectral_implicit_isolines" {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (normalized === "nebula_ribbons") return "nebula_ribbons";
   if (normalized === "pulse_tunnel") return "pulse_tunnel";
   if (normalized === "lattice_dream") return "lattice_dream";
+  if (normalized === "fractal_atlas") return "fractal_atlas";
+  if (normalized === "celestial_gyroscope") return "celestial_gyroscope";
+  if (normalized === "chaos_bloom") return "chaos_bloom";
+  if (normalized === "quantum_veil") return "quantum_veil";
+  if (normalized === "spectral_superformula") return "spectral_superformula";
+  if (normalized === "harmonic_lissajous_manifold") return "harmonic_lissajous_manifold";
+  if (normalized === "attractor_phase_weave") return "attractor_phase_weave";
+  if (normalized === "spectral_implicit_isolines") return "spectral_implicit_isolines";
   return "prism_bloom";
 }
 
@@ -547,6 +583,30 @@ export const runtimeConfig: RuntimeConfig = {
     1.1,
     0,
     2.5
+  ),
+  playgroundTempoDefaultBpm: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_TEMPO_DEFAULT_BPM,
+    124,
+    60,
+    220
+  ),
+  playgroundBeatImpulseWindowRatio: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_BEAT_IMPULSE_WINDOW_RATIO,
+    0.22,
+    0.05,
+    0.7
+  ),
+  playgroundVisualizerVariationAmount: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_VISUALIZER_VARIATION_AMOUNT,
+    1,
+    0,
+    2
+  ),
+  playgroundVisualizerOverscanRatio: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_VISUALIZER_OVERSCAN_RATIO,
+    0.18,
+    0,
+    0.6
   ),
   playgroundDefaultMode: parsePlaygroundMode(import.meta.env.VITE_PLAYGROUND_DEFAULT_MODE)
 };
