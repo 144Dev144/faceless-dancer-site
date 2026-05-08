@@ -14,6 +14,37 @@ export type VisualizerMode =
   | "attractor_phase_weave"
   | "spectral_implicit_isolines";
 
+export type PlaygroundTab = "visualizer" | "rhythm_flame";
+
+export type RhythmFlameMode = "flame" | "flame_ring";
+
+export interface RhythmFlameConfig {
+  mode: RhythmFlameMode;
+  extension: number;
+  intensity: number;
+  chaos: number;
+  directionDegrees: number;
+  coreColor: string;
+  midColor: string;
+  edgeColor: string;
+}
+
+export interface RhythmFlameAudioControl {
+  audioMaster: number;
+  meydaInfluence: number;
+  beatInfluence: number;
+}
+
+export interface RhythmFlameAudioFrame {
+  rms: number;
+  flux: number;
+  bass: number;
+  mid: number;
+  treble: number;
+  beatPulse: number;
+  beatImpulse: number;
+}
+
 export interface PlaygroundSongSummary {
   beatEntryId: string;
   title: string;

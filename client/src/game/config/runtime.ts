@@ -1,3 +1,5 @@
+import type { RhythmFlameMode, VisualizerMode } from "../../playground/types";
+
 export interface RuntimeConfig {
   appName: string;
   beatWindowSize: number;
@@ -87,19 +89,18 @@ export interface RuntimeConfig {
   playgroundBeatImpulseWindowRatio: number;
   playgroundVisualizerVariationAmount: number;
   playgroundVisualizerOverscanRatio: number;
-  playgroundDefaultMode:
-    | "prism_bloom"
-    | "nebula_ribbons"
-    | "pulse_tunnel"
-    | "lattice_dream"
-    | "fractal_atlas"
-    | "celestial_gyroscope"
-    | "chaos_bloom"
-    | "quantum_veil"
-    | "spectral_superformula"
-    | "harmonic_lissajous_manifold"
-    | "attractor_phase_weave"
-    | "spectral_implicit_isolines";
+  playgroundDefaultMode: VisualizerMode;
+  playgroundRhythmFlameDefaultMode: RhythmFlameMode;
+  playgroundRhythmFlameDefaultExtension: number;
+  playgroundRhythmFlameDefaultIntensity: number;
+  playgroundRhythmFlameDefaultChaos: number;
+  playgroundRhythmFlameDefaultDirectionDegrees: number;
+  playgroundRhythmFlameDefaultCoreColor: string;
+  playgroundRhythmFlameDefaultMidColor: string;
+  playgroundRhythmFlameDefaultEdgeColor: string;
+  playgroundRhythmFlameAudioMasterDefault: number;
+  playgroundRhythmFlameMeydaInfluenceDefault: number;
+  playgroundRhythmFlameBeatInfluenceDefault: number;
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -136,19 +137,7 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
 
 function parsePlaygroundMode(
   value: string | undefined
-):
-  | "prism_bloom"
-  | "nebula_ribbons"
-  | "pulse_tunnel"
-  | "lattice_dream"
-  | "fractal_atlas"
-  | "celestial_gyroscope"
-  | "chaos_bloom"
-  | "quantum_veil"
-  | "spectral_superformula"
-  | "harmonic_lissajous_manifold"
-  | "attractor_phase_weave"
-  | "spectral_implicit_isolines" {
+): VisualizerMode {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (normalized === "nebula_ribbons") return "nebula_ribbons";
   if (normalized === "pulse_tunnel") return "pulse_tunnel";
@@ -162,6 +151,20 @@ function parsePlaygroundMode(
   if (normalized === "attractor_phase_weave") return "attractor_phase_weave";
   if (normalized === "spectral_implicit_isolines") return "spectral_implicit_isolines";
   return "prism_bloom";
+}
+
+function parseRhythmFlameMode(value: string | undefined): RhythmFlameMode {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "flame_ring") return "flame_ring";
+  return "flame";
+}
+
+function parseHexColor(value: string | undefined, fallback: string): string {
+  const normalized = String(value ?? "").trim();
+  if (/^#[0-9a-fA-F]{3}$/.test(normalized) || /^#[0-9a-fA-F]{6}$/.test(normalized)) {
+    return normalized;
+  }
+  return fallback;
 }
 
 export const runtimeConfig: RuntimeConfig = {
@@ -608,5 +611,62 @@ export const runtimeConfig: RuntimeConfig = {
     0,
     0.6
   ),
-  playgroundDefaultMode: parsePlaygroundMode(import.meta.env.VITE_PLAYGROUND_DEFAULT_MODE)
+  playgroundDefaultMode: parsePlaygroundMode(import.meta.env.VITE_PLAYGROUND_DEFAULT_MODE),
+  playgroundRhythmFlameDefaultMode: parseRhythmFlameMode(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_DEFAULT_MODE
+  ),
+  playgroundRhythmFlameDefaultExtension: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_DEFAULT_EXTENSION,
+    0.62,
+    0,
+    1
+  ),
+  playgroundRhythmFlameDefaultIntensity: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_DEFAULT_INTENSITY,
+    0.72,
+    0,
+    1
+  ),
+  playgroundRhythmFlameDefaultChaos: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_DEFAULT_CHAOS,
+    0.5,
+    0,
+    1
+  ),
+  playgroundRhythmFlameDefaultDirectionDegrees: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_DEFAULT_DIRECTION_DEGREES,
+    0,
+    -180,
+    180
+  ),
+  playgroundRhythmFlameDefaultCoreColor: parseHexColor(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_DEFAULT_CORE_COLOR,
+    "#ffd37a"
+  ),
+  playgroundRhythmFlameDefaultMidColor: parseHexColor(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_DEFAULT_MID_COLOR,
+    "#ff6f3f"
+  ),
+  playgroundRhythmFlameDefaultEdgeColor: parseHexColor(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_DEFAULT_EDGE_COLOR,
+    "#6e1f24"
+  ),
+  playgroundRhythmFlameAudioMasterDefault: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_AUDIO_MASTER_DEFAULT,
+    0.75,
+    0,
+    1
+  ),
+  playgroundRhythmFlameMeydaInfluenceDefault: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_MEYDA_INFLUENCE_DEFAULT,
+    0.62,
+    0,
+    1
+  ),
+  playgroundRhythmFlameBeatInfluenceDefault: parseClampedNumber(
+    import.meta.env.VITE_PLAYGROUND_RHYTHM_FLAME_BEAT_INFLUENCE_DEFAULT,
+    0.82,
+    0,
+    1
+  )
 };

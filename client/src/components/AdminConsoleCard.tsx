@@ -88,6 +88,21 @@ export function AdminConsoleCard({ enabled, settings, onSettingsSaved }: Props) 
               </select>
             </label>
             <label>
+              Show Hero Video
+              <select
+                value={siteSettings.showYoutubeEmbed ? "true" : "false"}
+                onInput={(e) =>
+                  setSiteSettings((prev) => ({
+                    ...prev,
+                    showYoutubeEmbed: (e.target as HTMLSelectElement).value === "true",
+                  }))
+                }
+              >
+                <option value="true">Show</option>
+                <option value="false">Hide</option>
+              </select>
+            </label>
+            <label>
               YouTube Live Channel ID
               <input
                 value={siteSettings.youtubeLiveChannelId}

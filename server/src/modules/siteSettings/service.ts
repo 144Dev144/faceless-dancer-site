@@ -7,6 +7,7 @@ interface SiteSettingsRow {
   show_twitter: number;
   youtube_url: string | null;
   show_youtube: number;
+  show_youtube_embed: number;
   youtube_live_channel_id: string | null;
   telegram_url: string | null;
   show_telegram: number;
@@ -18,7 +19,7 @@ interface SiteSettingsRow {
 
 async function readRow() {
   const result = await pool.query<SiteSettingsRow>(
-    `SELECT twitter_url, show_twitter, youtube_url, show_youtube, youtube_live_channel_id, telegram_url, show_telegram, dexscreener_url, show_dexscreener, pump_fun_url, token_address
+    `SELECT twitter_url, show_twitter, youtube_url, show_youtube, show_youtube_embed, youtube_live_channel_id, telegram_url, show_telegram, dexscreener_url, show_dexscreener, pump_fun_url, token_address
      FROM site_settings
      WHERE id = 1
      LIMIT 1`
@@ -34,6 +35,7 @@ export async function getSiteSettings(): Promise<SiteSettings> {
     showTwitter: row ? row.show_twitter === 1 : env.siteShowTwitter,
     youtubeUrl: row?.youtube_url ?? env.SITE_YOUTUBE_URL,
     showYoutube: row ? row.show_youtube === 1 : env.siteShowYoutube,
+    showYoutubeEmbed: row ? row.show_youtube_embed === 1 : env.siteShowYoutubeEmbed,
     youtubeLiveChannelId: row?.youtube_live_channel_id ?? env.SITE_YOUTUBE_LIVE_CHANNEL_ID,
     telegramUrl: row?.telegram_url ?? env.SITE_TELEGRAM_URL,
     showTelegram: row ? row.show_telegram === 1 : env.siteShowTelegram,
@@ -52,6 +54,7 @@ export async function saveSiteSettings(settings: SiteSettings): Promise<SiteSett
       show_twitter,
       youtube_url,
       show_youtube,
+      show_youtube_embed,
       youtube_live_channel_id,
       telegram_url,
       show_telegram,
@@ -60,12 +63,13 @@ export async function saveSiteSettings(settings: SiteSettings): Promise<SiteSett
       pump_fun_url,
       token_address,
       updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
     ON CONFLICT(id) DO UPDATE SET
       twitter_url = excluded.twitter_url,
       show_twitter = excluded.show_twitter,
       youtube_url = excluded.youtube_url,
       show_youtube = excluded.show_youtube,
+      show_youtube_embed = excluded.show_youtube_embed,
       youtube_live_channel_id = excluded.youtube_live_channel_id,
       telegram_url = excluded.telegram_url,
       show_telegram = excluded.show_telegram,
@@ -80,6 +84,7 @@ export async function saveSiteSettings(settings: SiteSettings): Promise<SiteSett
       settings.showTwitter ? 1 : 0,
       settings.youtubeUrl || null,
       settings.showYoutube ? 1 : 0,
+      settings.showYoutubeEmbed ? 1 : 0,
       settings.youtubeLiveChannelId.trim() || null,
       settings.telegramUrl || null,
       settings.showTelegram ? 1 : 0,

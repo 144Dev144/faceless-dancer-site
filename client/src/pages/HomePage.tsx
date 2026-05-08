@@ -13,6 +13,7 @@ const defaultSiteSettings: SiteSettings = {
   showTwitter: true,
   youtubeUrl: "",
   showYoutube: true,
+  showYoutubeEmbed: true,
   youtubeLiveChannelId: "",
   telegramUrl: "",
   showTelegram: true,
@@ -30,6 +31,13 @@ interface Props {
 
 export function HomePage({ session, setSession, refreshSession }: Props): JSX.Element {
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(defaultSiteSettings);
+
+  useEffect(() => {
+    document.body.classList.add("home-page-body");
+    return () => {
+      document.body.classList.remove("home-page-body");
+    };
+  }, []);
 
   useEffect(() => {
     api.siteSettings()

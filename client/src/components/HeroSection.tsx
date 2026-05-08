@@ -1,5 +1,4 @@
 import type { SiteSettings } from "../lib/api";
-import heroMainBgImage from "../assets/hero/hero-main-bg.jpeg";
 import heroMainImage from "../assets/hero/hero_main.png";
 import logoImage from "../assets/hero/logo.png";
 
@@ -10,7 +9,7 @@ interface Props {
 export function HeroSection({ settings }: Props) {
   const tokenAddressLabel = settings.tokenAddress || "Soon";
   const channelId = settings.youtubeLiveChannelId.trim();
-  const liveEmbedUrl = channelId
+  const liveEmbedUrl = settings.showYoutubeEmbed && channelId
     ? `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(channelId)}&autoplay=1&mute=1`
     : "";
   const socialLinks = [
@@ -78,7 +77,6 @@ export function HeroSection({ settings }: Props) {
 
       <div className="hero__visual">
         <div className="hero__visual-frame">
-          <img className="hero__main-bg" src={heroMainBgImage} alt="" aria-hidden="true" />
           {liveEmbedUrl ? (
             <iframe
               className="hero__stream"

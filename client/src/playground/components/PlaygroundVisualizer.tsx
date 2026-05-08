@@ -7,8 +7,19 @@ import {
   resolveAccentBeats,
 } from "../lib/publicSongApi";
 import { useMeydaFeatures } from "../hooks/useMeydaFeatures";
-import type { PlaygroundSongSummary, PlaygroundTrackData, VisualizerMode } from "../types";
+import type {
+  MeydaFrame,
+  PlaygroundSongSummary,
+  PlaygroundTab,
+  RhythmFlameAudioControl,
+  RhythmFlameAudioFrame,
+  PlaygroundTrackData,
+  RhythmFlameConfig,
+  RhythmFlameMode,
+  VisualizerMode,
+} from "../types";
 import { renderVisualizer } from "../visualizers/renderers";
+import { RhythmFlameStage } from "./RhythmFlameStage";
 
 interface PlaygroundVisualizerProps {
   homeHref: string;
@@ -29,6 +40,16 @@ const VISUALIZER_MODES: Array<{ id: VisualizerMode; label: string }> = [
   { id: "spectral_implicit_isolines", label: "Spectral Implicit Isolines" },
 ];
 
+const PLAYGROUND_TABS: Array<{ id: PlaygroundTab; label: string }> = [
+  { id: "visualizer", label: "Visualizer" },
+  { id: "rhythm_flame", label: "Rhythm Flame" },
+];
+
+const RHYTHM_FLAME_MODES: Array<{ id: RhythmFlameMode; label: string }> = [
+  { id: "flame", label: "Flame" },
+  { id: "flame_ring", label: "Flame Ring" },
+];
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -39,6 +60,25 @@ function formatTimeLabel(seconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const remainder = totalSeconds % 60;
   return `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+function formatRatioLabel(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
+}
+
+function normalizeFlameAudioFrame(
+  frame: MeydaFrame,
+  beatPulse: number,
+  beatImpulse: number
+): RhythmFlameAudioFrame {
+  const rms = 1 - Math.exp(-Math.max(0, frame.rms) * 20);
+  const flux = 1 - Math.exp(-Math.max(0, frame.spectralFlux) * 26);
+  const bass = clamp(frame.energyBass / 48, 0, 1);
+  const mid = clamp(frame.energyMid / 42, 0, 1);
+  const treble = clamp(frame.energyTreble / 36, 0, 1);
+  const pulse = clamp(beatPulse / 1.8, 0, 1);
+  const impulse = clamp(beatImpulse, 0, 1);
+  return { rms, flux, bass, mid, treble, beatPulse: pulse, beatImpulse: impulse };
 }
 
 function findNextBeatIndex(
@@ -114,7 +154,34 @@ export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): J
   const [songs, setSongs] = useState<PlaygroundSongSummary[]>([]);
   const [selectedSongId, setSelectedSongId] = useState("");
   const [trackData, setTrackData] = useState<PlaygroundTrackData | null>(null);
+  const [activeTab, setActiveTab] = useState<PlaygroundTab>("visualizer");
+  const [controlsVisible, setControlsVisible] = useState(true);
   const [mode, setMode] = useState<VisualizerMode>(runtimeConfig.playgroundDefaultMode);
+  const [flameConfig, setFlameConfig] = useState<RhythmFlameConfig>({
+    mode: runtimeConfig.playgroundRhythmFlameDefaultMode,
+    extension: runtimeConfig.playgroundRhythmFlameDefaultExtension,
+    intensity: runtimeConfig.playgroundRhythmFlameDefaultIntensity,
+    chaos: runtimeConfig.playgroundRhythmFlameDefaultChaos,
+    directionDegrees: runtimeConfig.playgroundRhythmFlameDefaultDirectionDegrees,
+    coreColor: runtimeConfig.playgroundRhythmFlameDefaultCoreColor,
+    midColor: runtimeConfig.playgroundRhythmFlameDefaultMidColor,
+    edgeColor: runtimeConfig.playgroundRhythmFlameDefaultEdgeColor,
+  });
+  const [flameAudioControl, setFlameAudioControl] = useState<RhythmFlameAudioControl>({
+    audioMaster: runtimeConfig.playgroundRhythmFlameAudioMasterDefault,
+    meydaInfluence: runtimeConfig.playgroundRhythmFlameMeydaInfluenceDefault,
+    beatInfluence: runtimeConfig.playgroundRhythmFlameBeatInfluenceDefault,
+  });
+  const [flameAudioFrame, setFlameAudioFrame] = useState<RhythmFlameAudioFrame>({
+    rms: 0,
+    flux: 0,
+    bass: 0,
+    mid: 0,
+    treble: 0,
+    beatPulse: 0,
+    beatImpulse: 0,
+  });
+  const lastFlameAudioUiUpdateRef = useRef(0);
   const [loadingSongs, setLoadingSongs] = useState(false);
   const [loadingTrack, setLoadingTrack] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -306,47 +373,63 @@ export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): J
       );
       lastTickTimeRef.current = currentTime;
 
-      renderVisualizer(mode, {
-        ctx,
-        width: displayWidth,
-        height: displayHeight,
-        timeSeconds: nowMs / 1000,
-        frame: featuresRef.current,
-        beatPulse: beatPulseRef.current,
-        songProgress: duration > 0 ? clamp(currentTime / duration, 0, 1) : 0,
-        tempoBpm,
-        tempoNorm: clamp((tempoBpm - 80) / 100, 0, 1),
-        beatPhase: positiveMod(currentTime - beatAnchorSeconds, beatPeriodSeconds) / beatPeriodSeconds,
-        barPhase:
-          positiveMod(currentTime - beatAnchorSeconds, beatPeriodSeconds * 4) /
-          (beatPeriodSeconds * 4),
-        beatImpulse: (() => {
-          const beats = trackData?.accentBeats ?? [];
-          if (beats.length === 0) return 0;
-          const nextBeatTime = beats[beatIndexRef.current]?.timeSeconds;
-          const prevBeatTime = beats[Math.max(0, beatIndexRef.current - 1)]?.timeSeconds;
-          const deltaNext =
-            Number.isFinite(nextBeatTime) && nextBeatTime !== undefined
-              ? Math.abs(nextBeatTime - currentTime)
-              : Number.POSITIVE_INFINITY;
-          const deltaPrev =
-            Number.isFinite(prevBeatTime) && prevBeatTime !== undefined
-              ? Math.abs(prevBeatTime - currentTime)
-              : Number.POSITIVE_INFINITY;
-          const nearestDelta = Math.min(deltaNext, deltaPrev);
-          const window = Math.max(
-            0.03,
-            beatPeriodSeconds * runtimeConfig.playgroundBeatImpulseWindowRatio
-          );
-          const normalizedDistance = clamp(1 - nearestDelta / window, 0, 1);
-          return normalizedDistance * normalizedDistance;
-        })(),
-        variationAmount: runtimeConfig.playgroundVisualizerVariationAmount,
-        variationSeed:
-          baseVariationSeed +
-          hashStringToUnit(`${selectedSongId}:${Math.floor(currentTime / Math.max(0.2, beatPeriodSeconds * 4))}`),
-        overscanRatio: runtimeConfig.playgroundVisualizerOverscanRatio,
-      });
+      const songProgress = duration > 0 ? clamp(currentTime / duration, 0, 1) : 0;
+      const beatPhase =
+        positiveMod(currentTime - beatAnchorSeconds, beatPeriodSeconds) / beatPeriodSeconds;
+      const barPhase =
+        positiveMod(currentTime - beatAnchorSeconds, beatPeriodSeconds * 4) /
+        (beatPeriodSeconds * 4);
+      const beatImpulse = (() => {
+        const beats = trackData?.accentBeats ?? [];
+        if (beats.length === 0) return 0;
+        const nextBeatTime = beats[beatIndexRef.current]?.timeSeconds;
+        const prevBeatTime = beats[Math.max(0, beatIndexRef.current - 1)]?.timeSeconds;
+        const deltaNext =
+          Number.isFinite(nextBeatTime) && nextBeatTime !== undefined
+            ? Math.abs(nextBeatTime - currentTime)
+            : Number.POSITIVE_INFINITY;
+        const deltaPrev =
+          Number.isFinite(prevBeatTime) && prevBeatTime !== undefined
+            ? Math.abs(prevBeatTime - currentTime)
+            : Number.POSITIVE_INFINITY;
+        const nearestDelta = Math.min(deltaNext, deltaPrev);
+        const window = Math.max(0.03, beatPeriodSeconds * runtimeConfig.playgroundBeatImpulseWindowRatio);
+        const normalizedDistance = clamp(1 - nearestDelta / window, 0, 1);
+        return normalizedDistance * normalizedDistance;
+      })();
+      if (activeTab === "rhythm_flame" && nowMs - lastFlameAudioUiUpdateRef.current >= 50) {
+        lastFlameAudioUiUpdateRef.current = nowMs;
+        setFlameAudioFrame(
+          normalizeFlameAudioFrame(featuresRef.current, beatPulseRef.current, beatImpulse)
+        );
+      }
+
+      if (activeTab === "rhythm_flame") {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, displayWidth, displayHeight);
+      } else {
+        renderVisualizer(mode, {
+          ctx,
+          width: displayWidth,
+          height: displayHeight,
+          timeSeconds: nowMs / 1000,
+          frame: featuresRef.current,
+          beatPulse: beatPulseRef.current,
+          songProgress,
+          tempoBpm,
+          tempoNorm: clamp((tempoBpm - 80) / 100, 0, 1),
+          beatPhase,
+          barPhase,
+          beatImpulse,
+          variationAmount: runtimeConfig.playgroundVisualizerVariationAmount,
+          variationSeed:
+            baseVariationSeed +
+            hashStringToUnit(
+              `${selectedSongId}:${Math.floor(currentTime / Math.max(0.2, beatPeriodSeconds * 4))}`
+            ),
+          overscanRatio: runtimeConfig.playgroundVisualizerOverscanRatio,
+        });
+      }
 
       rafRef.current = window.requestAnimationFrame(tick);
     };
@@ -358,7 +441,17 @@ export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): J
         rafRef.current = null;
       }
     };
-  }, [baseVariationSeed, beatAnchorSeconds, beatPeriodSeconds, featuresRef, mode, tempoBpm, trackData]);
+  }, [
+    activeTab,
+    baseVariationSeed,
+    beatAnchorSeconds,
+    beatPeriodSeconds,
+    featuresRef,
+    mode,
+    selectedSongId,
+    tempoBpm,
+    trackData,
+  ]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -474,10 +567,46 @@ export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): J
     lastTickTimeRef.current = safe;
   };
 
+  const updateFlameConfigNumber =
+    (field: "extension" | "intensity" | "chaos" | "directionDegrees", min: number, max: number) =>
+    (event: Event) => {
+      const value = Number.parseFloat((event.currentTarget as HTMLInputElement).value);
+      setFlameConfig((previous) => ({
+        ...previous,
+        [field]: clamp(Number.isFinite(value) ? value : min, min, max),
+      }));
+    };
+
+  const updateFlameConfigColor =
+    (field: "coreColor" | "midColor" | "edgeColor") => (event: Event) => {
+      const value = (event.currentTarget as HTMLInputElement).value;
+      setFlameConfig((previous) => ({
+        ...previous,
+        [field]: value,
+      }));
+    };
+
+  const updateFlameAudioControlNumber =
+    (field: "audioMaster" | "meydaInfluence" | "beatInfluence") => (event: Event) => {
+      const value = Number.parseFloat((event.currentTarget as HTMLInputElement).value);
+      setFlameAudioControl((previous) => ({
+        ...previous,
+        [field]: clamp(Number.isFinite(value) ? value : 0, 0, 1),
+      }));
+    };
+
   return (
     <section className="playground-shell">
       <canvas ref={canvasRef} className="playground-canvas" />
       <audio ref={bindAudioElement} src={audioUrl} preload="metadata" />
+      {activeTab === "rhythm_flame" ? (
+        <RhythmFlameStage
+          config={flameConfig}
+          audioControl={flameAudioControl}
+          audioFrame={flameAudioFrame}
+          isPlaying={isPlaying}
+        />
+      ) : null}
 
       <header className="playground-overlay">
         <div className="playground-topbar">
@@ -486,108 +615,276 @@ export function PlaygroundVisualizer({ homeHref }: PlaygroundVisualizerProps): J
           </a>
           <div className="playground-title-block">
             <p className="playground-kicker">Faceless Playground</p>
-            <h1>Realtime Audio Visualizer</h1>
+            <h1>{activeTab === "rhythm_flame" ? "Rhythm Flame Playground" : "Realtime Audio Visualizer"}</h1>
             {selectedSong ? (
               <span className="playground-chip playground-active-song-chip">
                 {selectedSong.title} · {trackData?.accentBeats.length ?? 0} saved beats
               </span>
             ) : null}
           </div>
-          <div className="playground-mode">
-            <label htmlFor="playground-mode-select">Visualizer</label>
-            <select
-              id="playground-mode-select"
-              value={mode}
-              onChange={(event) => setMode(event.currentTarget.value as VisualizerMode)}
-            >
-              {VISUALIZER_MODES.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="playground-controls">
-          <button type="button" onClick={() => void handleTogglePlayback()} disabled={!audioUrl}>
-            {isPlaying ? "Pause" : "Play"}
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={handleStopPlayback}
-            disabled={!audioUrl}
-          >
-            Stop
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(durationSeconds, 0)}
-            step={0.01}
-            value={Math.min(currentTimeSeconds, Math.max(durationSeconds, 0))}
-            onInput={(event) => handleSeek(Number.parseFloat(event.currentTarget.value))}
-            disabled={!audioUrl || durationSeconds <= 0}
-          />
-          <span className="playground-time">
-            {formatTimeLabel(currentTimeSeconds)} / {formatTimeLabel(durationSeconds)}
-          </span>
-        </div>
-
-        {songsPanelOpen ? (
-          <div className="playground-song-panel">
-            <div className="playground-song-panel__header">
-              <button
-                type="button"
-                className="secondary playground-songs-toggle"
-                onClick={() => setSongsPanelOpen((previous) => !previous)}
-              >
-                Collapse Songs
-              </button>
-            </div>
-
-            <div className="playground-song-strip">
-              {loadingSongs ? <span className="playground-chip">Loading songs...</span> : null}
-              {!loadingSongs && songs.length === 0 ? (
-                <span className="playground-chip">
-                  No enabled songs available. Enable songs in Admin Game Builder.
-                </span>
-              ) : null}
-              {songs.map((song) => (
+          <div className="playground-topbar-tools">
+            <div className="playground-tabs">
+              {PLAYGROUND_TABS.map((tab) => (
                 <button
-                  key={song.beatEntryId}
+                  key={tab.id}
                   type="button"
-                  className={`playground-song-card${
-                    selectedSongId === song.beatEntryId ? " active" : ""
-                  }`}
-                  onClick={() => setSelectedSongId(song.beatEntryId)}
+                  className={`playground-tab${activeTab === tab.id ? " active" : ""}`}
+                  onClick={() => setActiveTab(tab.id)}
                 >
-                  {song.coverImageUrl ? (
-                    <img src={song.coverImageUrl} alt="" aria-hidden="true" />
-                  ) : (
-                    <div className="playground-song-card__placeholder" />
-                  )}
-                  <strong>{song.title}</strong>
-                  <span>{song.gameBeatCount || song.majorBeatCount} beats</span>
+                  {tab.label}
                 </button>
               ))}
             </div>
+            {activeTab === "visualizer" ? (
+              <div className="playground-mode">
+                <label htmlFor="playground-mode-select">Visualizer Mode</label>
+                <select
+                  id="playground-mode-select"
+                  value={mode}
+                  onChange={(event) => setMode(event.currentTarget.value as VisualizerMode)}
+                >
+                  {VISUALIZER_MODES.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="playground-topbar-actions">
+                <div className="playground-mode">
+                  <label htmlFor="playground-flame-mode-select">Flame Mode</label>
+                  <select
+                    id="playground-flame-mode-select"
+                    value={flameConfig.mode}
+                    onChange={(event) =>
+                      setFlameConfig((previous) => ({
+                        ...previous,
+                        mode: event.currentTarget.value as RhythmFlameMode,
+                      }))
+                    }
+                  >
+                    {RHYTHM_FLAME_MODES.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  className="secondary playground-controls-toggle"
+                  onClick={() => setControlsVisible((previous) => !previous)}
+                >
+                  {controlsVisible ? "Hide Controls" : "Show Controls"}
+                </button>
+              </div>
+            )}
           </div>
-        ) : (
-          <button
-            type="button"
-            className="secondary playground-songs-toggle"
-            onClick={() => setSongsPanelOpen(true)}
-          >
-            Expand Songs
-          </button>
-        )}
-
-        <div className="playground-status">
-          {loadingTrack ? <span className="playground-chip">Loading song data...</span> : null}
-          {loadError ? <span className="playground-chip error">{loadError}</span> : null}
         </div>
+
+        {controlsVisible ? (
+          <>
+            <div className="playground-controls">
+              <button type="button" onClick={() => void handleTogglePlayback()} disabled={!audioUrl}>
+                {isPlaying ? "Pause" : "Play"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleStopPlayback}
+                disabled={!audioUrl}
+              >
+                Stop
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(durationSeconds, 0)}
+                step={0.01}
+                value={Math.min(currentTimeSeconds, Math.max(durationSeconds, 0))}
+                onInput={(event) => handleSeek(Number.parseFloat(event.currentTarget.value))}
+                disabled={!audioUrl || durationSeconds <= 0}
+              />
+              <span className="playground-time">
+                {formatTimeLabel(currentTimeSeconds)} / {formatTimeLabel(durationSeconds)}
+              </span>
+            </div>
+
+            {activeTab === "rhythm_flame" ? (
+              <div className="playground-flame-panel">
+                <div className="playground-flame-grid">
+                  <label>
+                    Extension
+                    <span>{formatRatioLabel(flameConfig.extension)}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={flameConfig.extension}
+                      onInput={updateFlameConfigNumber("extension", 0, 1)}
+                    />
+                  </label>
+                  <label>
+                    Intensity
+                    <span>{formatRatioLabel(flameConfig.intensity)}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={flameConfig.intensity}
+                      onInput={updateFlameConfigNumber("intensity", 0, 1)}
+                    />
+                  </label>
+                  <label>
+                    Chaos
+                    <span>{formatRatioLabel(flameConfig.chaos)}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={flameConfig.chaos}
+                      onInput={updateFlameConfigNumber("chaos", 0, 1)}
+                    />
+                  </label>
+                  <label>
+                    Relative Direction
+                    <span>{Math.round(flameConfig.directionDegrees)}°</span>
+                    <input
+                      type="range"
+                      min={-180}
+                      max={180}
+                      step={1}
+                      value={flameConfig.directionDegrees}
+                      onInput={updateFlameConfigNumber("directionDegrees", -180, 180)}
+                    />
+                  </label>
+                </div>
+                <div className="playground-flame-colors">
+                  <label>
+                    Core
+                    <input
+                      type="color"
+                      value={flameConfig.coreColor}
+                      onInput={updateFlameConfigColor("coreColor")}
+                    />
+                  </label>
+                  <label>
+                    Mid
+                    <input
+                      type="color"
+                      value={flameConfig.midColor}
+                      onInput={updateFlameConfigColor("midColor")}
+                    />
+                  </label>
+                  <label>
+                    Edge
+                    <input
+                      type="color"
+                      value={flameConfig.edgeColor}
+                      onInput={updateFlameConfigColor("edgeColor")}
+                    />
+                  </label>
+                </div>
+                <div className="playground-flame-audio">
+                  <label>
+                    Audio Master
+                    <span>{formatRatioLabel(flameAudioControl.audioMaster)}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={flameAudioControl.audioMaster}
+                      onInput={updateFlameAudioControlNumber("audioMaster")}
+                    />
+                  </label>
+                  <label>
+                    Meyda Influence
+                    <span>{formatRatioLabel(flameAudioControl.meydaInfluence)}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={flameAudioControl.meydaInfluence}
+                      onInput={updateFlameAudioControlNumber("meydaInfluence")}
+                    />
+                  </label>
+                  <label>
+                    Beat Influence
+                    <span>{formatRatioLabel(flameAudioControl.beatInfluence)}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={flameAudioControl.beatInfluence}
+                      onInput={updateFlameAudioControlNumber("beatInfluence")}
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : null}
+
+            {songsPanelOpen ? (
+              <div className="playground-song-panel">
+                <div className="playground-song-panel__header">
+                  <button
+                    type="button"
+                    className="secondary playground-songs-toggle"
+                    onClick={() => setSongsPanelOpen((previous) => !previous)}
+                  >
+                    Collapse Songs
+                  </button>
+                </div>
+
+                <div className="playground-song-strip">
+                  {loadingSongs ? <span className="playground-chip">Loading songs...</span> : null}
+                  {!loadingSongs && songs.length === 0 ? (
+                    <span className="playground-chip">
+                      No enabled songs available. Enable songs in Admin Game Builder.
+                    </span>
+                  ) : null}
+                  {songs.map((song) => (
+                    <button
+                      key={song.beatEntryId}
+                      type="button"
+                      className={`playground-song-card${
+                        selectedSongId === song.beatEntryId ? " active" : ""
+                      }`}
+                      onClick={() => setSelectedSongId(song.beatEntryId)}
+                    >
+                      {song.coverImageUrl ? (
+                        <img src={song.coverImageUrl} alt="" aria-hidden="true" />
+                      ) : (
+                        <div className="playground-song-card__placeholder" />
+                      )}
+                      <strong>{song.title}</strong>
+                      <span>{song.gameBeatCount || song.majorBeatCount} beats</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="secondary playground-songs-toggle"
+                onClick={() => setSongsPanelOpen(true)}
+              >
+                Expand Songs
+              </button>
+            )}
+
+            <div className="playground-status">
+              {loadingTrack ? <span className="playground-chip">Loading song data...</span> : null}
+              {loadError ? <span className="playground-chip error">{loadError}</span> : null}
+            </div>
+          </>
+        ) : null}
       </header>
     </section>
   );

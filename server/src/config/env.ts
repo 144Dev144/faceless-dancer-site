@@ -41,6 +41,7 @@ const envSchema = z.object({
   SITE_SHOW_TWITTER: z.enum(["true", "false"]).default("true"),
   SITE_YOUTUBE_URL: optionalUrlSchema,
   SITE_SHOW_YOUTUBE: z.enum(["true", "false"]).default("true"),
+  SITE_SHOW_YOUTUBE_EMBED: z.enum(["true", "false"]).default("true"),
   SITE_YOUTUBE_LIVE_CHANNEL_ID: z.string().default(""),
   SITE_TELEGRAM_URL: optionalUrlSchema,
   SITE_SHOW_TELEGRAM: z.enum(["true", "false"]).default("true"),
@@ -85,6 +86,7 @@ export const env = {
   maxUploadSizeBytes: data.MAX_UPLOAD_SIZE_MB * 1024 * 1024,
   siteShowTwitter: data.SITE_SHOW_TWITTER === "true",
   siteShowYoutube: data.SITE_SHOW_YOUTUBE === "true",
+  siteShowYoutubeEmbed: data.SITE_SHOW_YOUTUBE_EMBED === "true",
   siteShowTelegram: data.SITE_SHOW_TELEGRAM === "true",
   siteShowDexscreener: data.SITE_SHOW_DEXSCREENER === "true",
   storageEndpoint:
