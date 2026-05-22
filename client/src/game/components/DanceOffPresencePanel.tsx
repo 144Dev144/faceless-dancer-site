@@ -79,7 +79,7 @@ function findSelfParticipant(danceOff: DanceOffPayload, publicKey: string) {
 
 function formatGameMode(gameMode: CreateRequestDetail["gameMode"]): string {
   if (gameMode === "orb_beat") return "Orb Beat";
-  if (gameMode === "laser_shoot") return "Laser Shoot";
+  if (gameMode === "laser_shoot") return "Rhythm Wizards";
   return "Step Arrows";
 }
 

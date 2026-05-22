@@ -78,6 +78,32 @@ export interface RuntimeConfig {
   gameGreatWindowSeconds: number;
   gameGoodWindowSeconds: number;
   gamePoorWindowSeconds: number;
+  gameRhythmWizardsPlayerMoveSpeed: number;
+  gameRhythmWizardsEnemyMoveSpeed: number;
+  gameRhythmWizardsProjectileSpeed: number;
+  gameRhythmWizardsProjectileLifetimeSeconds: number;
+  gameRhythmWizardsCastCooldownSeconds: number;
+  gameRhythmWizardsMoveFrameMs: number;
+  gameRhythmWizardsAttackFrameMs: number;
+  gameRhythmWizardsStaggerFrameMs: number;
+  gameRhythmWizardsDeathFrameMs: number;
+  gameRhythmWizardsWizardHealth: number;
+  gameRhythmWizardsObstacleHealth: number;
+  gameRhythmWizardsDirectDamageBase: number;
+  gameRhythmWizardsBeatBonusDamageMultiplier: number;
+  gameRhythmWizardsAoeDamageMultiplier: number;
+  gameRhythmWizardsBeatAoeRadius: number;
+  gameRhythmWizardsObstacleDamageMultiplier: number;
+  gameRhythmWizardsObstacleDecisionMinSeconds: number;
+  gameRhythmWizardsObstacleDecisionMaxSeconds: number;
+  gameRhythmWizardsObstacleSpeedMin: number;
+  gameRhythmWizardsObstacleSpeedMax: number;
+  gameRhythmWizardsAiEasyBeatPrecisionChance: number;
+  gameRhythmWizardsAiNormalBeatPrecisionChance: number;
+  gameRhythmWizardsAiHardBeatPrecisionChance: number;
+  gameRhythmWizardsAiEasyAccuracyChance: number;
+  gameRhythmWizardsAiNormalAccuracyChance: number;
+  gameRhythmWizardsAiHardAccuracyChance: number;
   menuPreviewStartSeconds: number;
   playgroundMeydaBufferSize: number;
   playgroundFeatureSmoothing: number;
@@ -546,6 +572,162 @@ export const runtimeConfig: RuntimeConfig = {
     0.2,
     0.03,
     0.6
+  ),
+  gameRhythmWizardsPlayerMoveSpeed: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_PLAYER_MOVE_SPEED,
+    0.34,
+    0.1,
+    2
+  ),
+  gameRhythmWizardsEnemyMoveSpeed: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_ENEMY_MOVE_SPEED,
+    0.3,
+    0.1,
+    2
+  ),
+  gameRhythmWizardsProjectileSpeed: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_PROJECTILE_SPEED,
+    0.46,
+    0.2,
+    4
+  ),
+  gameRhythmWizardsProjectileLifetimeSeconds: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_PROJECTILE_LIFETIME_SECONDS,
+    2.8,
+    0.2,
+    5
+  ),
+  gameRhythmWizardsCastCooldownSeconds: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_CAST_COOLDOWN_SECONDS,
+    0.58,
+    0.1,
+    3
+  ),
+  gameRhythmWizardsMoveFrameMs: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_MOVE_FRAME_MS,
+    86,
+    30,
+    300
+  ),
+  gameRhythmWizardsAttackFrameMs: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_ATTACK_FRAME_MS,
+    70,
+    30,
+    350
+  ),
+  gameRhythmWizardsStaggerFrameMs: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_STAGGER_FRAME_MS,
+    72,
+    30,
+    350
+  ),
+  gameRhythmWizardsDeathFrameMs: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_DEATH_FRAME_MS,
+    88,
+    30,
+    450
+  ),
+  gameRhythmWizardsWizardHealth: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_WIZARD_HEALTH,
+    100,
+    10,
+    1000
+  ),
+  gameRhythmWizardsObstacleHealth: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_OBSTACLE_HEALTH,
+    90,
+    1,
+    500
+  ),
+  gameRhythmWizardsDirectDamageBase: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_DIRECT_DAMAGE_BASE,
+    10,
+    1,
+    100
+  ),
+  gameRhythmWizardsBeatBonusDamageMultiplier: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_BEAT_BONUS_DAMAGE_MULTIPLIER,
+    1.45,
+    1,
+    5
+  ),
+  gameRhythmWizardsAoeDamageMultiplier: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_AOE_DAMAGE_MULTIPLIER,
+    0.72,
+    0,
+    3
+  ),
+  gameRhythmWizardsBeatAoeRadius: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_BEAT_AOE_RADIUS,
+    0.11,
+    0,
+    0.6
+  ),
+  gameRhythmWizardsObstacleDamageMultiplier: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_OBSTACLE_DAMAGE_MULTIPLIER,
+    0.42,
+    0,
+    2
+  ),
+  gameRhythmWizardsObstacleDecisionMinSeconds: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_OBSTACLE_DECISION_MIN_SECONDS,
+    0.28,
+    0.05,
+    4
+  ),
+  gameRhythmWizardsObstacleDecisionMaxSeconds: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_OBSTACLE_DECISION_MAX_SECONDS,
+    1.1,
+    0.1,
+    6
+  ),
+  gameRhythmWizardsObstacleSpeedMin: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_OBSTACLE_SPEED_MIN,
+    0.18,
+    0,
+    2
+  ),
+  gameRhythmWizardsObstacleSpeedMax: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_OBSTACLE_SPEED_MAX,
+    0.42,
+    0.01,
+    3
+  ),
+  gameRhythmWizardsAiEasyBeatPrecisionChance: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_AI_EASY_BEAT_PRECISION_CHANCE,
+    0.28,
+    0,
+    1
+  ),
+  gameRhythmWizardsAiNormalBeatPrecisionChance: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_AI_NORMAL_BEAT_PRECISION_CHANCE,
+    0.58,
+    0,
+    1
+  ),
+  gameRhythmWizardsAiHardBeatPrecisionChance: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_AI_HARD_BEAT_PRECISION_CHANCE,
+    0.84,
+    0,
+    1
+  ),
+  gameRhythmWizardsAiEasyAccuracyChance: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_AI_EASY_ACCURACY_CHANCE,
+    0.44,
+    0,
+    1
+  ),
+  gameRhythmWizardsAiNormalAccuracyChance: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_AI_NORMAL_ACCURACY_CHANCE,
+    0.66,
+    0,
+    1
+  ),
+  gameRhythmWizardsAiHardAccuracyChance: parseClampedNumber(
+    import.meta.env.VITE_GAME_RW_AI_HARD_ACCURACY_CHANCE,
+    0.84,
+    0,
+    1
   ),
   menuPreviewStartSeconds: parseClampedNumber(
     import.meta.env.VITE_MENU_PREVIEW_START_SECONDS,

@@ -20,6 +20,11 @@ import {
   getModeDifficultyChart,
 } from "../lib/game/difficultyCharts";
 import { LyricsSubtitle } from "./LyricsSubtitle";
+import { rhythmWizardsConfig } from "../lib/rhythmWizards/balance";
+import { buildBeatTimelineFromNoteTimes, evaluateBeatSync } from "../lib/rhythmWizards/beatSync";
+import { getDamageTier, rhythmWizardsAssets, selectObstacleSprite, selectWizardSprite } from "../lib/rhythmWizards/assets";
+import { castSpell, createRhythmWizardsState, stepRhythmWizardsState } from "../lib/rhythmWizards/simulation";
+import type { MoveDirection, RhythmWizardsState, WizardAiDifficulty } from "../lib/rhythmWizards/types";
 
 interface GameViewProps {
   apiBaseUrl: string;
@@ -92,6 +97,7 @@ interface DanceOffLinkStatePayload {
 type ViewMode = "menu" | "play" | "scores";
 type PlayPhase = "idle" | "countdown" | "running" | "finished";
 type Judgement = "perfect" | "great" | "good" | "poor" | "miss";
+type RhythmBonusJudgement = "perfect" | "great" | "good";
 
 interface GameNoteState extends MelodyNote {
   judged: boolean;
@@ -139,18 +145,6 @@ const beatArrowImages: Record<StepArrowLane, string> = {
   up: "/game-graphics/beats/up.png",
   right: "/game-graphics/beats/right.png"
 };
-const laserControlImages: Record<StepArrowLane, string> = {
-  left: "/game-graphics/controls/left.png",
-  down: "/game-graphics/controls/down.png",
-  up: "/game-graphics/controls/up.png",
-  right: "/game-graphics/controls/right.png"
-};
-const laserTargetImages: Record<StepArrowLane, string> = {
-  left: "/game-graphics/beats/left.png",
-  down: "/game-graphics/beats/down.png",
-  up: "/game-graphics/beats/up.png",
-  right: "/game-graphics/beats/right.png"
-};
 const orbControlLabels: Record<OrbBeatLane, string> = {
   l1: "L1",
   l2: "L2",
@@ -162,7 +156,7 @@ const orbControlLabels: Record<OrbBeatLane, string> = {
 
 function formatGameModeLabel(gameMode: GameMode): string {
   if (gameMode === "orb_beat") return "Orb Beat";
-  if (gameMode === "laser_shoot") return "Laser Shoot";
+  if (gameMode === "laser_shoot") return "Rhythm Wizards";
   return "Step Arrows";
 }
 const HOLD_MIN_SECONDS = 0.14;
@@ -173,6 +167,7 @@ const MENU_PREVIEW_FADE_SECONDS = 1.2;
 const MENU_PREVIEW_MAX_VOLUME = 0.5;
 const MENU_PREVIEW_SWITCH_FADE_OUT_MS = 90;
 const MENU_PREVIEW_METADATA_WAIT_MS = 50;
+const WIZARD_AI_DIFFICULTIES: WizardAiDifficulty[] = ["novice", "apprentice", "adept", "master", "archmage"];
 
 function createInitialScore(): ScoreState {
   return { combo: 0, maxCombo: 0, perfect: 0, great: 0, good: 0, poor: 0, miss: 0 };
@@ -222,6 +217,23 @@ function classifyJudgement(deltaSeconds: number, windows: { perfect: number; gre
   return "miss";
 }
 
+function createStableSeed(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function spriteStyle(src: string, frames?: number, frameDurationMs?: number): CSSProperties {
+  return {
+    backgroundImage: `url("${src}")`,
+    "--rw-frames": String(Math.max(1, Math.floor(frames ?? 1))),
+    "--rw-frame-ms": `${Math.max(16, Math.floor(frameDurationMs ?? 100))}ms`,
+  } as CSSProperties;
+}
+
 export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, homeHref = "/", onModeChange }: GameViewProps): JSX.Element {
   const engineRef = useRef<PrecisePlaybackEngine | null>(null);
   const loopRef = useRef<number | null>(null);
@@ -262,6 +274,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   const [analysisMajorBeats, setAnalysisMajorBeats] = useState<Array<{ timeSeconds: number; strength: number }> | null>(null);
   const [selectedGameMode, setSelectedGameMode] = useState<GameMode>("step_arrows");
   const [selectedDifficulty, setSelectedDifficulty] = useState<GameDifficulty>("normal");
+  const [selectedWizardAiDifficulty, setSelectedWizardAiDifficulty] = useState<WizardAiDifficulty>("adept");
   const [isLandscape, setIsLandscape] = useState(false);
 
   const [loadingSongs, setLoadingSongs] = useState(false);
@@ -292,13 +305,27 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     canExit: boolean;
     details: string[];
   }>({ visible: false, score: 0, percentage: 0, rank: null, message: "", canExit: true, details: [] });
-  const [alienHealth, setAlienHealth] = useState(100);
-  const [alienHitFlash, setAlienHitFlash] = useState(false);
-  const [marineFiring, setMarineFiring] = useState(false);
-  const [laserShotFx, setLaserShotFx] = useState<{ id: number; lane: StepArrowLane; hit: boolean } | null>(null);
-  const laserShotIdRef = useRef(0);
-  const alienHitTimeoutRef = useRef<number | null>(null);
-  const marineFireTimeoutRef = useRef<number | null>(null);
+  const rhythmWizardsRef = useRef<RhythmWizardsState | null>(null);
+  const rhythmWizardsBeatTimelineRef = useRef<number[]>([]);
+  const rhythmWizardsMoveInputRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
+  const lastRhythmWizardsHeardRef = useRef(0);
+  const [rhythmWizardsState, setRhythmWizardsState] = useState<RhythmWizardsState | null>(null);
+  const [rhythmWizardsAimPoint, setRhythmWizardsAimPoint] = useState<{ x: number; y: number; id: number } | null>(null);
+  const [rhythmWizardsBurst, setRhythmWizardsBurst] = useState<{
+    x: number;
+    y: number;
+    judgement: RhythmBonusJudgement;
+    id: number;
+  } | null>(null);
+  const [rhythmWizardsImpact, setRhythmWizardsImpact] = useState<{
+    x: number;
+    y: number;
+    kind: "wizard" | "obstacle";
+    id: number;
+  } | null>(null);
+  const [rhythmWizardsMoveButtons, setRhythmWizardsMoveButtons] = useState({ left: false, right: false });
+  const [rhythmWizardsSyncPulseId, setRhythmWizardsSyncPulseId] = useState(0);
+  const rhythmWizardsFxIdRef = useRef(0);
   const windows = useMemo(() => {
     const perfect = runtimeConfig.gamePerfectWindowSeconds;
     const great = Math.max(perfect, runtimeConfig.gameGreatWindowSeconds);
@@ -313,9 +340,18 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   }, [score, holdBonusPoints]);
 
   const lifePercent = useMemo(() => {
+    if (selectedGameMode === "laser_shoot" && rhythmWizardsState) {
+      return Math.max(0, Math.min(100, (rhythmWizardsState.player.health / Math.max(1, rhythmWizardsState.player.maxHealth)) * 100));
+    }
     const life = 50 + score.perfect * 2 + score.great * 1 + score.good * 0.35 - score.poor * 1.5 - score.miss * 3;
     return Math.max(0, Math.min(100, life));
-  }, [score]);
+  }, [score, selectedGameMode, rhythmWizardsState]);
+  const rhythmWizardsPlayerHealthPercent = rhythmWizardsState
+    ? Math.max(0, Math.min(100, (rhythmWizardsState.player.health / Math.max(1, rhythmWizardsState.player.maxHealth)) * 100))
+    : 100;
+  const rhythmWizardsEnemyHealthPercent = rhythmWizardsState
+    ? Math.max(0, Math.min(100, (rhythmWizardsState.enemy.health / Math.max(1, rhythmWizardsState.enemy.maxHealth)) * 100))
+    : 100;
 
   const isBlockedByLinkedDanceOff = useMemo(() => {
     if (!linkedDanceOffState.linked) {
@@ -408,20 +444,90 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     }));
     setScore(createInitialScore());
     setHoldBonusPoints(0);
+    setLastJudgement(null);
     setChartRevision((value) => value + 1);
     heldLanesRef.current = createLaneState();
     setHeldLanes(createLaneState());
     setPressedLanes(createLaneState());
-    setAlienHealth(100);
-    setAlienHitFlash(false);
-    setMarineFiring(false);
-    setLaserShotFx(null);
+    rhythmWizardsMoveInputRef.current = { left: false, right: false };
+    setRhythmWizardsMoveButtons({ left: false, right: false });
+    setRhythmWizardsAimPoint(null);
+    setRhythmWizardsBurst(null);
+    setRhythmWizardsImpact(null);
+    const beatTimeline = buildBeatTimelineFromNoteTimes(
+      notesRef.current.map((note) => note.timeSeconds)
+    );
+    rhythmWizardsBeatTimelineRef.current = beatTimeline;
+    if (gameMode === "laser_shoot") {
+      const seedSource = `${entry.id}:${entry.savedAtIso}:${difficulty}`;
+      const initialized = createRhythmWizardsState(selectedWizardAiDifficulty, createStableSeed(seedSource));
+      rhythmWizardsRef.current = initialized;
+      setRhythmWizardsState(initialized);
+      lastRhythmWizardsHeardRef.current = 0;
+    } else {
+      rhythmWizardsRef.current = null;
+      setRhythmWizardsState(null);
+    }
   };
 
   const tick = (): void => {
     const engine = engineRef.current;
     if (!engine) return;
     const heard = engine.getCurrentHeardTime();
+    const runActive = runStartedRef.current && !forfeitedRef.current && !finalizedRef.current;
+    if (selectedGameMode === "laser_shoot" && rhythmWizardsRef.current && runActive) {
+      const previousHeard = lastRhythmWizardsHeardRef.current || heard;
+      const dtSeconds = Math.max(0.001, Math.min(0.05, heard - previousHeard));
+      lastRhythmWizardsHeardRef.current = heard;
+      const moveDir: MoveDirection = rhythmWizardsMoveInputRef.current.left === rhythmWizardsMoveInputRef.current.right
+        ? 0
+        : rhythmWizardsMoveInputRef.current.left
+          ? -1
+          : 1;
+      let stepped: ReturnType<typeof stepRhythmWizardsState>;
+      try {
+        stepped = stepRhythmWizardsState(
+          rhythmWizardsRef.current,
+          { dtSeconds, heardTimeSeconds: heard, playerMoveDir: moveDir },
+          rhythmWizardsBeatTimelineRef.current
+        );
+      } catch (error) {
+        setError(error instanceof Error ? error.message : "Rhythm Wizards simulation failed.");
+        setPlaying(false);
+        stopLoop();
+        return;
+      }
+      const impactEvent = stepped.events.find(
+        (event) =>
+          (event.type === "projectile_hit_obstacle" || event.type === "player_hit_enemy" || event.type === "enemy_hit_player") &&
+          typeof event.x === "number" &&
+          typeof event.y === "number"
+      );
+      if (impactEvent && typeof impactEvent.x === "number" && typeof impactEvent.y === "number") {
+        const impactId = ++rhythmWizardsFxIdRef.current;
+        setRhythmWizardsImpact({
+          x: impactEvent.x,
+          y: impactEvent.y,
+          kind: impactEvent.type === "projectile_hit_obstacle" ? "obstacle" : "wizard",
+          id: impactId,
+        });
+        window.setTimeout(() => {
+          setRhythmWizardsImpact((previous) => (previous && previous.id === impactId ? null : previous));
+        }, 260);
+      }
+      rhythmWizardsRef.current = stepped.state;
+      setRhythmWizardsState(stepped.state);
+      if (!endSignaledRef.current && stepped.state.ended) {
+        endSignaledRef.current = true;
+        setSongEndedSignal((value) => value + 1);
+      }
+      setCurrentTimeSeconds(heard);
+      if (!engine.isPlaying()) {
+        setPlaying(false);
+        stopLoop();
+      }
+      return;
+    }
     for (const note of notesRef.current) {
       if (note.judged) continue;
       const isHold = note.type === "hold" && note.endSeconds - note.timeSeconds >= HOLD_MIN_SECONDS;
@@ -444,6 +550,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
       }
     }
     setCurrentTimeSeconds(heard);
+    lastRhythmWizardsHeardRef.current = heard;
     if (!endSignaledRef.current) {
       const finalNoteSeconds = notesRef.current.reduce((maxSeconds, note) => Math.max(maxSeconds, note.endSeconds), 0);
       if (finalNoteSeconds > 0 && heard >= finalNoteSeconds + 1.5) {
@@ -928,7 +1035,10 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     if (!selectedEntry || forfeitedRef.current) return;
     const liveScore = scoreRef.current;
     const liveTotalScore = totalScoreRef.current;
-    const totalNotes = Math.max(1, notesRef.current.length);
+    const totalNotes =
+      selectedGameMode === "laser_shoot"
+        ? Math.max(1, liveScore.perfect + liveScore.great + liveScore.good + liveScore.poor + liveScore.miss)
+        : Math.max(1, notesRef.current.length);
     const weighted = liveScore.perfect + liveScore.great * 0.75 + liveScore.good * 0.5 + liveScore.poor * 0.25;
     const percentage = Math.max(0, Math.min(100, (weighted / totalNotes) * 100));
     const activeDanceOffId = activeDanceOffIdRef.current;
@@ -1028,6 +1138,9 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     setSongEndedSignal(0);
     setResultsModal({ visible: false, score: 0, percentage: 0, rank: null, message: "", canExit: true, details: [] });
     rebuildChart(loadedEntry, loadedAnalysis, gameMode, difficulty);
+    lastRhythmWizardsHeardRef.current = 0;
+    rhythmWizardsMoveInputRef.current = { left: false, right: false };
+    setRhythmWizardsMoveButtons({ left: false, right: false });
     let beatsLeft = 3;
     const beatSeconds = estimateBeatSeconds(notesRef.current);
     stopCountdown();
@@ -1119,23 +1232,21 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     setPlaying(false);
     setCurrentTimeSeconds(0);
     previousTimeRef.current = 0;
+    lastRhythmWizardsHeardRef.current = 0;
+    rhythmWizardsMoveInputRef.current = { left: false, right: false };
     setSongEndedSignal(0);
     setPhase("idle");
+    setLastJudgement(null);
+    setRhythmWizardsAimPoint(null);
+    setRhythmWizardsBurst(null);
+    setRhythmWizardsImpact(null);
     setResultsModal({ visible: false, score: 0, percentage: 0, rank: null, message: "", canExit: true, details: [] });
     setMode("menu");
   };
 
   const handleLaneInput = (lane: GameLane): void => {
     if (phase !== "running") return;
-    const isLaserMode = selectedGameMode === "laser_shoot";
-    const isStepLane = stepArrowLaneOrder.includes(lane as StepArrowLane);
-    if (isLaserMode && isStepLane) {
-      setMarineFiring(true);
-      if (marineFireTimeoutRef.current !== null) {
-        window.clearTimeout(marineFireTimeoutRef.current);
-      }
-      marineFireTimeoutRef.current = window.setTimeout(() => setMarineFiring(false), 130);
-    }
+    if (selectedGameMode === "laser_shoot") return;
     heldLanesRef.current = { ...heldLanesRef.current, [lane]: true };
     setHeldLanes((prev) => ({ ...prev, [lane]: true }));
     setPressedLanes((prev) => ({ ...prev, [lane]: true }));
@@ -1156,13 +1267,6 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     }
     if (!candidate) {
       applyJudgement("miss");
-      if (isLaserMode && isStepLane) {
-        setLaserShotFx({
-          id: ++laserShotIdRef.current,
-          lane: lane as StepArrowLane,
-          hit: false,
-        });
-      }
       return;
     }
     const judgement = classifyJudgement(heardTime - candidate.timeSeconds, windows);
@@ -1170,33 +1274,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     if (judgement === "miss") {
       candidate.judged = true;
       applyJudgement("miss");
-      if (isLaserMode && isStepLane) {
-        setLaserShotFx({
-          id: ++laserShotIdRef.current,
-          lane: lane as StepArrowLane,
-          hit: false,
-        });
-      }
       return;
-    }
-    if (isLaserMode && isStepLane) {
-      const damageByJudgement: Record<Exclude<Judgement, "miss">, number> = {
-        perfect: 10,
-        great: 7,
-        good: 4,
-        poor: 2,
-      };
-      setLaserShotFx({
-        id: ++laserShotIdRef.current,
-        lane: lane as StepArrowLane,
-        hit: true,
-      });
-      setAlienHealth((value) => Math.max(0, value - damageByJudgement[judgement]));
-      setAlienHitFlash(true);
-      if (alienHitTimeoutRef.current !== null) {
-        window.clearTimeout(alienHitTimeoutRef.current);
-      }
-      alienHitTimeoutRef.current = window.setTimeout(() => setAlienHitFlash(false), 180);
     }
     applyJudgement(judgement);
     if (!isHold) {
@@ -1228,6 +1306,83 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     handleLaneInput(lane);
   };
 
+  const setRhythmWizardsMoveInput = (direction: "left" | "right", active: boolean): void => {
+    const next = {
+      ...rhythmWizardsMoveInputRef.current,
+      [direction]: active,
+    };
+    rhythmWizardsMoveInputRef.current = next;
+    setRhythmWizardsMoveButtons(next);
+  };
+
+  const handleRhythmWizardsCast = (targetX: number, targetY: number): void => {
+    if (phase !== "running" || selectedGameMode !== "laser_shoot") return;
+    const currentState = rhythmWizardsRef.current;
+    if (!currentState || currentState.ended || currentState.player.defeated) return;
+    if (currentState.player.cooldownRemainingSeconds > 0) return;
+    if (currentState.player.action === "attack" || currentState.player.action === "stagger" || currentState.player.action === "death") return;
+    const engine = engineRef.current;
+    const heardTimeSeconds = engine ? engine.getCurrentHeardTime() : currentTimeSeconds;
+    const aimId = ++rhythmWizardsFxIdRef.current;
+    setRhythmWizardsAimPoint({ x: targetX, y: targetY, id: aimId });
+    window.setTimeout(() => {
+      setRhythmWizardsAimPoint((previous) => (previous && previous.id === aimId ? null : previous));
+    }, 180);
+    const sync = evaluateBeatSync(
+      heardTimeSeconds,
+      rhythmWizardsBeatTimelineRef.current,
+      windows,
+      rhythmWizardsConfig.beatBonusDamageMultiplier,
+      rhythmWizardsConfig.beatAoeRadius
+    );
+    if (sync.judgement === "perfect" || sync.judgement === "great" || sync.judgement === "good") {
+      applyJudgement(sync.judgement);
+    }
+    const casted = castSpell(currentState, {
+      owner: "player",
+      targetX,
+      targetY,
+      heardTimeSeconds,
+      judgement: sync.judgement,
+      bonusMultiplier: sync.bonusMultiplier,
+      aoeRadius: sync.aoeRadius,
+    });
+    if (casted.events.some((event) => event.type === "player_cast")) {
+      setRhythmWizardsSyncPulseId((value) => value + 1);
+    }
+    if (sync.judgement === "perfect" || sync.judgement === "great" || sync.judgement === "good") {
+      const burstId = ++rhythmWizardsFxIdRef.current;
+      setRhythmWizardsBurst({
+        x: targetX,
+        y: targetY,
+        judgement: sync.judgement as RhythmBonusJudgement,
+        id: burstId,
+      });
+      window.setTimeout(() => {
+        setRhythmWizardsBurst((previous) =>
+          previous && previous.id === burstId ? null : previous
+        );
+      }, 230);
+    }
+    rhythmWizardsRef.current = casted.state;
+    setRhythmWizardsState(casted.state);
+  };
+
+  const handleRhythmWizardsFieldPointerDown = (event: Event): void => {
+    if (selectedGameMode !== "laser_shoot" || phase !== "running") return;
+    const pointerEvent = event as PointerEvent;
+    const element = pointerEvent.currentTarget as HTMLElement | null;
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = Math.max(0, Math.min(1, (pointerEvent.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (pointerEvent.clientY - rect.top) / rect.height));
+    if (y > 0.94) {
+      return;
+    }
+    handleRhythmWizardsCast(x, y);
+  };
+
   useEffect(() => {
     const engine = createPrecisePlaybackEngine();
     engine.setOnEnded(() => {
@@ -1244,8 +1399,6 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
       stopLoop();
       stopCountdown();
       if (judgementTimeoutRef.current !== null) window.clearTimeout(judgementTimeoutRef.current);
-      if (alienHitTimeoutRef.current !== null) window.clearTimeout(alienHitTimeoutRef.current);
-      if (marineFireTimeoutRef.current !== null) window.clearTimeout(marineFireTimeoutRef.current);
       engine.dispose().catch(() => undefined);
       engineRef.current = null;
     };
@@ -1516,6 +1669,17 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (mode !== "play" || phase !== "running" || event.repeat) return;
+      if (selectedGameMode === "laser_shoot") {
+        if (event.key === "ArrowLeft") {
+          setRhythmWizardsMoveInput("left", true);
+          event.preventDefault();
+        }
+        if (event.key === "ArrowRight") {
+          setRhythmWizardsMoveInput("right", true);
+          event.preventDefault();
+        }
+        return;
+      }
       if (selectedGameMode === "orb_beat") {
         if (event.key === "7") { handleLaneInput("l1"); event.preventDefault(); }
         if (event.key === "4") { handleLaneInput("l2"); event.preventDefault(); }
@@ -1531,6 +1695,11 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
       if (event.key === "ArrowRight") { handleLaneInput("right"); event.preventDefault(); }
     };
     const onKeyUp = (event: KeyboardEvent): void => {
+      if (selectedGameMode === "laser_shoot") {
+        if (event.key === "ArrowLeft") setRhythmWizardsMoveInput("left", false);
+        if (event.key === "ArrowRight") setRhythmWizardsMoveInput("right", false);
+        return;
+      }
       if (selectedGameMode === "orb_beat") {
         if (event.key === "7") releaseLane("l1");
         if (event.key === "4") releaseLane("l2");
@@ -1561,6 +1730,14 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     };
   }, [mode, phase, selectedGameMode]);
 
+  useEffect(() => {
+    if (mode === "play" && phase === "running" && selectedGameMode === "laser_shoot") {
+      return;
+    }
+    rhythmWizardsMoveInputRef.current = { left: false, right: false };
+    setRhythmWizardsMoveButtons({ left: false, right: false });
+  }, [mode, phase, selectedGameMode]);
+
   const visibleNotes = useMemo(() => {
     const startWindow = currentTimeSeconds - windows.poor - 0.05;
     const endWindow = currentTimeSeconds + runtimeConfig.gameApproachSeconds + 0.25;
@@ -1568,6 +1745,60 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   }, [chartRevision, currentTimeSeconds, windows.poor]);
 
   const activeLanes = selectedGameMode === "orb_beat" ? orbBeatLaneOrder : stepArrowLaneOrder;
+  const rhythmWizardsPlayerTier = rhythmWizardsState
+    ? getDamageTier(rhythmWizardsState.player.health, rhythmWizardsState.player.maxHealth, rhythmWizardsState.player.defeated)
+    : "healthy";
+  const rhythmWizardsEnemyTier = rhythmWizardsState
+    ? getDamageTier(rhythmWizardsState.enemy.health, rhythmWizardsState.enemy.maxHealth, rhythmWizardsState.enemy.defeated)
+    : "healthy";
+  const rhythmWizardsEnemySprite = rhythmWizardsState
+    ? selectWizardSprite("enemy", rhythmWizardsState.enemy.action)
+    : selectWizardSprite("enemy", "idle");
+  const rhythmWizardsPlayerSprite = rhythmWizardsState
+    ? selectWizardSprite("player", rhythmWizardsState.player.action)
+    : selectWizardSprite("player", "idle");
+  const rhythmWizardsEnemyFrames = Math.max(1, Math.floor(rhythmWizardsEnemySprite.animation?.frames ?? 1));
+  const rhythmWizardsPlayerFrames = Math.max(1, Math.floor(rhythmWizardsPlayerSprite.animation?.frames ?? 1));
+  const rhythmWizardsEnemyAnimClass =
+    rhythmWizardsEnemyFrames > 1
+      ? (rhythmWizardsEnemySprite.animation?.loop ? "anim-loop" : "anim-once")
+      : "";
+  const rhythmWizardsPlayerAnimClass =
+    rhythmWizardsPlayerFrames > 1
+      ? (rhythmWizardsPlayerSprite.animation?.loop ? "anim-loop" : "anim-once")
+      : "";
+  const rhythmWizardsBeatMarkers = useMemo(() => {
+    if (selectedGameMode !== "laser_shoot") return [];
+    const timeline = rhythmWizardsBeatTimelineRef.current;
+    if (timeline.length === 0) return [];
+    const syncX = 0.14;
+    const minX = 0.02;
+    const maxX = 0.98;
+    const lookAheadSeconds = 2.3;
+    const lookBehindSeconds = 0.28;
+    const markers: Array<{ key: string; x: number; opacity: number; scale: number }> = [];
+    for (let index = 0; index < timeline.length; index += 1) {
+      const beatSeconds = timeline[index];
+      const delta = beatSeconds - currentTimeSeconds;
+      if (delta < -lookBehindSeconds) continue;
+      if (delta > lookAheadSeconds) break;
+      let x: number;
+      if (delta >= 0) {
+        x = syncX + (delta / lookAheadSeconds) * (maxX - syncX);
+      } else {
+        x = syncX + (delta / lookBehindSeconds) * (syncX - minX);
+      }
+      const proximity = 1 - Math.min(1, Math.abs(delta) / lookAheadSeconds);
+      markers.push({
+        key: `rw-beat-${beatSeconds.toFixed(3)}-${index}`,
+        x: Math.max(minX, Math.min(maxX, x)),
+        opacity: 0.22 + proximity * 0.78,
+        scale: 0.62 + proximity * 0.52,
+      });
+    }
+    return markers;
+  }, [selectedGameMode, chartRevision, currentTimeSeconds]);
+
   const enableMenuAudio = (): void => {
     previewLog("audio-enable-clicked", { alreadyEnabled: menuAudioEnabled });
     if (menuAudioEnabled) return;
@@ -1678,9 +1909,27 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                       })}
                     </div>
                   </div>
+                  {selectedGameMode === "laser_shoot" ? (
+                    <div className="game-menu-control-group">
+                      <p className="game-menu-group-label">Wizard AI</p>
+                      <div className="game-menu-actions game-menu-actions--group">
+                        {WIZARD_AI_DIFFICULTIES.map((difficulty) => (
+                          <button
+                            key={difficulty}
+                            type="button"
+                            className={selectedWizardAiDifficulty === difficulty ? "" : "secondary"}
+                            onClick={() => setSelectedWizardAiDifficulty(difficulty)}
+                          >
+                            {difficulty}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <p className="small game-menu-meta">
                     {formatGameModeLabel(selectedGameMode)} | {selectedDifficulty} | notes{" "}
                     {selectedSongSummary.modeDifficultyBeatCounts?.[selectedGameMode]?.[selectedDifficulty] ?? 0}
+                    {selectedGameMode === "laser_shoot" ? ` | AI ${selectedWizardAiDifficulty}` : ""}
                   </p>
                 </>
               ) : null}
@@ -1786,7 +2035,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
           selectedGameMode === "orb_beat"
             ? ` orb-field${isLandscape ? " landscape" : " portrait"}`
             : selectedGameMode === "laser_shoot"
-              ? " laser-field"
+              ? " rw-field"
               : ""
         }`}
       >
@@ -1797,7 +2046,10 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
               <div className="game-play-title">
                 {songs.find((song) => song.beatEntryId === selectedId)?.title ?? "Gameplay"}
               </div>
-              <div className="game-play-subtitle">{formatGameModeLabel(selectedGameMode)} | {selectedDifficulty}</div>
+              <div className="game-play-subtitle">
+                {formatGameModeLabel(selectedGameMode)} | {selectedDifficulty}
+                {selectedGameMode === "laser_shoot" ? ` | AI ${selectedWizardAiDifficulty}` : ""}
+              </div>
             </div>
             <div className="game-top-status">
               {phase === "finished"
@@ -1809,69 +2061,187 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                   : ""}
             </div>
           </div>
-          <div className="game-play-hud">
-            <div className="ddr-life"><span>LIFE</span><div className="ddr-life-bar"><div className="ddr-life-fill" style={{ width: `${lifePercent}%` }} /></div></div>
-            <div className="ddr-score-stack"><span className="ddr-score-label">SCORE</span><strong className="game-score-number">{totalScore}</strong></div>
-            <div className="ddr-score-stack"><span className="ddr-score-label">COMBO</span><strong className="game-score-number">{score.combo}</strong></div>
+          <div className={`game-play-hud${selectedGameMode === "laser_shoot" ? " rw-hud" : ""}`}>
+            {selectedGameMode === "laser_shoot" ? (
+              <>
+                <div className="ddr-life">
+                  <span>PLAYER HP</span>
+                  <div className="ddr-life-bar">
+                    <div className="ddr-life-fill" style={{ width: `${rhythmWizardsPlayerHealthPercent}%` }} />
+                  </div>
+                </div>
+                <div className="ddr-life">
+                  <span>ENEMY HP</span>
+                  <div className="ddr-life-bar">
+                    <div className="ddr-life-fill enemy-hp" style={{ width: `${rhythmWizardsEnemyHealthPercent}%` }} />
+                  </div>
+                </div>
+                <div className="rw-beat-stream" aria-hidden="true">
+                  <div className="rw-beat-track">
+                    <span
+                      key={`rw-sync-line-${rhythmWizardsSyncPulseId}`}
+                      className={`rw-beat-sync-line${rhythmWizardsSyncPulseId > 0 ? " pulse" : ""}`}
+                    />
+                    {rhythmWizardsBeatMarkers.map((marker) => (
+                      <span
+                        key={marker.key}
+                        className="rw-beat-dot"
+                        style={{
+                          left: `${marker.x * 100}%`,
+                          opacity: marker.opacity,
+                          transform: `translate(-50%, -50%) scale(${marker.scale})`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="ddr-life"><span>LIFE</span><div className="ddr-life-bar"><div className="ddr-life-fill" style={{ width: `${lifePercent}%` }} /></div></div>
+                <div className="ddr-score-stack"><span className="ddr-score-label">SCORE</span><strong className="game-score-number">{totalScore}</strong></div>
+                <div className="ddr-score-stack"><span className="ddr-score-label">COMBO</span><strong className="game-score-number">{score.combo}</strong></div>
+              </>
+            )}
           </div>
         </div>
 
         <div className="game-play-stage">
           {selectedGameMode === "laser_shoot" ? (
             <>
-              <div className="laser-stars" />
-              <div className={`laser-alien-wrap${alienHealth <= 0 ? " defeated" : ""}${alienHitFlash ? " hit-flash" : ""}`}>
-                <img src="/game-graphics/laser-shoot/alien.svg" alt="Alien target" className="laser-alien-sprite" draggable={false} />
-                <div className="laser-alien-hp">
-                  <div className="laser-alien-hp-fill" style={{ width: `${alienHealth}%` }} />
-                </div>
-              </div>
-              <div className="laser-lanes">
-                {stepArrowLaneOrder.map((lane) => (
-                  <div key={lane} className={`laser-lane lane-${lane}`}>
-                    {visibleNotes.filter((note) => note.lane === lane).map((note) => {
-                      const timeUntilHit = note.timeSeconds - currentTimeSeconds;
-                      const progress = 1 - timeUntilHit / Math.max(0.05, runtimeConfig.gameApproachSeconds);
-                      const topPercent = -6 + progress * 86;
-                      const isHold = note.type === "hold" && note.endSeconds - note.timeSeconds >= HOLD_MIN_SECONDS;
-                      return (
-                        <div
-                          key={note.id}
-                          className={`laser-note lane-${note.lane}${note.judged ? " judged" : ""}${isHold ? " hold-note" : ""}`}
-                          style={{ top: `${topPercent}%` }}
-                        >
-                          <img src={laserTargetImages[note.lane as StepArrowLane]} alt="" draggable={false} />
-                        </div>
-                      );
-                    })}
+              <div className="rw-battlefield" onPointerDown={handleRhythmWizardsFieldPointerDown}>
+                <img src={rhythmWizardsAssets.battlefield.src} alt="" className="rw-battlefield-bg" draggable={false} />
+                {rhythmWizardsState?.obstacles.map((obstacle, index) => {
+                  const tier = getDamageTier(obstacle.health, obstacle.maxHealth, obstacle.destroyed);
+                  const sprite = selectObstacleSprite(index, tier);
+                  return (
+                    <div
+                      key={obstacle.id}
+                      className={`rw-obstacle tier-${tier}${obstacle.hitFlashRemainingSeconds > 0 ? " hit-flash" : ""}`}
+                      style={{
+                        left: `${obstacle.x * 100}%`,
+                        top: `${obstacle.y * 100}%`,
+                        width: `${obstacle.width * 100}%`,
+                        height: `${obstacle.height * 100}%`,
+                      }}
+                    >
+                      <img src={sprite.src} alt="" draggable={false} />
+                    </div>
+                  );
+                })}
+
+                {rhythmWizardsState?.projectiles.map((projectile) => (
+                  <div
+                    key={projectile.id}
+                    className={`rw-projectile ${projectile.owner === "player" ? "owner-player" : "owner-enemy"} judgement-${projectile.beatJudgement}`}
+                    style={{
+                      left: `${projectile.x * 100}%`,
+                      top: `${projectile.y * 100}%`,
+                    }}
+                  >
+                    <span className="rw-projectile-tail" />
+                    <span className="rw-projectile-core" />
                   </div>
                 ))}
-              </div>
-              {laserShotFx ? (
-                <div key={`laser-shot-${laserShotFx.id}`} className={`laser-beam lane-${laserShotFx.lane} ${laserShotFx.hit ? "hit" : "miss"}`}>
-                  <span className="laser-beam-core" />
-                </div>
-              ) : null}
-              <div className={`laser-marine${marineFiring ? " firing" : ""}`}>
-                <img src="/game-graphics/laser-shoot/marine.svg" alt="Space marine" className="laser-marine-sprite" draggable={false} />
-              </div>
-              <div className="laser-controls">
-                {stepArrowLaneOrder.map((lane) => (
-                  <button
-                    key={lane}
-                    type="button"
-                    disabled={phase !== "running"}
-                    className={`laser-control lane-${lane}${pressedLanes[lane] ? " pressed" : ""}${heldLanes[lane] ? " held" : ""}`}
-                    onMouseDown={() => handleLaneMouseDown(lane)}
-                    onMouseUp={() => releaseLane(lane)}
-                    onMouseLeave={() => releaseLane(lane)}
-                    onTouchStart={(event) => handleLaneTouchStart(event, lane)}
-                    onTouchEnd={() => releaseLane(lane)}
-                    onTouchCancel={() => releaseLane(lane)}
+
+                {rhythmWizardsAimPoint ? (
+                  <div
+                    key={`rw-aim-${rhythmWizardsAimPoint.id}`}
+                    className="rw-aim-point"
+                    style={{ left: `${rhythmWizardsAimPoint.x * 100}%`, top: `${rhythmWizardsAimPoint.y * 100}%` }}
+                  />
+                ) : null}
+
+                {rhythmWizardsBurst ? (
+                  <div
+                    key={`rw-burst-${rhythmWizardsBurst.id}`}
+                    className={`rw-burst judgement-${rhythmWizardsBurst.judgement}`}
+                    style={{ left: `${rhythmWizardsBurst.x * 100}%`, top: `${rhythmWizardsBurst.y * 100}%` }}
                   >
-                    <img src={laserControlImages[lane]} alt="" draggable={false} />
+                    <span>{rhythmWizardsBurst.judgement.toUpperCase()}</span>
+                  </div>
+                ) : null}
+                {rhythmWizardsImpact ? (
+                  <div
+                    key={`rw-impact-${rhythmWizardsImpact.id}`}
+                    className={`rw-impact ${rhythmWizardsImpact.kind}`}
+                    style={{ left: `${rhythmWizardsImpact.x * 100}%`, top: `${rhythmWizardsImpact.y * 100}%` }}
+                  />
+                ) : null}
+
+                <div className={`rw-wizard rw-wizard-enemy tier-${rhythmWizardsEnemyTier}${rhythmWizardsState?.enemy.hitFlashRemainingSeconds ? " hit-flash" : ""}${rhythmWizardsState?.enemy.defeated ? " defeated" : ""}`}
+                  style={{
+                    left: `${(rhythmWizardsState?.enemy.x ?? 0.5) * 100}%`,
+                    top: `${(rhythmWizardsState?.enemy.y ?? 0.12) * 100}%`,
+                  }}
+                >
+                  <div
+                    key={`enemy-sprite-${rhythmWizardsState?.enemy.actionToken ?? 0}`}
+                    className={`rw-sprite frames-${rhythmWizardsEnemyFrames} ${rhythmWizardsEnemyAnimClass}`.trim()}
+                    style={spriteStyle(
+                      rhythmWizardsEnemySprite.src,
+                      rhythmWizardsEnemySprite.animation?.frames,
+                      rhythmWizardsEnemySprite.animation?.frameDurationMs
+                    )}
+                  />
+                  <div className="rw-health">
+                    <div
+                      className="rw-health-fill enemy"
+                      style={{
+                        width: `${Math.max(0, Math.min(100, ((rhythmWizardsState?.enemy.health ?? 0) / Math.max(1, rhythmWizardsState?.enemy.maxHealth ?? 100)) * 100))}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className={`rw-wizard rw-wizard-player tier-${rhythmWizardsPlayerTier}${rhythmWizardsState?.player.hitFlashRemainingSeconds ? " hit-flash" : ""}${rhythmWizardsState?.player.defeated ? " defeated" : ""}`}
+                  style={{
+                    left: `${(rhythmWizardsState?.player.x ?? 0.5) * 100}%`,
+                    top: `${(rhythmWizardsState?.player.y ?? 0.9) * 100}%`,
+                  }}
+                >
+                  <div
+                    key={`player-sprite-${rhythmWizardsState?.player.actionToken ?? 0}`}
+                    className={`rw-sprite frames-${rhythmWizardsPlayerFrames} ${rhythmWizardsPlayerAnimClass}`.trim()}
+                    style={spriteStyle(
+                      rhythmWizardsPlayerSprite.src,
+                      rhythmWizardsPlayerSprite.animation?.frames,
+                      rhythmWizardsPlayerSprite.animation?.frameDurationMs
+                    )}
+                  />
+                  <div className="rw-health">
+                    <div className="rw-health-fill player" style={{ width: `${rhythmWizardsPlayerHealthPercent}%` }} />
+                  </div>
+                </div>
+
+                <div className="rw-controls">
+                  <button
+                    type="button"
+                    className={`rw-move-button${rhythmWizardsMoveButtons.left ? " held" : ""}`}
+                    disabled={phase !== "running"}
+                    onMouseDown={() => setRhythmWizardsMoveInput("left", true)}
+                    onMouseUp={() => setRhythmWizardsMoveInput("left", false)}
+                    onMouseLeave={() => setRhythmWizardsMoveInput("left", false)}
+                    onTouchStart={() => setRhythmWizardsMoveInput("left", true)}
+                    onTouchEnd={() => setRhythmWizardsMoveInput("left", false)}
+                    onTouchCancel={() => setRhythmWizardsMoveInput("left", false)}
+                  >
+                    <img src={rhythmWizardsAssets.controls.left.src} alt="Move left" draggable={false} />
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    className={`rw-move-button${rhythmWizardsMoveButtons.right ? " held" : ""}`}
+                    disabled={phase !== "running"}
+                    onMouseDown={() => setRhythmWizardsMoveInput("right", true)}
+                    onMouseUp={() => setRhythmWizardsMoveInput("right", false)}
+                    onMouseLeave={() => setRhythmWizardsMoveInput("right", false)}
+                    onTouchStart={() => setRhythmWizardsMoveInput("right", true)}
+                    onTouchEnd={() => setRhythmWizardsMoveInput("right", false)}
+                    onTouchCancel={() => setRhythmWizardsMoveInput("right", false)}
+                  >
+                    <img src={rhythmWizardsAssets.controls.right.src} alt="Move right" draggable={false} />
+                  </button>
+                </div>
               </div>
             </>
           ) : selectedGameMode === "orb_beat" ? (
@@ -1971,12 +2341,12 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
             </>
           )}
 
-          {lastJudgement ? (
+          {lastJudgement && selectedGameMode !== "laser_shoot" ? (
             <div key={`${lastJudgement}-${judgementEventId}`} className={`ddr-judge-popup ${lastJudgement}`}>
               {lastJudgement.toUpperCase()}
             </div>
           ) : null}
-          {score.combo > 1 ? <div className="ddr-combo-popup"><span className="game-score-number">{score.combo}</span> COMBO</div> : null}
+          {selectedGameMode !== "laser_shoot" && score.combo > 1 ? <div className="ddr-combo-popup"><span className="game-score-number">{score.combo}</span> COMBO</div> : null}
           {phase === "countdown" && countdownBeats > 0 ? <div className="game-countdown-overlay">{countdownBeats}</div> : null}
           {phase === "running" || phase === "finished" ? (
             <LyricsSubtitle
