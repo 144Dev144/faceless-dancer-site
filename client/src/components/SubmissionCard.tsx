@@ -2,11 +2,33 @@ import { useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { ScheduleSlotPicker } from "./ScheduleSlotPicker";
 
-interface Props {
-  enabled: boolean;
+interface ScheduleSelection {
+  startIso: string;
+  endIso: string;
+  hasPendingConflict: boolean;
 }
 
-export function SubmissionCard({ enabled }: Props) {
+interface Props {
+  enabled: boolean;
+  selectedStart?: string;
+  selectedEnd?: string;
+  hasPendingConflict?: boolean;
+  onScheduleSelect?: (selection: ScheduleSelection) => void;
+  scheduleRefreshKey?: number;
+  hideSchedulePicker?: boolean;
+  onSubmissionCreated?: () => void;
+}
+
+export function SubmissionCard({
+  enabled,
+  selectedStart,
+  selectedEnd,
+  hasPendingConflict,
+  onScheduleSelect,
+  scheduleRefreshKey,
+  hideSchedulePicker = false,
+  onSubmissionCreated,
+}: Props) {
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [desiredStart, setDesiredStart] = useState("");
@@ -17,13 +39,40 @@ export function SubmissionCard({ enabled }: Props) {
   const [pendingWarning, setPendingWarning] = useState(false);
   const [submissionStatus, setSubmissionStatus] = useState("Idle");
   const [uploadStatus, setUploadStatus] = useState("Idle");
-  const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
+  const [localScheduleRefreshKey, setLocalScheduleRefreshKey] = useState(0);
   const [uploadedAssets, setUploadedAssets] = useState<Array<{ assetId: string; assetType: string; fileName: string; publicUrl: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileAccept = assetType === "music" ? ".mp3,audio/mpeg" : ".png,image/png";
 
+  const activeStart = selectedStart ?? desiredStart;
+  const activeEnd = selectedEnd ?? desiredEnd;
+  const activePendingWarning = hasPendingConflict ?? pendingWarning;
+  const activeScheduleRefreshKey = scheduleRefreshKey ?? localScheduleRefreshKey;
+
+  const handleScheduleSelect = (selection: ScheduleSelection) => {
+    if (onScheduleSelect) {
+      onScheduleSelect(selection);
+      return;
+    }
+
+    setDesiredStart(selection.startIso);
+    setDesiredEnd(selection.endIso);
+    setPendingWarning(selection.hasPendingConflict);
+  };
+
+  const resetScheduleSelection = () => {
+    if (onScheduleSelect) {
+      onScheduleSelect({ startIso: "", endIso: "", hasPendingConflict: false });
+      return;
+    }
+
+    setDesiredStart("");
+    setDesiredEnd("");
+    setPendingWarning(false);
+  };
+
   const submitRequest = async () => {
-    if (!desiredStart || !desiredEnd) {
+    if (!activeStart || !activeEnd) {
       throw new Error("Choose both desired start and desired end");
     }
 
@@ -31,20 +80,19 @@ export function SubmissionCard({ enabled }: Props) {
     const created = await api.createSubmission({
       title,
       notes,
-      desiredStart: new Date(desiredStart).toISOString(),
-      desiredEnd: new Date(desiredEnd).toISOString(),
+      desiredStart: new Date(activeStart).toISOString(),
+      desiredEnd: new Date(activeEnd).toISOString(),
     });
     setSubmissionId(created.submissionId);
     setSubmissionStatus(`Submission created: ${created.submissionId}`);
     setSubmissionId("");
     setTitle("");
     setNotes("");
-    setDesiredStart("");
-    setDesiredEnd("");
-    setPendingWarning(false);
-    setScheduleRefreshKey((value) => value + 1);
+    resetScheduleSelection();
     setUploadedAssets([]);
     setUploadStatus("Idle");
+    setLocalScheduleRefreshKey((value) => value + 1);
+    onSubmissionCreated?.();
   };
 
   const uploadAsset = async () => {
@@ -86,7 +134,7 @@ export function SubmissionCard({ enabled }: Props) {
       <div className="row">
         <label>
           Asset Type
-          <select value={assetType} onInput={(e) => setAssetType((e.target as HTMLSelectElement).value)} disabled={!enabled}>
+          <select value={assetType} onInput={(event) => setAssetType((event.target as HTMLSelectElement).value)} disabled={!enabled}>
             <option value="background">Background</option>
             <option value="head">Head</option>
             <option value="torso">Torso</option>
@@ -95,7 +143,7 @@ export function SubmissionCard({ enabled }: Props) {
         </label>
         <label>
           File
-          <input ref={fileInputRef} type="file" accept={fileAccept} onInput={(e) => setFile((e.target as HTMLInputElement).files?.[0] ?? null)} disabled={!enabled} />
+          <input ref={fileInputRef} type="file" accept={fileAccept} onInput={(event) => setFile((event.target as HTMLInputElement).files?.[0] ?? null)} disabled={!enabled} />
         </label>
       </div>
 
@@ -120,23 +168,21 @@ export function SubmissionCard({ enabled }: Props) {
       <div className="row">
         <label>
           Title
-          <input value={title} onInput={(e) => setTitle((e.target as HTMLInputElement).value)} disabled={!enabled} />
+          <input value={title} onInput={(event) => setTitle((event.target as HTMLInputElement).value)} disabled={!enabled} />
         </label>
       </div>
 
-      <ScheduleSlotPicker
-        enabled={enabled}
-        selectedStart={desiredStart}
-        selectedEnd={desiredEnd}
-        refreshKey={scheduleRefreshKey}
-        onSelect={({ startIso, endIso, hasPendingConflict }) => {
-          setDesiredStart(startIso);
-          setDesiredEnd(endIso);
-          setPendingWarning(hasPendingConflict);
-        }}
-      />
+      {!hideSchedulePicker ? (
+        <ScheduleSlotPicker
+          enabled={enabled}
+          selectedStart={activeStart}
+          selectedEnd={activeEnd}
+          refreshKey={activeScheduleRefreshKey}
+          onSelect={handleScheduleSelect}
+        />
+      ) : null}
 
-      {pendingWarning ? (
+      {activePendingWarning ? (
         <p className="small">
           Warning: this slot already has a pending request. It is still selectable, but
           pending requests are first come first serve and may be accepted before yours.
@@ -145,7 +191,7 @@ export function SubmissionCard({ enabled }: Props) {
 
       <label>
         Notes
-        <textarea value={notes} onInput={(e) => setNotes((e.target as HTMLTextAreaElement).value)} disabled={!enabled} />
+        <textarea value={notes} onInput={(event) => setNotes((event.target as HTMLTextAreaElement).value)} disabled={!enabled} />
       </label>
 
       <button type="button" disabled={!enabled} onClick={() => submitRequest().catch((error) => setSubmissionStatus(error.message))}>

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
-import { WalletAuthCard } from "../components/WalletAuthCard";
-import { SubmissionCard } from "../components/SubmissionCard";
-import { AdminConsoleCard } from "../components/AdminConsoleCard";
-import { MySubmissionsCard } from "../components/MySubmissionsCard";
 import { HeroSection } from "../components/HeroSection";
-import { OverviewSection } from "../components/OverviewSection";
+import { HomeTopNav } from "../components/home/HomeTopNav";
+import { PlatformVisionSection } from "../components/home/PlatformVisionSection";
+import { ApplicationsSection } from "../components/home/ApplicationsSection";
+import { RoadmapSection } from "../components/home/RoadmapSection";
+import { WhyMattersSection } from "../components/home/WhyMattersSection";
+import { HolderToolsSection } from "../components/home/HolderToolsSection";
+import { HomeFooter } from "../components/home/HomeFooter";
 import { api, type SiteSettings } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
 
@@ -46,64 +48,22 @@ export function HomePage({ session, setSession, refreshSession }: Props): JSX.El
   }, []);
 
   return (
-    <main>
-      <div className="page-shell">
+    <main className="home-v2">
+      <div className="home-v2-shell">
+        <HomeTopNav />
         <HeroSection settings={siteSettings} />
-        <OverviewSection />
-
-        <section className="tools-section">
-          <div className="section-heading">
-            <p className="section-kicker">Holder Tools</p>
-            <h2 className="section-title">Utility and submission workflow</h2>
-            <p className="section-copy">
-              This lower section contains the existing wallet verification, submission,
-              and admin tooling.
-            </p>
-          </div>
-
-          <div className="page">
-            <section className="card">
-              <h1>The Faceless Dancer</h1>
-              <p>
-                Solana holder-gated requests for stream scheduling and asset submissions.
-              </p>
-              {session.authenticated ? (
-                <div>
-                  <span className="badge ok">Authenticated</span>{" "}
-                  {session.isHolder ? <span className="badge ok">Verified Holder</span> : <span className="badge warn">Not a Holder</span>}{" "}
-                  {session.isAdmin ? <span className="badge ok">Admin</span> : null}
-                  <p className="small">Wallet: {session.publicKey}</p>
-                  <div className="row">
-                    <button type="button" className="secondary" onClick={() => refreshSession().catch(() => null)}>Refresh Session</button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => api.logout().then(() => setSession({ loading: false, authenticated: false, publicKey: "", isHolder: false, isAdmin: false }))}
-                    >
-                      Logout
-                    </button>
-                    {session.isAdmin ? (
-                      <a className="ghost-link" href="/admin/game">Open Game Builder</a>
-                    ) : null}
-                  </div>
-                </div>
-              ) : (
-                <span className="badge warn">Not Authenticated</span>
-              )}
-            </section>
-
-            <WalletAuthCard onVerified={(next) => setSession({ loading: false, ...next })} />
-            <MySubmissionsCard enabled={session.authenticated} />
-            <SubmissionCard enabled={session.authenticated && session.isHolder} />
-            {session.authenticated && session.isAdmin ? (
-              <AdminConsoleCard
-                enabled
-                settings={siteSettings}
-                onSettingsSaved={setSiteSettings}
-              />
-            ) : null}
-          </div>
-        </section>
+        <PlatformVisionSection />
+        <ApplicationsSection />
+        <RoadmapSection />
+        <WhyMattersSection />
+        <HolderToolsSection
+          session={session}
+          setSession={setSession}
+          refreshSession={refreshSession}
+          siteSettings={siteSettings}
+          onSiteSettingsSaved={setSiteSettings}
+        />
+        <HomeFooter />
       </div>
     </main>
   );
