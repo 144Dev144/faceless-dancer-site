@@ -1,10 +1,4 @@
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: faceless-dancer-redis
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--port", "${REDIS_PORT:-6379}"]
-    restart: unless-stopped
-
   postgres:
     image: postgres:16-alpine
     container_name: faceless-dancer-postgres
@@ -50,8 +44,6 @@ services:
     depends_on:
       postgres:
         condition: service_started
-      redis:
-        condition: service_started
       separation-worker:
         condition: service_started
     env_file:
@@ -60,7 +52,8 @@ services:
       PORT: "${PORT:-3001}"
       DATABASE_URL: "${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@postgres:${POSTGRES_PORT:-5432}/faceless_dancer}"
       BEAT_SEPARATION_WORKER_URL: "http://separation-worker:${SEPARATION_WORKER_PORT:-8792}"
-      DANCEOFF_REDIS_URL: "${DANCEOFF_REDIS_URL:-redis://redis:${REDIS_PORT:-6379}}"
+      DANCEOFF_REDIS_ENABLED: "${DANCEOFF_REDIS_ENABLED:-false}"
+      DANCEOFF_REDIS_URL: "${DANCEOFF_REDIS_URL:-}"
       DANCEOFF_REDIS_USERNAME: "${DANCEOFF_REDIS_USERNAME:-}"
       DANCEOFF_REDIS_PASSWORD: "${DANCEOFF_REDIS_PASSWORD:-}"
       DANCEOFF_REDIS_TLS: "${DANCEOFF_REDIS_TLS:-false}"

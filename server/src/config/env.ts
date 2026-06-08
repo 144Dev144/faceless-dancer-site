@@ -67,6 +67,7 @@ const envSchema = z.object({
   DANCEOFF_REDIS_USERNAME: z.string().default(""),
   DANCEOFF_REDIS_PASSWORD: z.string().default(""),
   DANCEOFF_REDIS_TLS: z.enum(["true", "false"]).default("false"),
+  DANCEOFF_REDIS_ENABLED: z.enum(["true", "false"]).default("false"),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -98,4 +99,5 @@ export const env = {
   runMigrationsOnStart: data.RUN_MIGRATIONS_ON_START === "true",
   databaseSslRejectUnauthorized: data.DATABASE_SSL_REJECT_UNAUTHORIZED === "true",
   danceOffRedisTls: data.DANCEOFF_REDIS_TLS === "true",
+  danceOffRedisEnabled: data.DANCEOFF_REDIS_ENABLED === "true",
 };

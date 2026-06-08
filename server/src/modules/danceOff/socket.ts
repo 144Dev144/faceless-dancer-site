@@ -75,6 +75,11 @@ function countdownRemainingSeconds(countdownStartedAtIso: string | null): number
 }
 
 async function configureRedisAdapter(io: Server): Promise<void> {
+  if (!env.danceOffRedisEnabled) {
+    console.log("[danceoff] Redis adapter disabled (single-server mode).");
+    return;
+  }
+
   const redisUrl = sanitizeRedisUrl(env.DANCEOFF_REDIS_URL);
   if (!redisUrl) {
     console.log("[danceoff] Redis adapter disabled (DANCEOFF_REDIS_URL is empty).");
