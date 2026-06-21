@@ -22,6 +22,7 @@ const defaultSiteSettings: SiteSettings = {
   dexscreenerUrl: "",
   showDexscreener: true,
   pumpFunUrl: "",
+  autotransitionGithubUrl: "",
   tokenAddress: "",
 };
 
@@ -43,7 +44,7 @@ export function HomePage({ session, setSession, refreshSession }: Props): JSX.El
 
   useEffect(() => {
     api.siteSettings()
-      .then((settings) => setSiteSettings(settings))
+      .then((settings) => setSiteSettings({ ...defaultSiteSettings, ...settings }))
       .catch(() => null);
   }, []);
 

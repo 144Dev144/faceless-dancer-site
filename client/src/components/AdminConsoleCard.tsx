@@ -146,7 +146,7 @@ export function AdminConsoleCard({ enabled, settings, onSettingsSaved }: Props) 
             </label>
             <label>
               Autotransition GitHub URL
-              <input value={siteSettings.autotransitionGithubUrl} onInput={(e) => setSiteSettings((prev) => ({ ...prev, autotransitionGithubUrl: (e.target as HTMLInputElement).value }))} />
+              <input value={siteSettings.autotransitionGithubUrl ?? ""} onInput={(e) => setSiteSettings((prev) => ({ ...prev, autotransitionGithubUrl: (e.target as HTMLInputElement).value }))} />
             </label>
             <label>
               Token Address

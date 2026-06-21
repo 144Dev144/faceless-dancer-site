@@ -7,7 +7,7 @@ interface Props {
 
 export function HeroSection({ settings }: Props): JSX.Element {
   const tokenAddressLabel = settings.tokenAddress || "Soon";
-  const channelId = settings.youtubeLiveChannelId.trim();
+  const channelId = (settings.youtubeLiveChannelId ?? "").trim();
   const liveEmbedUrl = settings.showYoutubeEmbed && channelId
     ? `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(channelId)}&autoplay=1&mute=1`
     : "";
@@ -20,7 +20,7 @@ export function HeroSection({ settings }: Props): JSX.Element {
   ].filter((link) => link.visible && link.href);
 
   const tokenViewLink = settings.dexscreenerUrl || settings.pumpFunUrl;
-  const autotransitionGithubUrl = settings.autotransitionGithubUrl.trim();
+  const autotransitionGithubUrl = (settings.autotransitionGithubUrl ?? "").trim();
 
   return (
     <section className="home-v2-hero">
