@@ -12,6 +12,7 @@ export interface SiteSettings {
   dexscreenerUrl: string;
   showDexscreener: boolean;
   pumpFunUrl: string;
+  autotransitionGithubUrl: string;
   tokenAddress: string;
 }
 

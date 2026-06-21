@@ -14,5 +14,6 @@ export const siteSettingsSchema = z.object({
   dexscreenerUrl: optionalUrlSchema.default(""),
   showDexscreener: z.boolean().default(true),
   pumpFunUrl: optionalUrlSchema.default(""),
+  autotransitionGithubUrl: optionalUrlSchema.default(""),
   tokenAddress: z.union([z.string().min(32), z.literal("")]).default(""),
 });

@@ -145,6 +145,10 @@ export function AdminConsoleCard({ enabled, settings, onSettingsSaved }: Props) 
               <input value={siteSettings.pumpFunUrl} onInput={(e) => setSiteSettings((prev) => ({ ...prev, pumpFunUrl: (e.target as HTMLInputElement).value }))} />
             </label>
             <label>
+              Autotransition GitHub URL
+              <input value={siteSettings.autotransitionGithubUrl} onInput={(e) => setSiteSettings((prev) => ({ ...prev, autotransitionGithubUrl: (e.target as HTMLInputElement).value }))} />
+            </label>
+            <label>
               Token Address
               <input value={siteSettings.tokenAddress} onInput={(e) => setSiteSettings((prev) => ({ ...prev, tokenAddress: (e.target as HTMLInputElement).value }))} />
             </label>

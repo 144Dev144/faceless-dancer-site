@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS site_settings (
   dexscreener_url TEXT,
   show_dexscreener INTEGER NOT NULL DEFAULT 1,
   pump_fun_url TEXT,
+  autotransition_github_url TEXT,
   token_address TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -182,4 +183,3 @@ VALUES (
   }'
 )
 ON CONFLICT (id) DO NOTHING;
-

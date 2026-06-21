@@ -14,12 +14,13 @@ interface SiteSettingsRow {
   dexscreener_url: string | null;
   show_dexscreener: number;
   pump_fun_url: string | null;
+  autotransition_github_url: string | null;
   token_address: string | null;
 }
 
 async function readRow() {
   const result = await pool.query<SiteSettingsRow>(
-    `SELECT twitter_url, show_twitter, youtube_url, show_youtube, show_youtube_embed, youtube_live_channel_id, telegram_url, show_telegram, dexscreener_url, show_dexscreener, pump_fun_url, token_address
+    `SELECT twitter_url, show_twitter, youtube_url, show_youtube, show_youtube_embed, youtube_live_channel_id, telegram_url, show_telegram, dexscreener_url, show_dexscreener, pump_fun_url, autotransition_github_url, token_address
      FROM site_settings
      WHERE id = 1
      LIMIT 1`
@@ -42,6 +43,7 @@ export async function getSiteSettings(): Promise<SiteSettings> {
     dexscreenerUrl: row?.dexscreener_url ?? env.SITE_DEXSCREENER_URL,
     showDexscreener: row ? row.show_dexscreener === 1 : env.siteShowDexscreener,
     pumpFunUrl: row?.pump_fun_url ?? env.PUMP_FUN_URL,
+    autotransitionGithubUrl: row?.autotransition_github_url ?? env.SITE_AUTOTRANSITION_GITHUB_URL,
     tokenAddress: row?.token_address ?? "",
   };
 }
@@ -61,9 +63,10 @@ export async function saveSiteSettings(settings: SiteSettings): Promise<SiteSett
       dexscreener_url,
       show_dexscreener,
       pump_fun_url,
+      autotransition_github_url,
       token_address,
       updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
     ON CONFLICT(id) DO UPDATE SET
       twitter_url = excluded.twitter_url,
       show_twitter = excluded.show_twitter,
@@ -76,6 +79,7 @@ export async function saveSiteSettings(settings: SiteSettings): Promise<SiteSett
       dexscreener_url = excluded.dexscreener_url,
       show_dexscreener = excluded.show_dexscreener,
       pump_fun_url = excluded.pump_fun_url,
+      autotransition_github_url = excluded.autotransition_github_url,
       token_address = excluded.token_address,
       updated_at = now()`,
     [
@@ -91,6 +95,7 @@ export async function saveSiteSettings(settings: SiteSettings): Promise<SiteSett
       settings.dexscreenerUrl || null,
       settings.showDexscreener ? 1 : 0,
       settings.pumpFunUrl || null,
+      settings.autotransitionGithubUrl || null,
       settings.tokenAddress || null,
     ]
   );

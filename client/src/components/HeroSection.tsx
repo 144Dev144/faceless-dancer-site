@@ -20,6 +20,7 @@ export function HeroSection({ settings }: Props): JSX.Element {
   ].filter((link) => link.visible && link.href);
 
   const tokenViewLink = settings.dexscreenerUrl || settings.pumpFunUrl;
+  const autotransitionGithubUrl = settings.autotransitionGithubUrl.trim();
 
   return (
     <section className="home-v2-hero">
@@ -34,7 +35,16 @@ export function HeroSection({ settings }: Props): JSX.Element {
         <div className="home-v2-hero__actions">
           <a className="home-v2-btn home-v2-btn--primary" href="/game">Play The Game</a>
           <a className="home-v2-btn home-v2-btn--secondary" href="/playground">Faceless Playground</a>
-          <a className="home-v2-btn home-v2-btn--ghost" href="#how-it-works">Explore The Platform</a>
+          {autotransitionGithubUrl ? (
+            <a
+              className="home-v2-btn home-v2-btn--ghost"
+              href={autotransitionGithubUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Autotransition - Github
+            </a>
+          ) : null}
         </div>
 
         <div className="home-v2-social-row">

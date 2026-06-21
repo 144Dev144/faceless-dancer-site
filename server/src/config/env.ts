@@ -48,6 +48,7 @@ const envSchema = z.object({
   SITE_DEXSCREENER_URL: optionalUrlSchema,
   SITE_SHOW_DEXSCREENER: z.enum(["true", "false"]).default("true"),
   PUMP_FUN_URL: optionalUrlSchema,
+  SITE_AUTOTRANSITION_GITHUB_URL: optionalUrlSchema,
 
   ADMIN_WALLETS: z.string().default(""),
   MAX_UPLOAD_SIZE_MB: z.coerce.number().positive().default(20),
