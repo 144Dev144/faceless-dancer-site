@@ -8,6 +8,7 @@ import { adminRouter } from "./modules/admin/routes.js";
 import { scheduleRouter } from "./modules/schedule/routes.js";
 import { siteSettingsRouter } from "./modules/siteSettings/routes.js";
 import { gameRouter } from "./modules/game/routes.js";
+import { libraryRouter } from "./modules/library/routes.js";
 
 export const app = express();
 
@@ -25,6 +26,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/schedule", scheduleRouter);
 app.use("/api/site-settings", siteSettingsRouter);
 app.use("/api/game", gameRouter);
+app.use("/api/library", libraryRouter);
 
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(err);
