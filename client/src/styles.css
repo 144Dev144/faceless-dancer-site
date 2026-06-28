@@ -4602,18 +4602,18 @@ label {
 
 .dance-station-instrument-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(360px, 1.6fr) minmax(220px, 0.8fr);
-  gap: 14px;
+  grid-template-columns: minmax(240px, 0.42fr) minmax(520px, 1fr) minmax(240px, 0.38fr);
+  gap: 12px;
   align-items: start;
 }
 
 .dance-station-inner-panel {
   display: grid;
   gap: 12px;
-  padding: 16px;
-  border: 1px solid rgba(117, 162, 212, 0.18);
-  border-radius: 14px;
-  background: rgba(5, 13, 26, 0.42);
+  padding: 14px;
+  border: 1px solid rgba(91, 104, 124, 0.46);
+  border-radius: 8px;
+  background: #111317;
 }
 
 .dance-station-inner-panel label,
@@ -4621,21 +4621,21 @@ label {
   display: grid;
   gap: 7px;
   color: #9fb4d2;
-  font-size: 0.82rem;
+  font-size: 0.75rem;
   font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 
 .dance-station-inner-panel input,
 .dance-station-inner-panel select,
 .dance-station-control-row input {
   width: 100%;
-  border: 1px solid rgba(117, 162, 212, 0.22);
-  border-radius: 12px;
-  background: rgba(3, 9, 18, 0.72);
+  border: 1px solid rgba(91, 104, 124, 0.55);
+  border-radius: 6px;
+  background: #0b0d11;
   color: #eaf4ff;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .dance-station-editor-preview {
@@ -4679,67 +4679,82 @@ label {
   min-height: 32px;
   padding: 6px 10px;
   border: 1px solid rgba(98, 247, 216, 0.28);
-  border-radius: 999px;
+  border-radius: 6px;
   color: #8ff6e9;
   background: rgba(98, 247, 216, 0.08);
   font-size: 0.78rem;
   font-weight: 900;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
+}
+
+.dance-station-status-pill.recording {
+  border-color: rgba(248, 113, 113, 0.72);
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.12);
 }
 
 .dance-station-piano {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 6px;
+  gap: 4px;
+  margin: 2px 0 0;
 }
 
 .dance-station-piano button {
-  min-height: 58px;
-  border: 1px solid rgba(117, 162, 212, 0.25);
-  border-radius: 10px;
-  background: #dfeeff;
-  color: #081426;
+  min-height: 48px;
+  border: 1px solid #d8dee9;
+  border-radius: 6px;
+  background: #f3f0e8;
+  color: #111317;
+  font-size: 0.75rem;
   font-weight: 900;
+  padding: 0;
 }
 
 .dance-station-piano button.black {
-  background: #111b2d;
+  border-color: #050607;
+  background: #050607;
   color: #eaf4ff;
 }
 
 .dance-station-note-lane {
   position: relative;
-  min-height: 210px;
+  min-height: 360px;
   overflow: hidden;
-  border: 1px solid rgba(117, 162, 212, 0.18);
-  border-radius: 12px;
-  background:
-    repeating-linear-gradient(90deg, rgba(117, 162, 212, 0.08), rgba(117, 162, 212, 0.08) 1px, transparent 1px, transparent 8.33%),
-    rgba(3, 9, 18, 0.58);
+  border: 1px solid rgba(91, 104, 124, 0.55);
+  border-radius: 8px;
+  background: #111317;
+  cursor: crosshair;
 }
 
 .dance-station-note-lane span {
   position: absolute;
-  top: 28px;
-  min-width: 34px;
-  height: 34px;
+  min-width: 28px;
+  height: 22px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgba(98, 247, 216, 0.95), rgba(110, 168, 255, 0.9));
-  color: #04111f;
-  font-size: 0.72rem;
+  border: 1px solid rgba(45, 212, 191, 0.74);
+  border-radius: 5px;
+  background: rgba(45, 212, 191, 0.22);
+  color: #d8fff9;
+  font-size: 0.68rem;
   font-weight: 900;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.22);
+  transform: translateY(-50%);
 }
 
 .dance-station-instrument-workbench {
-  gap: 14px;
+  gap: 12px;
 }
 
 .dance-station-instrument-toolbar {
-  padding-bottom: 12px;
-  border-bottom: 1px solid rgba(117, 162, 212, 0.14);
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(91, 104, 124, 0.42);
+}
+
+.dance-station-instrument-toolbar h2 {
+  font-size: 1.35rem;
 }
 
 .dance-station-performance-panel,
@@ -4751,12 +4766,58 @@ label {
 .dance-station-transport {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  gap: 7px;
 }
 
-.dance-station-transport .home-v2-btn {
-  min-height: 36px;
-  padding: 8px 13px;
+.dance-station-tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  width: auto;
+  border: 1px solid rgba(91, 104, 124, 0.64);
+  border-radius: 6px;
+  background: #1a1d22;
+  color: #cbd5e1;
+  padding: 7px 11px;
+  font-size: 0.78rem;
+  font-weight: 850;
+  line-height: 1;
+  text-transform: none;
+  box-shadow: none;
+}
+
+.dance-station-tool-button.primary {
+  border-color: rgba(45, 212, 191, 0.72);
+  background: #0f766e;
+  color: #f8fafc;
+}
+
+.dance-station-tool-button:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+
+.dance-station-note-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, rgba(148, 163, 184, 0.1), rgba(148, 163, 184, 0.1) 1px, transparent 1px, transparent 6.25%),
+    repeating-linear-gradient(0deg, rgba(148, 163, 184, 0.07), rgba(148, 163, 184, 0.07) 1px, transparent 1px, transparent 24px);
+}
+
+.dance-station-note-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #f8fafc;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.78), 0 0 14px rgba(45, 212, 191, 0.34);
+  transform: translateX(-1px);
+  pointer-events: none;
+  z-index: 3;
 }
 
 .dance-station-asset-picker {

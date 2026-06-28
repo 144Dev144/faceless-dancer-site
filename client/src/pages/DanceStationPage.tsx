@@ -100,6 +100,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [instrumentPreviewUrl, setInstrumentPreviewUrl] = useState("");
   const [instrumentRecording, setInstrumentRecording] = useState(false);
   const [instrumentCountIn, setInstrumentCountIn] = useState(0);
+  const [instrumentCursorBeat, setInstrumentCursorBeat] = useState(0);
   const [audioEditPickerOpen, setAudioEditPickerOpen] = useState(false);
   const instrumentObjectUrlRef = useRef("");
   const liveAudioContextRef = useRef<AudioContext | null>(null);
@@ -289,11 +290,20 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     liveAudioContextRef.current = context;
     await context.resume();
     setInstrumentStatus("Playing");
+    setInstrumentCursorBeat(0);
     const destination = context.destination;
     const startAt = context.currentTime + 0.04;
     instrumentNotes.forEach((note) => scheduleInstrumentNote(context, destination, note, instrumentBpm, instrumentId, startAt));
-    const timer = window.setTimeout(() => setInstrumentStatus("Ready"), Math.max(600, instrumentDurationSeconds(instrumentNotes, instrumentBpm) * 1000 + 200));
-    instrumentTimerRefs.current.push(timer);
+    const startedAt = performance.now();
+    const durationBeats = Math.max(instrumentBars * 4, ...instrumentNotes.map((note) => note.start + note.duration));
+    const cursorTimer = window.setInterval(() => {
+      setInstrumentCursorBeat(Math.min(durationBeats, ((performance.now() - startedAt) / 1000) / beatSeconds(instrumentBpm)));
+    }, 33);
+    const doneTimer = window.setTimeout(() => {
+      window.clearInterval(cursorTimer);
+      setInstrumentStatus("Ready");
+    }, Math.max(600, instrumentDurationSeconds(instrumentNotes, instrumentBpm) * 1000 + 200));
+    instrumentTimerRefs.current.push(cursorTimer, doneTimer);
   };
 
   const stopInstrumentClip = async () => {
@@ -302,6 +312,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     instrumentHeldNotesRef.current.clear();
     setInstrumentRecording(false);
     setInstrumentCountIn(0);
+    setInstrumentCursorBeat(0);
     await liveAudioContextRef.current?.close();
     liveAudioContextRef.current = null;
     setInstrumentStatus("Ready");
@@ -317,9 +328,14 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       liveAudioContextRef.current = context;
       await context.resume();
       instrumentRecordingStartedAtRef.current = performance.now();
+      setInstrumentCursorBeat(0);
       setInstrumentRecording(true);
       setInstrumentCountIn(0);
       setInstrumentStatus("Recording");
+      const cursorTimer = window.setInterval(() => {
+        setInstrumentCursorBeat(currentRecordingBeat(instrumentRecordingStartedAtRef.current, instrumentBpm));
+      }, 33);
+      instrumentTimerRefs.current.push(cursorTimer);
     }, 2000);
     instrumentTimerRefs.current.push(first, second);
   };
@@ -523,6 +539,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                 previewUrl={instrumentPreviewUrl}
                 recording={instrumentRecording}
                 countIn={instrumentCountIn}
+                cursorBeat={instrumentCursorBeat}
                 setLabel={setInstrumentLabel}
                 setBpm={setInstrumentBpm}
                 setBars={setInstrumentBars}
@@ -806,6 +823,7 @@ function InstrumentLabPanel({
   previewUrl,
   recording,
   countIn,
+  cursorBeat,
   setLabel,
   setBpm,
   setBars,
@@ -829,6 +847,7 @@ function InstrumentLabPanel({
   previewUrl: string;
   recording: boolean;
   countIn: number;
+  cursorBeat: number;
   setLabel: (value: string) => void;
   setBpm: (value: number) => void;
   setBars: (value: number) => void;
@@ -849,7 +868,7 @@ function InstrumentLabPanel({
           <p className="home-v2-kicker">Instrument Lab</p>
           <h2>Performance editor</h2>
         </div>
-        <span className="dance-station-status-pill">{countIn ? `Starts in ${countIn}` : status}</span>
+        <span className={`dance-station-status-pill${recording ? " recording" : ""}`}>{countIn ? `Starts in ${countIn}` : status}</span>
       </div>
 
       <div className="dance-station-instrument-grid">
@@ -884,16 +903,16 @@ function InstrumentLabPanel({
 
         <section className="dance-station-inner-panel dance-station-performance-panel">
           <div className="dance-station-transport">
-            <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => playClip()}>
+            <button type="button" className="dance-station-tool-button primary" onClick={() => playClip()}>
               Play
             </button>
-            <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => recordClip()} disabled={recording || Boolean(countIn)}>
+            <button type="button" className="dance-station-tool-button" onClick={() => recordClip()} disabled={recording || Boolean(countIn)}>
               {recording ? "Recording" : "Record"}
             </button>
-            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => stopClip()}>
+            <button type="button" className="dance-station-tool-button" onClick={() => stopClip()}>
               Stop
             </button>
-            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={clearNotes}>
+            <button type="button" className="dance-station-tool-button" onClick={clearNotes}>
               Clear
             </button>
           </div>
@@ -909,9 +928,11 @@ function InstrumentLabPanel({
               </button>
             ))}
           </div>
-          <div className="dance-station-note-lane">
+          <div className={`dance-station-note-lane${recording ? " recording" : ""}`}>
+            <div className="dance-station-note-grid" aria-hidden="true"></div>
+            <div className="dance-station-note-cursor" style={{ left: `${cursorPercent(cursorBeat, bars)}%` }} aria-hidden="true"></div>
             {notes.length ? notes.map((note) => (
-              <span key={note.id} style={{ left: `${Math.min(96, note.start * 8)}%`, width: `${Math.max(3, note.duration * 8)}%` }}>
+              <span key={note.id} style={instrumentNoteStyle(note, bars)}>
                 {midiNoteLabel(note.pitch)}
               </span>
             )) : <em>No notes yet.</em>}
@@ -920,10 +941,10 @@ function InstrumentLabPanel({
 
         <section className="dance-station-inner-panel dance-station-render-panel">
           <div className="dance-station-panel-actions">
-            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => renderClip()}>
+            <button type="button" className="dance-station-tool-button" onClick={() => renderClip()}>
               Render Preview
             </button>
-            <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => saveClip()}>
+            <button type="button" className="dance-station-tool-button primary" onClick={() => saveClip()}>
               Save Clip
             </button>
           </div>
@@ -1340,6 +1361,21 @@ function writeAscii(view: DataView, offset: number, value: string): void {
 
 function safeFileStem(value: string): string {
   return value.trim().replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
+}
+
+function cursorPercent(beat: number, bars: number): number {
+  const totalBeats = Math.max(1, bars * 4);
+  return Math.max(0, Math.min(100, (beat / totalBeats) * 100));
+}
+
+function instrumentNoteStyle(note: InstrumentNote, bars: number): Record<string, string> {
+  const totalBeats = Math.max(1, bars * 4);
+  const top = Math.max(7, Math.min(82, 84 - ((note.pitch - 36) / 48) * 74));
+  return {
+    left: `${Math.max(0, Math.min(98, (note.start / totalBeats) * 100))}%`,
+    width: `${Math.max(2.5, Math.min(100, (note.duration / totalBeats) * 100))}%`,
+    top: `${top}%`,
+  };
 }
 
 function buildAudioMassWorkspaceAssets(
