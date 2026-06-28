@@ -1,0 +1,3 @@
+[submodule "client/public/dance-station/audiomass"]
+	path = client/public/dance-station/audiomass
+	url = https://github.com/The-Faceless-Dev/dance-station-audiomass.git

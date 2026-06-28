@@ -4653,15 +4653,12 @@ label {
   line-height: 1.5;
 }
 
-.dance-station-editor-placeholder {
-  min-height: 220px;
-  display: grid;
-  place-items: center;
-  border: 1px dashed rgba(117, 162, 212, 0.32);
+.dance-station-audiomass-frame {
+  width: 100%;
+  min-height: 680px;
+  border: 1px solid rgba(117, 162, 212, 0.2);
   border-radius: 14px;
-  color: #8ff6e9;
-  background: rgba(3, 9, 18, 0.42);
-  font-weight: 800;
+  background: #050d1a;
 }
 
 .dance-station-control-row {

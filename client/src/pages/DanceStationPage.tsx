@@ -758,11 +758,14 @@ function AudioEditPanel({
         <section className="dance-station-inner-panel dance-station-editor-frame-shell">
           <div>
             <strong>AudioMass</strong>
-            <span>Site bundle not vendored yet. Use the browser preview and save an exported file below for this pass.</span>
+            <span>Embedded shared Dance Station AudioMass. Export from AudioMass, then save the exported file below.</span>
           </div>
-          <div className="dance-station-editor-placeholder">
-            AudioMass integration slot
-          </div>
+          <iframe
+            className="dance-station-audiomass-frame"
+            title="Dance Station AudioMass editor"
+            src={audioMassFrameUrl(editAudioUrl, editSourceLabel)}
+            allow="autoplay; clipboard-read; clipboard-write; microphone"
+          ></iframe>
         </section>
 
         <section className="dance-station-inner-panel">
@@ -1293,4 +1296,11 @@ function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function audioMassFrameUrl(audioUrl: string, sourceLabel: string): string {
+  const params = new URLSearchParams({ ds_mode: "site" });
+  if (audioUrl) params.set("ds_audio", audioUrl);
+  if (sourceLabel && sourceLabel !== "No audio asset loaded") params.set("ds_name", sourceLabel);
+  return `/dance-station/audiomass/?${params.toString()}`;
 }
