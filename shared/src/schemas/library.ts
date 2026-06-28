@@ -26,6 +26,7 @@ export const libraryFileRoleSchema = z.enum([
   "cover",
   "metadata",
   "dataset_manifest",
+  "dataset_sample",
   "adapter_weights",
   "chart",
   "stem",
