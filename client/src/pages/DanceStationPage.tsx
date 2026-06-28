@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { WalletAuthCard } from "../components/WalletAuthCard";
 import { api, type CreatorPublishTokenRecord, type LibraryItem } from "../lib/api";
@@ -89,10 +89,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [publicLoading, setPublicLoading] = useState(true);
   const [publicError, setPublicError] = useState<string | null>(null);
   const [publicQuery, setPublicQuery] = useState("");
-  const [selectedEditAssetId, setSelectedEditAssetId] = useState("");
-  const [editAudioUrl, setEditAudioUrl] = useState("");
-  const [editSourceLabel, setEditSourceLabel] = useState("No audio asset loaded");
-  const [editLabel, setEditLabel] = useState("Edited audio");
   const [instrumentLabel, setInstrumentLabel] = useState("Instrument idea");
   const [instrumentBpm, setInstrumentBpm] = useState(120);
   const [instrumentBars, setInstrumentBars] = useState(4);
@@ -101,7 +97,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [instrumentNotes, setInstrumentNotes] = useState<InstrumentNote[]>([]);
   const [instrumentStatus, setInstrumentStatus] = useState("Ready");
   const [instrumentPreviewUrl, setInstrumentPreviewUrl] = useState("");
-  const editObjectUrlRef = useRef("");
   const instrumentObjectUrlRef = useRef("");
   const liveAudioContextRef = useRef<AudioContext | null>(null);
 
@@ -112,7 +107,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
 
   useEffect(() => {
     return () => {
-      if (editObjectUrlRef.current) URL.revokeObjectURL(editObjectUrlRef.current);
       if (instrumentObjectUrlRef.current) URL.revokeObjectURL(instrumentObjectUrlRef.current);
       void liveAudioContextRef.current?.close();
     };
@@ -223,50 +217,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const dismissStorageHelp = async () => {
     await setWorkspaceSetting("storageIntroDismissed", true);
     setShowStorageHelp(false);
-  };
-
-  const audioAssets = useMemo(() => workspaceItems.filter(isAudioWorkspaceItem), [workspaceItems]);
-
-  const loadAudioForEdit = async (itemId: string) => {
-    setSelectedEditAssetId(itemId);
-    const item = workspaceItems.find((candidate) => candidate.id === itemId);
-    if (!item) {
-      setEditAudioUrl("");
-      setEditSourceLabel("No audio asset loaded");
-      return;
-    }
-    const url = await workspaceItemAudioUrl(item);
-    if (!url) {
-      setWorkspaceMessage("That asset does not include playable audio.");
-      return;
-    }
-    if (editObjectUrlRef.current) URL.revokeObjectURL(editObjectUrlRef.current);
-    editObjectUrlRef.current = url.startsWith("blob:") ? url : "";
-    setEditAudioUrl(url);
-    setEditSourceLabel(item.title);
-  };
-
-  const loadAudioFileForEdit = (fileList: FileList | null) => {
-    const file = fileList?.[0];
-    if (!file) return;
-    if (editObjectUrlRef.current) URL.revokeObjectURL(editObjectUrlRef.current);
-    const url = URL.createObjectURL(file);
-    editObjectUrlRef.current = url;
-    setSelectedEditAssetId("");
-    setEditAudioUrl(url);
-    setEditSourceLabel(file.name);
-    setEditLabel(file.name.replace(/\.[^.]+$/, "") || "Edited audio");
-  };
-
-  const saveEditedAsset = async (fileList: FileList | null) => {
-    const file = fileList?.[0];
-    if (!file) {
-      setWorkspaceMessage("Choose the exported audio file from your editor.");
-      return;
-    }
-    await saveWorkspaceItem(createPrivateAssetWorkspaceItem(file, editLabel || file.name, "edit"));
-    setWorkspaceMessage(`${file.name} saved as an edit.`);
-    await refreshWorkspace();
   };
 
   const addInstrumentNote = (pitch: number, startBeat?: number) => {
@@ -430,18 +380,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                 setWorkspaceMessage={setWorkspaceMessage}
               />
             ) : activePanel === "audio-edit" ? (
-              <AudioEditPanel
-                audioAssets={audioAssets}
-                selectedEditAssetId={selectedEditAssetId}
-                editAudioUrl={editAudioUrl}
-                editSourceLabel={editSourceLabel}
-                editLabel={editLabel}
-                setEditLabel={setEditLabel}
-                loadAudioForEdit={loadAudioForEdit}
-                loadAudioFileForEdit={loadAudioFileForEdit}
-                saveEditedAsset={saveEditedAsset}
-                setWorkspaceMessage={setWorkspaceMessage}
-              />
+              <AudioEditPanel />
             ) : activePanel === "instrument-lab" ? (
               <InstrumentLabPanel
                 label={instrumentLabel}
@@ -696,94 +635,14 @@ function PublicLibraryAssetCard({
   );
 }
 
-function AudioEditPanel({
-  audioAssets,
-  selectedEditAssetId,
-  editAudioUrl,
-  editSourceLabel,
-  editLabel,
-  setEditLabel,
-  loadAudioForEdit,
-  loadAudioFileForEdit,
-  saveEditedAsset,
-  setWorkspaceMessage,
-}: {
-  audioAssets: BrowserWorkspaceItem[];
-  selectedEditAssetId: string;
-  editAudioUrl: string;
-  editSourceLabel: string;
-  editLabel: string;
-  setEditLabel: (value: string) => void;
-  loadAudioForEdit: (itemId: string) => Promise<void>;
-  loadAudioFileForEdit: (fileList: FileList | null) => void;
-  saveEditedAsset: (fileList: FileList | null) => Promise<void>;
-  setWorkspaceMessage: (value: string) => void;
-}): JSX.Element {
+function AudioEditPanel(): JSX.Element {
   return (
-    <div className="dance-station-tool-panel">
-      <div className="dance-station-panel-head">
-        <div>
-          <p className="home-v2-kicker">Audio Edit</p>
-          <h2>Edit private audio</h2>
-        </div>
-      </div>
-      <p>
-        Load audio from Private Assets, work in the browser editor flow, then save the exported result back into
-        Private Assets.
-      </p>
-      <div className="dance-station-edit-grid">
-        <section className="dance-station-inner-panel">
-          <label>
-            <span>Source audio</span>
-            <select
-              value={selectedEditAssetId}
-              onChange={(event) => loadAudioForEdit((event.currentTarget as HTMLSelectElement).value).catch((error) => setWorkspaceMessage(error.message))}
-            >
-              <option value="">Choose private audio</option>
-              {audioAssets.map((asset) => (
-                <option key={asset.id} value={asset.id}>{asset.title}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Open audio from disk</span>
-            <input type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a" onChange={(event) => loadAudioFileForEdit((event.currentTarget as HTMLInputElement).files)} />
-          </label>
-          <div className="dance-station-editor-preview">
-            <strong>{editSourceLabel}</strong>
-            {editAudioUrl ? <audio controls preload="metadata" src={editAudioUrl}></audio> : <span>No audio loaded.</span>}
-          </div>
-        </section>
-
-        <section className="dance-station-inner-panel dance-station-editor-frame-shell">
-          <div>
-            <strong>AudioMass</strong>
-            <span>Embedded shared Dance Station AudioMass. Export from AudioMass, then save the exported file below.</span>
-          </div>
-          <iframe
-            className="dance-station-audiomass-frame"
-            title="Dance Station AudioMass editor"
-            src={audioMassFrameUrl(editAudioUrl, editSourceLabel)}
-            allow="autoplay; clipboard-read; clipboard-write; microphone"
-          ></iframe>
-        </section>
-
-        <section className="dance-station-inner-panel">
-          <label>
-            <span>Edit name</span>
-            <input value={editLabel} onInput={(event) => setEditLabel((event.currentTarget as HTMLInputElement).value)} />
-          </label>
-          <label>
-            <span>Save exported audio</span>
-            <input
-              type="file"
-              accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a"
-              onChange={(event) => saveEditedAsset((event.currentTarget as HTMLInputElement).files).catch((error) => setWorkspaceMessage(error.message))}
-            />
-          </label>
-        </section>
-      </div>
-    </div>
+    <iframe
+      className="dance-station-audiomass-frame"
+      title="Dance Station AudioMass editor"
+      src={audioMassFrameUrl()}
+      allow="autoplay; clipboard-read; clipboard-write; microphone"
+    ></iframe>
   );
 }
 
@@ -1138,29 +997,6 @@ const KEYBOARD_NOTE_MAP: Record<string, number> = {
   k: 12,
 };
 
-function isAudioWorkspaceItem(item: BrowserWorkspaceItem): boolean {
-  if (item.kind === "audio" || item.kind === "edit" || item.kind === "instrument") return true;
-  if (typeof item.metadata.mimeType === "string" && item.metadata.mimeType.startsWith("audio/")) return true;
-  const files = Array.isArray(item.metadata.files) ? item.metadata.files : [];
-  return files.some((file) => {
-    const candidate = file as { role?: string; publicUrl?: string | null; mimeType?: string };
-    return Boolean(candidate.publicUrl && (candidate.role === "audio" || candidate.role === "preview" || candidate.mimeType?.startsWith("audio/")));
-  });
-}
-
-async function workspaceItemAudioUrl(item: BrowserWorkspaceItem): Promise<string> {
-  const blob = item.metadata.blob;
-  if (blob instanceof Blob) {
-    return URL.createObjectURL(blob);
-  }
-  const files = Array.isArray(item.metadata.files) ? item.metadata.files : [];
-  const audioFile = files.find((file) => {
-    const candidate = file as { role?: string; publicUrl?: string | null; mimeType?: string };
-    return Boolean(candidate.publicUrl && (candidate.role === "audio" || candidate.role === "preview" || candidate.mimeType?.startsWith("audio/")));
-  }) as { publicUrl?: string | null } | undefined;
-  return audioFile?.publicUrl || "";
-}
-
 function nextInstrumentStart(notes: InstrumentNote[]): number {
   if (!notes.length) return 0;
   const end = Math.max(...notes.map((note) => note.start + note.duration));
@@ -1298,9 +1134,7 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function audioMassFrameUrl(audioUrl: string, sourceLabel: string): string {
+function audioMassFrameUrl(): string {
   const params = new URLSearchParams({ ds_mode: "site" });
-  if (audioUrl) params.set("ds_audio", audioUrl);
-  if (sourceLabel && sourceLabel !== "No audio asset loaded") params.set("ds_name", sourceLabel);
-  return `/dance-station/audiomass/?${params.toString()}`;
+  return `/dance-station/audiomass/index.html?${params.toString()}`;
 }
