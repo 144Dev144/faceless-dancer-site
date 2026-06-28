@@ -1,4 +1,11 @@
+import { Gamepad2, Share2, WandSparkles } from "lucide-preact";
 import logoImage from "../../assets/hero/logo.png";
+
+const navLinks = [
+  { href: "/game", label: "Dance Stage", Icon: Gamepad2 },
+  { href: "/library", label: "Library", Icon: Share2 },
+  { href: "/dance-station", label: "Dance Station", Icon: WandSparkles },
+];
 
 export function HomeTopNav(): JSX.Element {
   return (
@@ -9,10 +16,12 @@ export function HomeTopNav(): JSX.Element {
       </a>
 
       <nav className="home-v2-nav__links" aria-label="Primary">
-        <a href="/">Home</a>
-        <a href="/game">Dance Stage</a>
-        <a href="/library">Library</a>
-        <a href="/dance-station">Dance Station</a>
+        {navLinks.map(({ href, label, Icon }) => (
+          <a key={href} href={href} aria-label={label} title={label}>
+            <Icon aria-hidden="true" size={17} strokeWidth={2.1} />
+            <span>{label}</span>
+          </a>
+        ))}
       </nav>
 
       <a className="home-v2-nav__cta" href="/game">Enter Stage</a>

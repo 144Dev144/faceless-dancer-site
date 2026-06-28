@@ -4108,12 +4108,19 @@ label {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 22px;
 }
 
 .home-v2-nav__links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 0.9rem;
   color: #9db5d6;
+}
+
+.home-v2-nav__links svg {
+  flex: 0 0 auto;
 }
 
 .home-v2-nav__links a:hover {
@@ -5037,6 +5044,24 @@ label {
 
   .home-v2-nav__links {
     gap: 8px 14px;
+  }
+
+  .home-v2-nav__links a {
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border: 1px solid rgba(117, 204, 255, 0.24);
+    border-radius: 999px;
+    background: rgba(7, 19, 36, 0.76);
+  }
+
+  .home-v2-nav__links a span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .home-v2-hero__actions {
