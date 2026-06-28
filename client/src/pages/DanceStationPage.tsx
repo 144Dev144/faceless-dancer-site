@@ -95,7 +95,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [instrumentBars, setInstrumentBars] = useState(4);
   const [instrumentOctave, setInstrumentOctave] = useState(4);
   const [instrumentId, setInstrumentId] = useState("synth.lead");
-  const [instrumentNotes, setInstrumentNotes] = useState<InstrumentNote[]>([]);
+  const [instrumentTracks, setInstrumentTracks] = useState<InstrumentTrack[]>(() => [createInstrumentTrack("Track 1", "synth.lead")]);
+  const [activeInstrumentTrackId, setActiveInstrumentTrackId] = useState("track-main");
   const [instrumentStatus, setInstrumentStatus] = useState("Ready");
   const [instrumentPreviewUrl, setInstrumentPreviewUrl] = useState("");
   const [instrumentRecording, setInstrumentRecording] = useState(false);
@@ -104,11 +105,13 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [audioEditPickerOpen, setAudioEditPickerOpen] = useState(false);
   const instrumentObjectUrlRef = useRef("");
   const liveAudioContextRef = useRef<AudioContext | null>(null);
+  const instrumentAudioBufferCacheRef = useRef<Map<string, AudioBuffer>>(new Map());
   const instrumentHeldNotesRef = useRef<Map<string, { pitch: number; start: number }>>(new Map());
   const instrumentRecordingStartedAtRef = useRef(0);
   const instrumentTimerRefs = useRef<number[]>([]);
   const audioMassFrameRef = useRef<HTMLIFrameElement | null>(null);
   const audioMassObjectUrlsRef = useRef<string[]>([]);
+  const instrumentAssetObjectUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
     document.body.classList.add("home-page-body");
@@ -119,6 +122,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     return () => {
       if (instrumentObjectUrlRef.current) URL.revokeObjectURL(instrumentObjectUrlRef.current);
       audioMassObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      instrumentAssetObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       void liveAudioContextRef.current?.close();
     };
   }, []);
@@ -230,6 +234,16 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     setShowStorageHelp(false);
   };
 
+  const activeInstrumentTrack = instrumentTracks.find((track) => track.id === activeInstrumentTrackId) ?? instrumentTracks[0] ?? null;
+  const activeInstrumentNotes = activeInstrumentTrack?.kind === "instrument" ? activeInstrumentTrack.notes : [];
+  const activeInstrumentId = activeInstrumentTrack?.kind === "instrument" ? activeInstrumentTrack.instrumentId : instrumentId;
+  const instrumentAssets = workspaceItems.filter(workspaceItemHasAudio).map((item) => ({
+    id: item.id,
+    title: item.title,
+    kind: formatKind(item.kind),
+    creatorName: item.creatorName,
+  }));
+
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.source !== audioMassFrameRef.current?.contentWindow) return;
@@ -260,29 +274,66 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   }, []);
 
   const addInstrumentNote = (pitch: number, startBeat?: number, durationBeat?: number) => {
+    if (!activeInstrumentTrack || activeInstrumentTrack.kind !== "instrument") {
+      setInstrumentStatus("Select an instrument track");
+      return;
+    }
     const start = startBeat ?? (instrumentRecording
       ? currentRecordingBeat(instrumentRecordingStartedAtRef.current, instrumentBpm)
-      : nextInstrumentStart(instrumentNotes));
-    setInstrumentNotes((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        pitch,
-        start,
-        duration: durationBeat ?? 0.5,
-        velocity: 0.82,
-      },
-    ]);
+      : nextInstrumentStart(activeInstrumentNotes));
+    const note = {
+      id: crypto.randomUUID(),
+      pitch,
+      start,
+      duration: durationBeat ?? 0.5,
+      velocity: 0.82,
+    };
+    setInstrumentTracks((current) => current.map((track) => (
+      track.id === activeInstrumentTrack.id && track.kind === "instrument"
+        ? { ...track, notes: [...track.notes, note] }
+        : track
+    )));
   };
 
   const clearInstrumentNotes = () => {
-    setInstrumentNotes([]);
+    if (!activeInstrumentTrack || activeInstrumentTrack.kind !== "instrument") return;
+    setInstrumentTracks((current) => current.map((track) => (
+      track.id === activeInstrumentTrack.id && track.kind === "instrument" ? { ...track, notes: [] } : track
+    )));
     setInstrumentStatus("Ready");
   };
 
+  const addInstrumentTrack = () => {
+    const next = createInstrumentTrack(`Track ${instrumentTracks.filter((track) => track.kind === "instrument").length + 1}`, instrumentId);
+    setInstrumentTracks((current) => [...current, next]);
+    setActiveInstrumentTrackId(next.id);
+    setInstrumentStatus("Track added");
+  };
+
+  const updateInstrumentTrack = (trackId: string, patch: Partial<InstrumentTrack>) => {
+    setInstrumentTracks((current) => current.map((track) => (
+      track.id === trackId ? ({ ...track, ...patch } as InstrumentTrack) : track
+    )));
+  };
+
+  const importInstrumentAssetTrack = (assetId: string) => {
+    const item = workspaceItems.find((candidate) => candidate.id === assetId);
+    if (!item) return;
+    const url = workspaceItemAudioUrl(item, instrumentAssetObjectUrlsRef);
+    if (!url) {
+      setInstrumentStatus("Could not load asset");
+      return;
+    }
+    const track = createAudioTrack(item.title, url, item.title);
+    setInstrumentTracks((current) => [...current, track]);
+    setActiveInstrumentTrackId(track.id);
+    setInstrumentStatus("Audio track added");
+  };
+
   const playInstrumentClip = async () => {
-    if (!instrumentNotes.length) {
-      setInstrumentStatus("Add notes first");
+    const playableTracks = instrumentTracks.filter((track) => !track.muted && (track.kind === "audio" || track.notes.length));
+    if (!playableTracks.length) {
+      setInstrumentStatus("Add or import a track first");
       return;
     }
     await stopInstrumentClip();
@@ -293,9 +344,11 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     setInstrumentCursorBeat(0);
     const destination = context.destination;
     const startAt = context.currentTime + 0.04;
-    instrumentNotes.forEach((note) => scheduleInstrumentNote(context, destination, note, instrumentBpm, instrumentId, startAt));
+    await scheduleInstrumentTracks(context, destination, playableTracks, instrumentBpm, startAt, instrumentAudioBufferCacheRef.current);
     const startedAt = performance.now();
-    const durationBeats = Math.max(instrumentBars * 4, ...instrumentNotes.map((note) => note.start + note.duration));
+    const durationBeats = Math.max(instrumentBars * 4, ...playableTracks.flatMap((track) => (
+      track.kind === "instrument" ? track.notes.map((note) => note.start + note.duration) : [instrumentBars * 4]
+    )));
     const cursorTimer = window.setInterval(() => {
       setInstrumentCursorBeat(Math.min(durationBeats, ((performance.now() - startedAt) / 1000) / beatSeconds(instrumentBpm)));
     }, 33);
@@ -327,6 +380,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       const context = new AudioContext();
       liveAudioContextRef.current = context;
       await context.resume();
+      const backingTracks = instrumentTracks.filter((track) => !track.muted && track.playDuringRecord);
+      await scheduleInstrumentTracks(context, context.destination, backingTracks, instrumentBpm, context.currentTime + 0.04, instrumentAudioBufferCacheRef.current);
       instrumentRecordingStartedAtRef.current = performance.now();
       setInstrumentCursorBeat(0);
       setInstrumentRecording(true);
@@ -341,17 +396,29 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   };
 
   const renderInstrumentClip = async () => {
-    if (!instrumentNotes.length) {
-      setInstrumentStatus("Add notes first");
+    const file = await renderInstrumentTracks({ trackOnly: false });
+    return file;
+  };
+
+  const renderActiveInstrumentTrack = async () => {
+    const file = await renderInstrumentTracks({ trackOnly: true });
+    return file;
+  };
+
+  const renderInstrumentTracks = async ({ trackOnly }: { trackOnly: boolean }) => {
+    const tracks = trackOnly && activeInstrumentTrack ? [activeInstrumentTrack] : instrumentTracks;
+    const renderableTracks = tracks.filter((track) => !track.muted && (track.kind === "audio" || track.notes.length));
+    if (!renderableTracks.length) {
+      setInstrumentStatus(trackOnly ? "Select a track with notes or audio" : "Add or import a track first");
       return null;
     }
     setInstrumentStatus("Rendering");
     const file = await renderInstrumentWav({
-      notes: instrumentNotes,
+      tracks: renderableTracks,
       bpm: instrumentBpm,
       bars: instrumentBars,
-      instrumentId,
-      label: instrumentLabel,
+      label: trackOnly && activeInstrumentTrack ? activeInstrumentTrack.label : instrumentLabel,
+      audioBufferCache: instrumentAudioBufferCacheRef.current,
     });
     if (instrumentObjectUrlRef.current) URL.revokeObjectURL(instrumentObjectUrlRef.current);
     const url = URL.createObjectURL(file);
@@ -361,16 +428,16 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     return file;
   };
 
-  const saveInstrumentClip = async () => {
-    const file = await renderInstrumentClip();
+  const saveInstrumentClip = async ({ trackOnly = false }: { trackOnly?: boolean } = {}) => {
+    const file = await renderInstrumentTracks({ trackOnly });
     if (!file) return;
-    const item = createPrivateAssetWorkspaceItem(file, instrumentLabel || file.name, "instrument");
+    const title = trackOnly && activeInstrumentTrack ? activeInstrumentTrack.label : instrumentLabel;
+    const item = createPrivateAssetWorkspaceItem(file, title || file.name, trackOnly ? "instrumenttrack" : "instrument");
     item.metadata = {
       ...item.metadata,
       bpm: instrumentBpm,
       bars: instrumentBars,
-      instrumentId,
-      notes: instrumentNotes,
+      tracks: trackOnly && activeInstrumentTrack ? [serializeInstrumentTrack(activeInstrumentTrack)] : instrumentTracks.map(serializeInstrumentTrack),
     };
     await saveWorkspaceItem(item);
     setWorkspaceMessage(`${item.title} saved to Private Assets.`);
@@ -454,7 +521,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [activePanel, instrumentNotes, instrumentOctave, instrumentRecording, instrumentBpm]);
+  }, [activePanel, activeInstrumentTrackId, activeInstrumentNotes, instrumentOctave, instrumentRecording, instrumentBpm]);
 
   return (
     <main className="home-v2 library-page-shell dance-station-app-shell">
@@ -533,25 +600,28 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                 bpm={instrumentBpm}
                 bars={instrumentBars}
                 octave={instrumentOctave}
-                instrumentId={instrumentId}
-                notes={instrumentNotes}
+                instrumentId={activeInstrumentId}
+                notes={activeInstrumentNotes}
                 status={instrumentStatus}
-                previewUrl={instrumentPreviewUrl}
                 recording={instrumentRecording}
                 countIn={instrumentCountIn}
                 cursorBeat={instrumentCursorBeat}
+                activeTrack={activeInstrumentTrack}
                 setLabel={setInstrumentLabel}
                 setBpm={setInstrumentBpm}
                 setBars={setInstrumentBars}
                 setOctave={setInstrumentOctave}
-                setInstrumentId={setInstrumentId}
+                setInstrumentId={(value) => {
+                  setInstrumentId(value);
+                  if (activeInstrumentTrack?.kind === "instrument") {
+                    updateInstrumentTrack(activeInstrumentTrack.id, { instrumentId: value });
+                  }
+                }}
                 addNote={addInstrumentNote}
                 clearNotes={clearInstrumentNotes}
                 playClip={playInstrumentClip}
                 stopClip={stopInstrumentClip}
                 recordClip={startInstrumentRecording}
-                renderClip={renderInstrumentClip}
-                saveClip={saveInstrumentClip}
               />
             ) : (
               <UnavailablePanel tool={tools.find((tool) => tool.id === activePanel) ?? tools[0]} />
@@ -574,6 +644,23 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                     audioAssetCount={countAudioWorkspaceItems(workspaceItems)}
                     openPrivateAssets={() => setAudioEditPickerOpen(true)}
                     saveCurrentEdit={requestAudioMassWorkspaceSave}
+                  />
+                ) : null}
+                {activePanel === "instrument-lab" ? (
+                  <InstrumentLabSessionControls
+                    status={instrumentStatus}
+                    previewUrl={instrumentPreviewUrl}
+                    tracks={instrumentTracks}
+                    activeTrackId={activeInstrumentTrackId}
+                    assets={instrumentAssets}
+                    setActiveTrackId={setActiveInstrumentTrackId}
+                    updateTrack={updateInstrumentTrack}
+                    addTrack={addInstrumentTrack}
+                    importAssetTrack={importInstrumentAssetTrack}
+                    renderClip={renderInstrumentClip}
+                    renderTrack={renderActiveInstrumentTrack}
+                    saveClip={() => saveInstrumentClip()}
+                    saveTrack={() => saveInstrumentClip({ trackOnly: true })}
                   />
                 ) : null}
                 <p className="home-v2-kicker">Session</p>
@@ -820,10 +907,10 @@ function InstrumentLabPanel({
   instrumentId,
   notes,
   status,
-  previewUrl,
   recording,
   countIn,
   cursorBeat,
+  activeTrack,
   setLabel,
   setBpm,
   setBars,
@@ -834,8 +921,6 @@ function InstrumentLabPanel({
   playClip,
   stopClip,
   recordClip,
-  renderClip,
-  saveClip,
 }: {
   label: string;
   bpm: number;
@@ -844,10 +929,10 @@ function InstrumentLabPanel({
   instrumentId: string;
   notes: InstrumentNote[];
   status: string;
-  previewUrl: string;
   recording: boolean;
   countIn: number;
   cursorBeat: number;
+  activeTrack: InstrumentTrack | null;
   setLabel: (value: string) => void;
   setBpm: (value: number) => void;
   setBars: (value: number) => void;
@@ -858,8 +943,6 @@ function InstrumentLabPanel({
   playClip: () => Promise<void>;
   stopClip: () => Promise<void>;
   recordClip: () => Promise<void>;
-  renderClip: () => Promise<File | null>;
-  saveClip: () => Promise<void>;
 }): JSX.Element {
   return (
     <div className="dance-station-tool-panel dance-station-instrument-workbench">
@@ -902,6 +985,9 @@ function InstrumentLabPanel({
         </section>
 
         <section className="dance-station-inner-panel dance-station-performance-panel">
+          <div className="dance-station-editor-subtitle">
+            {activeTrack ? `${activeTrack.label} / ${activeTrack.kind === "audio" ? "audio track" : "instrument track"}` : "No track selected"}
+          </div>
           <div className="dance-station-transport">
             <button type="button" className="dance-station-tool-button primary" onClick={() => playClip()}>
               Play
@@ -913,7 +999,7 @@ function InstrumentLabPanel({
               Stop
             </button>
             <button type="button" className="dance-station-tool-button" onClick={clearNotes}>
-              Clear
+              Clear Track
             </button>
           </div>
           <div className="dance-station-piano">
@@ -937,18 +1023,6 @@ function InstrumentLabPanel({
               </span>
             )) : <em>No notes yet.</em>}
           </div>
-        </section>
-
-        <section className="dance-station-inner-panel dance-station-render-panel">
-          <div className="dance-station-panel-actions">
-            <button type="button" className="dance-station-tool-button" onClick={() => renderClip()}>
-              Render Preview
-            </button>
-            <button type="button" className="dance-station-tool-button primary" onClick={() => saveClip()}>
-              Save Clip
-            </button>
-          </div>
-          {previewUrl ? <audio controls preload="metadata" src={previewUrl}></audio> : <div className="library-empty">No rendered preview yet.</div>}
         </section>
       </div>
     </div>
@@ -1011,6 +1085,121 @@ function AudioEditWorkspaceControls({
         </button>
       </div>
       <p className="small">{audioAssetCount} audio assets available. Disk open and download stay in AudioMass File.</p>
+    </section>
+  );
+}
+
+function InstrumentLabSessionControls({
+  status,
+  previewUrl,
+  tracks,
+  activeTrackId,
+  assets,
+  setActiveTrackId,
+  updateTrack,
+  addTrack,
+  importAssetTrack,
+  renderClip,
+  renderTrack,
+  saveClip,
+  saveTrack,
+}: {
+  status: string;
+  previewUrl: string;
+  tracks: InstrumentTrack[];
+  activeTrackId: string;
+  assets: InstrumentAssetOption[];
+  setActiveTrackId: (trackId: string) => void;
+  updateTrack: (trackId: string, patch: Partial<InstrumentTrack>) => void;
+  addTrack: () => void;
+  importAssetTrack: (assetId: string) => void;
+  renderClip: () => Promise<File | null>;
+  renderTrack: () => Promise<File | null>;
+  saveClip: () => Promise<void>;
+  saveTrack: () => Promise<void>;
+}): JSX.Element {
+  return (
+    <section className="dance-station-side-tool dance-station-instrument-session">
+      <p className="home-v2-kicker">Instrument Lab</p>
+      <h2>Tracks</h2>
+      <span className="dance-station-status-pill">{status}</span>
+
+      <div className="dance-station-track-list">
+        {tracks.map((track) => (
+          <div key={track.id} className={`dance-station-track-row${track.id === activeTrackId ? " active" : ""}`}>
+            <button type="button" className="dance-station-track-select" onClick={() => setActiveTrackId(track.id)}>
+              <strong>{track.label}</strong>
+              <span>{track.kind === "audio" ? "Audio" : "Instrument"}</span>
+            </button>
+            <label>
+              <span>Mute</span>
+              <input
+                type="checkbox"
+                checked={track.muted}
+                onChange={(event) => updateTrack(track.id, { muted: (event.currentTarget as HTMLInputElement).checked })}
+              />
+            </label>
+            <label>
+              <span>Record</span>
+              <input
+                type="checkbox"
+                checked={track.playDuringRecord}
+                onChange={(event) => updateTrack(track.id, { playDuringRecord: (event.currentTarget as HTMLInputElement).checked })}
+              />
+            </label>
+            <input
+              className="dance-station-track-volume"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={track.volume}
+              onInput={(event) => updateTrack(track.id, { volume: Number((event.currentTarget as HTMLInputElement).value || 0.85) })}
+              aria-label={`${track.label} volume`}
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="dance-station-side-actions">
+        <button type="button" className="dance-station-tool-button" onClick={addTrack}>
+          Add Track
+        </button>
+        <label>
+          <span>Import creation</span>
+          <select
+            value=""
+            onChange={(event) => {
+              const value = (event.currentTarget as HTMLSelectElement).value;
+              if (value) importAssetTrack(value);
+            }}
+          >
+            <option value="">Choose audio asset</option>
+            {assets.map((asset) => (
+              <option key={asset.id} value={asset.id}>{asset.title}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="dance-station-section-divider"></div>
+
+      <h2>Render</h2>
+      <div className="dance-station-side-actions">
+        <button type="button" className="dance-station-tool-button" onClick={() => renderTrack()}>
+          Render Track
+        </button>
+        <button type="button" className="dance-station-tool-button" onClick={() => saveTrack()}>
+          Save Track
+        </button>
+        <button type="button" className="dance-station-tool-button" onClick={() => renderClip()}>
+          Render Clip
+        </button>
+        <button type="button" className="dance-station-tool-button primary" onClick={() => saveClip()}>
+          Save Clip
+        </button>
+      </div>
+      {previewUrl ? <audio controls preload="metadata" src={previewUrl}></audio> : <div className="library-empty">No rendered preview yet.</div>}
     </section>
   );
 }
@@ -1184,6 +1373,29 @@ interface InstrumentNote {
   velocity: number;
 }
 
+type InstrumentTrack =
+  | {
+    id: string;
+    label: string;
+    kind: "instrument";
+    instrumentId: string;
+    notes: InstrumentNote[];
+    muted: boolean;
+    playDuringRecord: boolean;
+    volume: number;
+  }
+  | {
+    id: string;
+    label: string;
+    kind: "audio";
+    sourceTitle: string;
+    audioUrl: string;
+    muted: boolean;
+    playDuringRecord: boolean;
+    volume: number;
+    notes: [];
+  };
+
 interface InstrumentDefinition {
   id: string;
   name: string;
@@ -1201,6 +1413,13 @@ interface AudioMassWorkspaceAsset {
   url: string;
 }
 
+interface InstrumentAssetOption {
+  id: string;
+  title: string;
+  kind: string;
+  creatorName?: string;
+}
+
 const INSTRUMENT_BANK: InstrumentDefinition[] = [
   { id: "synth.lead", name: "Lead Synth", oscillator: "sawtooth", attack: 0.01, release: 0.18, octave: 0 },
   { id: "synth.square-lead", name: "Square Lead", oscillator: "square", attack: 0.005, release: 0.16, octave: 0 },
@@ -1211,6 +1430,56 @@ const INSTRUMENT_BANK: InstrumentDefinition[] = [
   { id: "strings.synthetic", name: "Synthetic Strings", oscillator: "sawtooth", attack: 0.22, release: 0.55, octave: 0 },
   { id: "brass.soft", name: "Soft Brass", oscillator: "sawtooth", attack: 0.08, release: 0.25, octave: 0 },
 ];
+
+function createInstrumentTrack(label: string, instrumentId: string): InstrumentTrack {
+  return {
+    id: label === "Track 1" ? "track-main" : `track-${crypto.randomUUID()}`,
+    label,
+    kind: "instrument",
+    instrumentId,
+    notes: [],
+    muted: false,
+    playDuringRecord: true,
+    volume: 0.85,
+  };
+}
+
+function createAudioTrack(label: string, audioUrl: string, sourceTitle: string): InstrumentTrack {
+  return {
+    id: `audio-${crypto.randomUUID()}`,
+    label,
+    kind: "audio",
+    sourceTitle,
+    audioUrl,
+    notes: [],
+    muted: false,
+    playDuringRecord: true,
+    volume: 0.85,
+  };
+}
+
+function serializeInstrumentTrack(track: InstrumentTrack): Record<string, unknown> {
+  return track.kind === "instrument"
+    ? {
+      id: track.id,
+      label: track.label,
+      kind: track.kind,
+      instrumentId: track.instrumentId,
+      notes: track.notes,
+      muted: track.muted,
+      playDuringRecord: track.playDuringRecord,
+      volume: track.volume,
+    }
+    : {
+      id: track.id,
+      label: track.label,
+      kind: track.kind,
+      sourceTitle: track.sourceTitle,
+      muted: track.muted,
+      playDuringRecord: track.playDuringRecord,
+      volume: track.volume,
+    };
+}
 
 const PIANO_KEYS = [
   { label: "C", semitone: 0 },
@@ -1272,6 +1541,7 @@ function scheduleInstrumentNote(
   note: InstrumentNote,
   bpm: number,
   instrumentId: string,
+  volume = 0.85,
   offsetSeconds = 0
 ): void {
   const instrument = instrumentDefinition(instrumentId);
@@ -1282,12 +1552,51 @@ function scheduleInstrumentNote(
   oscillator.type = instrument.oscillator;
   oscillator.frequency.setValueAtTime(midiFrequency(note.pitch + instrument.octave), start);
   gain.gain.setValueAtTime(0, start);
-  gain.gain.linearRampToValueAtTime(note.velocity * 0.75, start + instrument.attack);
-  gain.gain.setValueAtTime(note.velocity * 0.75, start + Math.max(instrument.attack, duration - instrument.release));
+  gain.gain.linearRampToValueAtTime(note.velocity * volume, start + instrument.attack);
+  gain.gain.setValueAtTime(note.velocity * volume, start + Math.max(instrument.attack, duration - instrument.release));
   gain.gain.linearRampToValueAtTime(0, start + duration + instrument.release);
   oscillator.connect(gain).connect(destination);
   oscillator.start(start);
   oscillator.stop(start + duration + instrument.release + 0.05);
+}
+
+async function scheduleInstrumentTracks(
+  context: BaseAudioContext,
+  destination: AudioNode,
+  tracks: InstrumentTrack[],
+  bpm: number,
+  offsetSeconds: number,
+  audioBufferCache: Map<string, AudioBuffer>
+): Promise<void> {
+  await Promise.all(tracks.map(async (track) => {
+    if (track.muted) return;
+    if (track.kind === "instrument") {
+      track.notes.forEach((note) => scheduleInstrumentNote(context, destination, note, bpm, track.instrumentId, track.volume, offsetSeconds));
+      return;
+    }
+    const buffer = await loadTrackAudioBuffer(context, track.audioUrl, audioBufferCache);
+    const source = context.createBufferSource();
+    const gain = context.createGain();
+    source.buffer = buffer;
+    gain.gain.value = track.volume;
+    source.connect(gain).connect(destination);
+    source.start(offsetSeconds);
+  }));
+}
+
+async function loadTrackAudioBuffer(
+  context: BaseAudioContext,
+  url: string,
+  audioBufferCache: Map<string, AudioBuffer>
+): Promise<AudioBuffer> {
+  const cached = audioBufferCache.get(url);
+  if (cached) return cached;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not load audio track: ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  const decoded = await context.decodeAudioData(buffer.slice(0));
+  audioBufferCache.set(url, decoded);
+  return decoded;
 }
 
 function instrumentDurationSeconds(notes: InstrumentNote[], bpm: number): number {
@@ -1296,25 +1605,28 @@ function instrumentDurationSeconds(notes: InstrumentNote[], bpm: number): number
 }
 
 async function renderInstrumentWav({
-  notes,
+  tracks,
   bpm,
   bars,
-  instrumentId,
   label,
+  audioBufferCache,
 }: {
-  notes: InstrumentNote[];
+  tracks: InstrumentTrack[];
   bpm: number;
   bars: number;
-  instrumentId: string;
   label: string;
+  audioBufferCache: Map<string, AudioBuffer>;
 }): Promise<File> {
-  const duration = Math.max(bars * 4 * beatSeconds(bpm), instrumentDurationSeconds(notes, bpm) + 0.5);
+  const instrumentEnd = Math.max(0, ...tracks.flatMap((track) => (
+    track.kind === "instrument" ? track.notes.map((note) => note.start + note.duration) : [bars * 4]
+  )));
+  const duration = Math.max(bars * 4 * beatSeconds(bpm), instrumentEnd * beatSeconds(bpm) + 0.5);
   const sampleRate = 44100;
   const context = new OfflineAudioContext(2, Math.ceil(sampleRate * duration), sampleRate);
   const master = context.createGain();
   master.gain.value = 0.86;
   master.connect(context.destination);
-  notes.forEach((note) => scheduleInstrumentNote(context, master, note, bpm, instrumentId, 0));
+  await scheduleInstrumentTracks(context, master, tracks, bpm, 0, audioBufferCache);
   const buffer = await context.startRendering();
   const wav = audioBufferToWav(buffer);
   return new File([wav], `${safeFileStem(label || "instrument")}.wav`, { type: "audio/wav" });
