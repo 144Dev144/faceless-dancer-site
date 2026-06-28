@@ -3,6 +3,17 @@ import { HomeTopNav } from "../components/home/HomeTopNav";
 import { WalletAuthCard } from "../components/WalletAuthCard";
 import { api, type CreatorPublishTokenRecord } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
+import {
+  createDraftWorkspaceItem,
+  getBrowserWorkspaceStatus,
+  getWorkspaceSetting,
+  listWorkspaceItems,
+  requestPersistentWorkspaceStorage,
+  saveWorkspaceItem,
+  setWorkspaceSetting,
+  type BrowserWorkspaceItem,
+  type BrowserWorkspaceStatus,
+} from "../lib/danceStationWorkspace";
 
 interface Props {
   session: SessionState;
@@ -14,10 +25,22 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [tokenName, setTokenName] = useState("Dance Station");
   const [newToken, setNewToken] = useState("");
   const [tokenStatus, setTokenStatus] = useState("");
+  const [workspaceItems, setWorkspaceItems] = useState<BrowserWorkspaceItem[]>([]);
+  const [workspaceStatus, setWorkspaceStatus] = useState<BrowserWorkspaceStatus | null>(null);
+  const [workspaceMessage, setWorkspaceMessage] = useState("");
+  const [draftTitle, setDraftTitle] = useState("Untitled browser draft");
+  const [showStorageHelp, setShowStorageHelp] = useState(false);
 
   useEffect(() => {
     document.body.classList.add("home-page-body");
     return () => document.body.classList.remove("home-page-body");
+  }, []);
+
+  useEffect(() => {
+    void refreshWorkspace();
+    getWorkspaceSetting<boolean>("storageIntroDismissed")
+      .then((dismissed) => setShowStorageHelp(!dismissed))
+      .catch(() => setShowStorageHelp(true));
   }, []);
 
   useEffect(() => {
@@ -43,6 +66,33 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     setTokens((current) => current.map((token) => (
       token.id === tokenId ? { ...token, revokedAt: new Date().toISOString() } : token
     )));
+  };
+
+  const refreshWorkspace = async () => {
+    const [items, status] = await Promise.all([
+      listWorkspaceItems(),
+      getBrowserWorkspaceStatus(),
+    ]);
+    setWorkspaceItems(items);
+    setWorkspaceStatus(status);
+  };
+
+  const createBrowserDraft = async () => {
+    const title = draftTitle.trim() || "Untitled browser draft";
+    await saveWorkspaceItem(createDraftWorkspaceItem(title));
+    setWorkspaceMessage("Saved to this browser.");
+    await refreshWorkspace();
+  };
+
+  const requestPersistence = async () => {
+    const granted = await requestPersistentWorkspaceStorage();
+    setWorkspaceMessage(granted ? "Persistent browser storage granted." : "Browser did not grant persistent storage.");
+    await refreshWorkspace();
+  };
+
+  const dismissStorageHelp = async () => {
+    await setWorkspaceSetting("storageIntroDismissed", true);
+    setShowStorageHelp(false);
   };
 
   return (
@@ -76,6 +126,80 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             <h2>Later</h2>
             <p>Remote compute for ACE-Step generation, extraction, autotransition, and Side-Step training.</p>
           </article>
+        </section>
+
+        {showStorageHelp ? (
+          <section className="dance-station-storage-modal" role="dialog" aria-modal="true" aria-label="Browser storage notice">
+            <div className="home-v2-card dance-station-storage-modal__card">
+              <p className="home-v2-kicker">First Use</p>
+              <h2>Browser work is saved on this device</h2>
+              <StorageCaveats />
+              <div className="dance-station-panel-actions">
+                <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => requestPersistence().catch((error) => setWorkspaceMessage(error.message))}>
+                  Request Persistent Storage
+                </button>
+                <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => dismissStorageHelp().catch(() => setShowStorageHelp(false))}>
+                  Got It
+                </button>
+              </div>
+              {workspaceMessage ? <p className="small">{workspaceMessage}</p> : null}
+            </div>
+          </section>
+        ) : null}
+
+        <section className="home-v2-card dance-station-workspace-panel">
+          <div className="dance-station-panel-head">
+            <div>
+              <p className="home-v2-kicker">Browser Workspace</p>
+              <h2>Saved on this device</h2>
+            </div>
+            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => setShowStorageHelp(true)}>
+              Help / Storage
+            </button>
+          </div>
+          <p>
+            This is the web version's local library layer. It keeps browser drafts and imported items available when
+            you return on the same browser, while account sync and publishing remain explicit actions.
+          </p>
+          <div className="dance-station-storage-grid">
+            <StatusChip label="IndexedDB" value={workspaceStatus?.indexedDb ? "Available" : "Unavailable"} good={Boolean(workspaceStatus?.indexedDb)} />
+            <StatusChip label="OPFS" value={workspaceStatus?.opfs ? "Available" : "Not available"} good={Boolean(workspaceStatus?.opfs)} />
+            <StatusChip label="Persistence" value={workspaceStatus?.persisted ? "Granted" : "Not granted"} good={Boolean(workspaceStatus?.persisted)} />
+            <StatusChip label="Quota" value={formatStorageEstimate(workspaceStatus)} good={Boolean(workspaceStatus?.estimate?.quota)} />
+          </div>
+          <div className="dance-station-panel-actions">
+            <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => requestPersistence().catch((error) => setWorkspaceMessage(error.message))}>
+              Request Persistent Storage
+            </button>
+            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => refreshWorkspace().catch((error) => setWorkspaceMessage(error.message))}>
+              Refresh Workspace
+            </button>
+          </div>
+          {workspaceMessage ? <p className="small">{workspaceMessage}</p> : null}
+
+          <div className="dance-station-draft-row">
+            <label>
+              <span>Draft label</span>
+              <input value={draftTitle} onInput={(event) => setDraftTitle((event.currentTarget as HTMLInputElement).value)} />
+            </label>
+            <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => createBrowserDraft().catch((error) => setWorkspaceMessage(error.message))}>
+              Save Browser Draft
+            </button>
+          </div>
+
+          <div className="dance-station-workspace-list">
+            {workspaceItems.length ? workspaceItems.map((item) => (
+              <article className="dance-station-workspace-item" key={item.id}>
+                <div>
+                  <strong>{item.title}</strong>
+                  <span>{item.kind} · {item.source}</span>
+                </div>
+                <span>{new Date(item.updatedAt).toLocaleString()}</span>
+              </article>
+            )) : (
+              <div className="library-empty">No browser-local workspace items yet.</div>
+            )}
+          </div>
         </section>
 
         <section className="home-v2-card dance-station-token-panel">
@@ -128,4 +252,32 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       </div>
     </main>
   );
+}
+
+function StorageCaveats(): JSX.Element {
+  return (
+    <ul className="dance-station-storage-caveats">
+      <li>Browser-local work is tied to this browser, device, and site address.</li>
+      <li>Closing the site and coming back normally should keep it available.</li>
+      <li>Clearing site data, using private browsing, or browser storage cleanup can remove it.</li>
+      <li>Persistent storage reduces eviction risk, but important work should be synced to your account.</li>
+      <li>Publishing makes approved items available in the public library.</li>
+    </ul>
+  );
+}
+
+function StatusChip({ label, value, good }: { label: string; value: string; good: boolean }): JSX.Element {
+  return (
+    <div className={`dance-station-status-chip${good ? " good" : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function formatStorageEstimate(status: BrowserWorkspaceStatus | null): string {
+  if (!status?.estimate?.quota) return "Unknown";
+  const usage = status.estimate.usage / (1024 * 1024);
+  const quota = status.estimate.quota / (1024 * 1024);
+  return `${usage.toFixed(0)} / ${quota.toFixed(0)} MB`;
 }

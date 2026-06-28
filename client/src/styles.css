@@ -4474,6 +4474,155 @@ label {
   font-size: 0.82rem;
 }
 
+.dance-station-workspace-panel {
+  margin-top: 20px;
+}
+
+.dance-station-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dance-station-panel-head h2 {
+  margin: 0;
+}
+
+.dance-station-panel-head .home-v2-btn {
+  width: auto;
+  min-width: 150px;
+}
+
+.dance-station-storage-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.dance-station-status-chip {
+  display: grid;
+  gap: 6px;
+  min-height: 82px;
+  align-content: center;
+  border: 1px solid rgba(117, 162, 212, 0.2);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(6, 15, 29, 0.66);
+}
+
+.dance-station-status-chip.good {
+  border-color: rgba(98, 247, 216, 0.34);
+}
+
+.dance-station-status-chip span {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.dance-station-status-chip strong {
+  color: #f0f7ff;
+  font-size: 0.95rem;
+}
+
+.dance-station-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.dance-station-panel-actions .home-v2-btn {
+  width: auto;
+}
+
+.dance-station-draft-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.dance-station-draft-row label {
+  display: grid;
+  gap: 7px;
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 0.84rem;
+}
+
+.dance-station-draft-row input {
+  margin: 0;
+  border: 1px solid rgba(117, 162, 212, 0.26);
+  border-radius: 12px;
+  background: rgba(6, 15, 29, 0.74);
+  color: #fff;
+  padding: 12px 14px;
+}
+
+.dance-station-draft-row .home-v2-btn {
+  width: auto;
+  min-width: 190px;
+}
+
+.dance-station-workspace-list {
+  display: grid;
+  gap: 10px;
+}
+
+.dance-station-workspace-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgba(117, 162, 212, 0.18);
+  border-radius: 14px;
+  padding: 13px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.dance-station-workspace-item div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dance-station-workspace-item strong {
+  overflow: hidden;
+  color: #f0f7ff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dance-station-workspace-item span {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.82rem;
+}
+
+.dance-station-storage-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.dance-station-storage-modal__card {
+  width: min(680px, 100%);
+}
+
+.dance-station-storage-caveats {
+  margin: 14px 0 0;
+  padding-left: 20px;
+  color: #a8bddb;
+  line-height: 1.65;
+}
+
 .home-v2-token-row {
   margin-top: 16px;
   display: flex;
