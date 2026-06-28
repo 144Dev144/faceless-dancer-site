@@ -9,15 +9,13 @@ export function HomeTopNav(): JSX.Element {
       </a>
 
       <nav className="home-v2-nav__links" aria-label="Primary">
-        <a href="#about">About</a>
-        <a href="#how-it-works">How It Works</a>
-        <a href="#apps">Apps</a>
-        <a href="#roadmap">Roadmap</a>
-        <a href="#docs">Docs</a>
-        <a href="#community">Community</a>
+        <a href="/">Home</a>
+        <a href="/game">Dance Stage</a>
+        <a href="/library">Library</a>
+        <a href="/dance-station">Dance Station</a>
       </nav>
 
-      <a className="home-v2-nav__cta" href="/game">Launch App</a>
+      <a className="home-v2-nav__cta" href="/game">Enter Stage</a>
     </header>
   );
 }

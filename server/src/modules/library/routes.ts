@@ -74,7 +74,20 @@ router.get("/", async (req, res) => {
     values
   );
 
-  return res.json({ items: result.rows.map((row) => mapLibraryItem(row)) });
+  const itemIds = result.rows.map((row) => row.id);
+  const filesByItem = new Map<string, any[]>();
+  if (itemIds.length) {
+    const fileResult = await pool.query(`SELECT * FROM library_files WHERE item_id = ANY($1::text[]) ORDER BY created_at ASC`, [
+      itemIds,
+    ]);
+    for (const file of fileResult.rows) {
+      const files = filesByItem.get(file.item_id) ?? [];
+      files.push(mapLibraryFile(file));
+      filesByItem.set(file.item_id, files);
+    }
+  }
+
+  return res.json({ items: result.rows.map((row) => mapLibraryItem(row, filesByItem.get(row.id) ?? [])) });
 });
 
 router.get("/:itemId", async (req, res) => {

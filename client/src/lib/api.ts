@@ -24,6 +24,38 @@ export interface PublicScheduleSlot {
   ends_at: string;
 }
 
+export interface LibraryFile {
+  id: string;
+  itemId: string;
+  role: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageProvider: string;
+  path: string;
+  publicUrl: string | null;
+  sha256: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface LibraryItem {
+  id: string;
+  ownerId: string | null;
+  visibility: string;
+  status: string;
+  kind: string;
+  title: string;
+  description: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  sourceLineage: Record<string, unknown>;
+  license: string | null;
+  attribution: string | null;
+  createdAt: string;
+  updatedAt: string;
+  files: LibraryFile[];
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
@@ -71,6 +103,18 @@ export const api = {
   siteSettings: () => apiFetch<SiteSettings>("/site-settings"),
 
   publicSchedule: () => apiFetch<{ slots: PublicScheduleSlot[] }>("/schedule/public"),
+
+  publicLibrary: (params: { kind?: string; tag?: string; limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.kind) query.set("kind", params.kind);
+    if (params.tag) query.set("tag", params.tag);
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.offset) query.set("offset", String(params.offset));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return apiFetch<{ items: LibraryItem[] }>(`/library${suffix}`);
+  },
+
+  publicLibraryItem: (itemId: string) => apiFetch<{ item: LibraryItem }>(`/library/${encodeURIComponent(itemId)}`),
 
   adminSiteSettings: () => apiFetch<SiteSettings>("/site-settings/admin"),
 
