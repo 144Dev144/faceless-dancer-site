@@ -4667,6 +4667,14 @@ label {
   background: #050d1a;
 }
 
+.dance-station-instrument-frame {
+  width: 100%;
+  min-height: 820px;
+  border: 1px solid rgba(117, 162, 212, 0.2);
+  border-radius: 8px;
+  background: #0b0f13;
+}
+
 .dance-station-control-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

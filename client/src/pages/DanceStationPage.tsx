@@ -110,6 +110,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const instrumentRecordingStartedAtRef = useRef(0);
   const instrumentTimerRefs = useRef<number[]>([]);
   const audioMassFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const instrumentLabFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const workspaceItemsRef = useRef<BrowserWorkspaceItem[]>([]);
   const audioMassObjectUrlsRef = useRef<string[]>([]);
   const instrumentAssetObjectUrlsRef = useRef<string[]>([]);
 
@@ -133,6 +135,10 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       .then((dismissed) => setShowStorageHelp(!dismissed))
       .catch(() => setShowStorageHelp(true));
   }, []);
+
+  useEffect(() => {
+    workspaceItemsRef.current = workspaceItems;
+  }, [workspaceItems]);
 
   useEffect(() => {
     let cancelled = false;
@@ -246,27 +252,47 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      if (event.source !== audioMassFrameRef.current?.contentWindow) return;
       const message = event.data || {};
-      if (message.source !== "dance-station-audiomass") return;
-      if (message.type === "dance-station:request-assets") {
-        setAudioEditPickerOpen(true);
-        return;
-      }
-      if (message.type === "dance-station:exported-audio") {
-        void saveAudioMassExport(message.payload).catch((error: Error) => setWorkspaceMessage(error.message));
-        return;
-      }
-      if (message.type === "dance-station-export-audio-result") {
-        if (message.ok) {
-          void saveAudioMassExport(message).catch((error: Error) => setWorkspaceMessage(error.message));
-        } else {
-          setWorkspaceMessage(message.error || "AudioMass could not export the current edit.");
+      if (event.source === audioMassFrameRef.current?.contentWindow) {
+        if (message.source !== "dance-station-audiomass") return;
+        if (message.type === "dance-station:request-assets") {
+          setAudioEditPickerOpen(true);
+          return;
+        }
+        if (message.type === "dance-station:exported-audio") {
+          void saveAudioMassExport(message.payload).catch((error: Error) => setWorkspaceMessage(error.message));
+          return;
+        }
+        if (message.type === "dance-station-export-audio-result") {
+          if (message.ok) {
+            void saveAudioMassExport(message).catch((error: Error) => setWorkspaceMessage(error.message));
+          } else {
+            setWorkspaceMessage(message.error || "AudioMass could not export the current edit.");
+          }
+          return;
+        }
+        if (message.type === "dance-station:audiomass-error") {
+          setWorkspaceMessage(message.payload?.message || "AudioMass reported an error.");
         }
         return;
       }
-      if (message.type === "dance-station:audiomass-error") {
-        setWorkspaceMessage(message.payload?.message || "AudioMass reported an error.");
+
+      if (event.source === instrumentLabFrameRef.current?.contentWindow) {
+        if (message.source !== "dance-station-instrument-lab") return;
+        if (message.type === "instrument-lab:ready" || message.type === "instrument-lab:request-assets") {
+          sendInstrumentLabAssets();
+          return;
+        }
+        if (message.type === "instrument-lab:save") {
+          void saveInstrumentLabExport(message.payload).catch((error: Error) => {
+            instrumentLabFrameRef.current?.contentWindow?.postMessage({
+              source: "dance-station-host",
+              type: "instrument-lab:error",
+              payload: { message: error.message },
+            }, window.location.origin);
+            setWorkspaceMessage(error.message);
+          });
+        }
       }
     };
     window.addEventListener("message", onMessage);
@@ -468,6 +494,60 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     await refreshWorkspace();
   };
 
+  const sendInstrumentLabAssets = () => {
+    const assets = buildAudioMassWorkspaceAssets(workspaceItemsRef.current, instrumentAssetObjectUrlsRef).map((asset) => ({
+      id: asset.id,
+      title: asset.title,
+      kind: asset.kind,
+      creatorName: asset.creatorName,
+      url: asset.url,
+    }));
+    instrumentLabFrameRef.current?.contentWindow?.postMessage({
+      source: "dance-station-host",
+      type: "instrument-lab:assets",
+      payload: { assets },
+    }, window.location.origin);
+  };
+
+  const saveInstrumentLabExport = async (payload: {
+    audio?: ArrayBuffer;
+    name?: string;
+    title?: string;
+    kind?: string;
+    mimeType?: string;
+    bpm?: number;
+    key?: string;
+    bars?: number;
+    tracks?: unknown[];
+  }) => {
+    if (!payload?.audio) throw new Error("Instrument Lab did not return rendered audio.");
+    const name = payload.name || `instrument-${Date.now()}.wav`;
+    const file = new File([payload.audio], name, { type: payload.mimeType || "audio/wav" });
+    const item = createPrivateAssetWorkspaceItem(file, payload.title || name.replace(/\.[^.]+$/, ""), payload.kind || "instrument");
+    item.metadata = {
+      ...item.metadata,
+      sourceTool: "instrument-lab",
+      bpm: payload.bpm,
+      key: payload.key,
+      bars: payload.bars,
+      tracks: payload.tracks,
+    };
+    await saveWorkspaceItem(item);
+    setWorkspaceMessage(`${item.title} saved to Private Assets.`);
+    await refreshWorkspace();
+    instrumentLabFrameRef.current?.contentWindow?.postMessage({
+      source: "dance-station-host",
+      type: "instrument-lab:saved",
+      payload: {
+        item: {
+          id: item.id,
+          title: item.title,
+          kind: item.kind,
+        },
+      },
+    }, window.location.origin);
+  };
+
   const loadAudioMassAsset = (asset: AudioMassWorkspaceAsset) => {
     audioMassFrameRef.current?.contentWindow?.postMessage({
       type: "dance-station:load-audio",
@@ -595,34 +675,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             ) : activePanel === "audio-edit" ? (
               <AudioEditPanel frameRef={audioMassFrameRef} />
             ) : activePanel === "instrument-lab" ? (
-              <InstrumentLabPanel
-                label={instrumentLabel}
-                bpm={instrumentBpm}
-                bars={instrumentBars}
-                octave={instrumentOctave}
-                instrumentId={activeInstrumentId}
-                notes={activeInstrumentNotes}
-                status={instrumentStatus}
-                recording={instrumentRecording}
-                countIn={instrumentCountIn}
-                cursorBeat={instrumentCursorBeat}
-                activeTrack={activeInstrumentTrack}
-                setLabel={setInstrumentLabel}
-                setBpm={setInstrumentBpm}
-                setBars={setInstrumentBars}
-                setOctave={setInstrumentOctave}
-                setInstrumentId={(value) => {
-                  setInstrumentId(value);
-                  if (activeInstrumentTrack?.kind === "instrument") {
-                    updateInstrumentTrack(activeInstrumentTrack.id, { instrumentId: value });
-                  }
-                }}
-                addNote={addInstrumentNote}
-                clearNotes={clearInstrumentNotes}
-                playClip={playInstrumentClip}
-                stopClip={stopInstrumentClip}
-                recordClip={startInstrumentRecording}
-              />
+              <InstrumentLabPanel frameRef={instrumentLabFrameRef} />
             ) : (
               <UnavailablePanel tool={tools.find((tool) => tool.id === activePanel) ?? tools[0]} />
             )}
@@ -646,23 +699,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                     saveCurrentEdit={requestAudioMassWorkspaceSave}
                   />
                 ) : null}
-                {activePanel === "instrument-lab" ? (
-                  <InstrumentLabSessionControls
-                    status={instrumentStatus}
-                    previewUrl={instrumentPreviewUrl}
-                    tracks={instrumentTracks}
-                    activeTrackId={activeInstrumentTrackId}
-                    assets={instrumentAssets}
-                    setActiveTrackId={setActiveInstrumentTrackId}
-                    updateTrack={updateInstrumentTrack}
-                    addTrack={addInstrumentTrack}
-                    importAssetTrack={importInstrumentAssetTrack}
-                    renderClip={renderInstrumentClip}
-                    renderTrack={renderActiveInstrumentTrack}
-                    saveClip={() => saveInstrumentClip()}
-                    saveTrack={() => saveInstrumentClip({ trackOnly: true })}
-                  />
-                ) : null}
+                {activePanel === "instrument-lab" ? <InstrumentLabWorkspaceControls audioAssetCount={countAudioWorkspaceItems(workspaceItems)} /> : null}
                 <p className="home-v2-kicker">Session</p>
                 <h2>{session.authenticated ? "Connected" : "Not connected"}</h2>
                 <p>
@@ -899,133 +936,30 @@ function AudioEditPanel({ frameRef }: { frameRef: RefObject<HTMLIFrameElement> }
   );
 }
 
-function InstrumentLabPanel({
-  label,
-  bpm,
-  bars,
-  octave,
-  instrumentId,
-  notes,
-  status,
-  recording,
-  countIn,
-  cursorBeat,
-  activeTrack,
-  setLabel,
-  setBpm,
-  setBars,
-  setOctave,
-  setInstrumentId,
-  addNote,
-  clearNotes,
-  playClip,
-  stopClip,
-  recordClip,
-}: {
-  label: string;
-  bpm: number;
-  bars: number;
-  octave: number;
-  instrumentId: string;
-  notes: InstrumentNote[];
-  status: string;
-  recording: boolean;
-  countIn: number;
-  cursorBeat: number;
-  activeTrack: InstrumentTrack | null;
-  setLabel: (value: string) => void;
-  setBpm: (value: number) => void;
-  setBars: (value: number) => void;
-  setOctave: (value: number) => void;
-  setInstrumentId: (value: string) => void;
-  addNote: (pitch: number) => void;
-  clearNotes: () => void;
-  playClip: () => Promise<void>;
-  stopClip: () => Promise<void>;
-  recordClip: () => Promise<void>;
-}): JSX.Element {
+function InstrumentLabPanel({ frameRef }: { frameRef: RefObject<HTMLIFrameElement> }): JSX.Element {
   return (
-    <div className="dance-station-tool-panel dance-station-instrument-workbench">
-      <div className="dance-station-panel-head dance-station-instrument-toolbar">
-        <div>
-          <p className="home-v2-kicker">Instrument Lab</p>
-          <h2>Performance editor</h2>
-        </div>
-        <span className={`dance-station-status-pill${recording ? " recording" : ""}`}>{countIn ? `Starts in ${countIn}` : status}</span>
-      </div>
+    <iframe
+      ref={frameRef}
+      className="dance-station-instrument-frame"
+      title="Dance Station Instrument Lab"
+      src="/dance-station/instrument-lab/site/index.html"
+      allow="autoplay; clipboard-read; clipboard-write"
+    ></iframe>
+  );
+}
 
-      <div className="dance-station-instrument-grid">
-        <section className="dance-station-inner-panel dance-station-instrument-sidebar">
-          <label>
-            <span>Clip name</span>
-            <input value={label} onInput={(event) => setLabel((event.currentTarget as HTMLInputElement).value)} />
-          </label>
-          <div className="dance-station-control-row">
-            <label>
-              <span>BPM</span>
-              <input type="number" min="40" max="240" value={bpm} onInput={(event) => setBpm(Number((event.currentTarget as HTMLInputElement).value || 120))} />
-            </label>
-            <label>
-              <span>Bars</span>
-              <input type="number" min="1" max="16" value={bars} onInput={(event) => setBars(Number((event.currentTarget as HTMLInputElement).value || 4))} />
-            </label>
-            <label>
-              <span>Octave</span>
-              <input type="number" min="1" max="7" value={octave} onInput={(event) => setOctave(Number((event.currentTarget as HTMLInputElement).value || 4))} />
-            </label>
-          </div>
-          <label>
-            <span>Instrument</span>
-            <select value={instrumentId} onChange={(event) => setInstrumentId((event.currentTarget as HTMLSelectElement).value)}>
-              {INSTRUMENT_BANK.map((instrument) => (
-                <option key={instrument.id} value={instrument.id}>{instrument.name}</option>
-              ))}
-            </select>
-          </label>
-        </section>
-
-        <section className="dance-station-inner-panel dance-station-performance-panel">
-          <div className="dance-station-editor-subtitle">
-            {activeTrack ? `${activeTrack.label} / ${activeTrack.kind === "audio" ? "audio track" : "instrument track"}` : "No track selected"}
-          </div>
-          <div className="dance-station-transport">
-            <button type="button" className="dance-station-tool-button primary" onClick={() => playClip()}>
-              Play
-            </button>
-            <button type="button" className="dance-station-tool-button" onClick={() => recordClip()} disabled={recording || Boolean(countIn)}>
-              {recording ? "Recording" : "Record"}
-            </button>
-            <button type="button" className="dance-station-tool-button" onClick={() => stopClip()}>
-              Stop
-            </button>
-            <button type="button" className="dance-station-tool-button" onClick={clearNotes}>
-              Clear Track
-            </button>
-          </div>
-          <div className="dance-station-piano">
-            {PIANO_KEYS.map((key) => (
-              <button
-                key={key.semitone}
-                type="button"
-                className={key.black ? "black" : ""}
-                onClick={() => addNote((octave + 1) * 12 + key.semitone)}
-              >
-                {key.label}
-              </button>
-            ))}
-          </div>
-          <div className={`dance-station-note-lane${recording ? " recording" : ""}`}>
-            <div className="dance-station-note-grid" aria-hidden="true"></div>
-            <div className="dance-station-note-cursor" style={{ left: `${cursorPercent(cursorBeat, bars)}%` }} aria-hidden="true"></div>
-            {notes.length ? notes.map((note) => (
-              <span key={note.id} style={instrumentNoteStyle(note, bars)}>
-                {midiNoteLabel(note.pitch)}
-              </span>
-            )) : <em>No notes yet.</em>}
-          </div>
-        </section>
+function InstrumentLabWorkspaceControls({ audioAssetCount }: { audioAssetCount: number }): JSX.Element {
+  return (
+    <section className="dance-station-side-tool dance-station-instrument-session">
+      <p className="home-v2-kicker">Instrument Lab</p>
+      <h2>Shared editor</h2>
+      <p className="small">
+        Private audio assets are available inside the editor. Rendered tracks and clips save back into Private Assets.
+      </p>
+      <div className="dance-station-storage-grid dance-station-storage-grid--compact">
+        <StatusChip label="Audio Assets" value={String(audioAssetCount)} good={audioAssetCount > 0} />
       </div>
-    </div>
+    </section>
   );
 }
 
