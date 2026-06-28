@@ -242,6 +242,14 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         void saveAudioMassExport(message.payload).catch((error: Error) => setWorkspaceMessage(error.message));
         return;
       }
+      if (message.type === "dance-station-export-audio-result") {
+        if (message.ok) {
+          void saveAudioMassExport(message).catch((error: Error) => setWorkspaceMessage(error.message));
+        } else {
+          setWorkspaceMessage(message.error || "AudioMass could not export the current edit.");
+        }
+        return;
+      }
       if (message.type === "dance-station:audiomass-error") {
         setWorkspaceMessage(message.payload?.message || "AudioMass reported an error.");
       }
@@ -387,6 +395,15 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     }, window.location.origin);
     setAudioEditPickerOpen(false);
     setWorkspaceMessage(`${asset.title} loaded into Audio Edit.`);
+  };
+
+  const requestAudioMassWorkspaceSave = () => {
+    audioMassFrameRef.current?.contentWindow?.postMessage({
+      type: "dance-station-export-audio",
+      requestId: crypto.randomUUID(),
+      name: `dance-station-edit-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`,
+    }, window.location.origin);
+    setWorkspaceMessage("Saving current Audio Edit buffer to Private Assets...");
   };
 
   useEffect(() => {
@@ -535,6 +552,13 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
               />
             ) : (
               <>
+                {activePanel === "audio-edit" ? (
+                  <AudioEditWorkspaceControls
+                    audioAssetCount={countAudioWorkspaceItems(workspaceItems)}
+                    openPrivateAssets={() => setAudioEditPickerOpen(true)}
+                    saveCurrentEdit={requestAudioMassWorkspaceSave}
+                  />
+                ) : null}
                 <p className="home-v2-kicker">Session</p>
                 <h2>{session.authenticated ? "Connected" : "Not connected"}</h2>
                 <p>
@@ -944,6 +968,32 @@ function AudioMassAssetPicker({
   );
 }
 
+function AudioEditWorkspaceControls({
+  audioAssetCount,
+  openPrivateAssets,
+  saveCurrentEdit,
+}: {
+  audioAssetCount: number;
+  openPrivateAssets: () => void;
+  saveCurrentEdit: () => void;
+}): JSX.Element {
+  return (
+    <section className="dance-station-side-tool">
+      <p className="home-v2-kicker">Audio Edit</p>
+      <h2>Workspace</h2>
+      <div className="dance-station-side-actions">
+        <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={openPrivateAssets}>
+          Open Private Asset
+        </button>
+        <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={saveCurrentEdit}>
+          Save Current Edit
+        </button>
+      </div>
+      <p className="small">{audioAssetCount} audio assets available. Disk open and download stay in AudioMass File.</p>
+    </section>
+  );
+}
+
 function UnavailablePanel({ tool }: { tool: typeof tools[number] }): JSX.Element {
   return (
     <div className="dance-station-unavailable-panel">
@@ -1308,6 +1358,23 @@ function buildAudioMassWorkspaceAssets(
       creatorName: item.creatorName,
       url,
     }];
+  });
+}
+
+function countAudioWorkspaceItems(items: BrowserWorkspaceItem[]): number {
+  return items.reduce((total, item) => total + (workspaceItemHasAudio(item) ? 1 : 0), 0);
+}
+
+function workspaceItemHasAudio(item: BrowserWorkspaceItem): boolean {
+  const blob = item.metadata?.blob;
+  if (blob instanceof Blob && blob.type.startsWith("audio/")) return true;
+  const files = item.metadata?.files;
+  if (!Array.isArray(files)) return false;
+  return files.some((file) => {
+    if (!file || typeof file !== "object") return false;
+    const candidate = file as { mimeType?: unknown; publicUrl?: unknown; url?: unknown };
+    return typeof (candidate.publicUrl || candidate.url) === "string"
+      && (typeof candidate.mimeType !== "string" || candidate.mimeType.startsWith("audio/"));
   });
 }
 

@@ -4787,6 +4787,30 @@ label {
   font-size: 0.82rem;
 }
 
+.dance-station-side-tool {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid rgba(117, 162, 212, 0.16);
+}
+
+.dance-station-side-tool h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.dance-station-side-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.dance-station-side-actions .home-v2-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
 .dance-station-note-lane em {
   position: absolute;
   inset: 0;
