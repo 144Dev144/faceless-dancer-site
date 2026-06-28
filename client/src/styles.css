@@ -4595,10 +4595,16 @@ label {
   gap: 18px;
 }
 
-.dance-station-edit-grid,
-.dance-station-instrument-grid {
+.dance-station-edit-grid {
   display: grid;
   gap: 14px;
+}
+
+.dance-station-instrument-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(360px, 1.6fr) minmax(220px, 0.8fr);
+  gap: 14px;
+  align-items: start;
 }
 
 .dance-station-inner-panel {
@@ -4655,7 +4661,7 @@ label {
 
 .dance-station-audiomass-frame {
   width: 100%;
-  min-height: 680px;
+  min-height: 760px;
   border: 1px solid rgba(117, 162, 212, 0.2);
   border-radius: 14px;
   background: #050d1a;
@@ -4704,7 +4710,7 @@ label {
 
 .dance-station-note-lane {
   position: relative;
-  min-height: 92px;
+  min-height: 210px;
   overflow: hidden;
   border: 1px solid rgba(117, 162, 212, 0.18);
   border-radius: 12px;
@@ -4715,7 +4721,7 @@ label {
 
 .dance-station-note-lane span {
   position: absolute;
-  top: 20px;
+  top: 28px;
   min-width: 34px;
   height: 34px;
   display: grid;
@@ -4725,6 +4731,60 @@ label {
   color: #04111f;
   font-size: 0.72rem;
   font-weight: 900;
+}
+
+.dance-station-instrument-workbench {
+  gap: 14px;
+}
+
+.dance-station-instrument-toolbar {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(117, 162, 212, 0.14);
+}
+
+.dance-station-performance-panel,
+.dance-station-render-panel,
+.dance-station-instrument-sidebar {
+  min-height: 100%;
+}
+
+.dance-station-transport {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dance-station-transport .home-v2-btn {
+  min-height: 36px;
+  padding: 8px 13px;
+}
+
+.dance-station-asset-picker {
+  max-width: 720px;
+}
+
+.dance-station-picker-list {
+  display: grid;
+  gap: 10px;
+  max-height: min(56vh, 520px);
+  overflow: auto;
+}
+
+.dance-station-picker-list button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(117, 162, 212, 0.18);
+  border-radius: 10px;
+  background: rgba(5, 13, 26, 0.72);
+  color: #eaf4ff;
+  text-align: left;
+}
+
+.dance-station-picker-list button span {
+  color: #8aa0bf;
+  font-size: 0.82rem;
 }
 
 .dance-station-note-lane em {
@@ -5504,6 +5564,7 @@ label {
   .home-v2-cards--three,
   .home-v2-tools-grid,
   .library-grid,
+  .dance-station-instrument-grid,
   .dance-station-status-grid,
   .home-v2-footer {
     grid-template-columns: 1fr;
