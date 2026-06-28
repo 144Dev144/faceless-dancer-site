@@ -66,7 +66,7 @@ export function LibraryPage(): JSX.Element {
           <h1>Shared music, datasets, adapters, and creative assets</h1>
           <p>
             The library is the bridge between Dance Station and the public Faceless Dancer platform. Published assets
-            will be browsable here, with files stored in Bunny and metadata indexed for reuse.
+            will be browsable here.
           </p>
         </section>
 
