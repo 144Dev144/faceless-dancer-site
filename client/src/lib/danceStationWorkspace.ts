@@ -7,7 +7,7 @@ export interface BrowserWorkspaceItem {
   id: string;
   title: string;
   kind: string;
-  source: "browser" | "public-library" | "account-sync";
+  source: "private" | "browser" | "public-library" | "account-sync";
   creatorName?: string;
   createdAt: string;
   updatedAt: string;
@@ -116,18 +116,27 @@ export async function requestPersistentWorkspaceStorage(): Promise<boolean> {
   return navigator.storage.persist();
 }
 
-export function createDraftWorkspaceItem(title: string): BrowserWorkspaceItem {
+export function createPrivateAssetWorkspaceItem(file: File, title?: string): BrowserWorkspaceItem {
   const now = new Date().toISOString();
-  const id = `browser-${crypto.randomUUID()}`;
+  const id = `private-${crypto.randomUUID()}`;
+  const kind = file.type.startsWith("audio/")
+    ? "audio"
+    : file.type.startsWith("image/")
+      ? "image"
+      : "file";
   return {
     id,
-    title,
-    kind: "draft",
-    source: "browser",
+    title: title?.trim() || file.name,
+    kind,
+    source: "private",
     createdAt: now,
     updatedAt: now,
     metadata: {
       storage: "browser",
+      fileName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      sizeBytes: file.size,
+      blob: file,
     },
   };
 }

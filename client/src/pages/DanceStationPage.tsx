@@ -1,10 +1,10 @@
 import { useEffect, useState } from "preact/hooks";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { WalletAuthCard } from "../components/WalletAuthCard";
-import { api, type CreatorPublishTokenRecord } from "../lib/api";
+import { api, type CreatorPublishTokenRecord, type LibraryItem } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
 import {
-  createDraftWorkspaceItem,
+  createPrivateAssetWorkspaceItem,
   getBrowserWorkspaceStatus,
   getWorkspaceSetting,
   listWorkspaceItems,
@@ -34,7 +34,7 @@ const tools: Array<{
     label: "Library",
     status: "Available",
     available: true,
-    description: "Browser-local workspace, imported assets, account sync, and public publishing.",
+    description: "Private assets, public library browsing, account sync, and publishing.",
   },
   {
     id: "audio-edit",
@@ -82,9 +82,13 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [workspaceItems, setWorkspaceItems] = useState<BrowserWorkspaceItem[]>([]);
   const [workspaceStatus, setWorkspaceStatus] = useState<BrowserWorkspaceStatus | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
-  const [draftTitle, setDraftTitle] = useState("Untitled browser draft");
+  const [assetLabel, setAssetLabel] = useState("");
   const [showStorageHelp, setShowStorageHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [publicItems, setPublicItems] = useState<LibraryItem[]>([]);
+  const [publicLoading, setPublicLoading] = useState(true);
+  const [publicError, setPublicError] = useState<string | null>(null);
+  const [publicQuery, setPublicQuery] = useState("");
 
   useEffect(() => {
     document.body.classList.add("home-page-body");
@@ -96,6 +100,25 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     getWorkspaceSetting<boolean>("storageIntroDismissed")
       .then((dismissed) => setShowStorageHelp(!dismissed))
       .catch(() => setShowStorageHelp(true));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPublicLoading(true);
+    setPublicError(null);
+    api.publicLibrary({ limit: 60 })
+      .then((payload) => {
+        if (!cancelled) setPublicItems(payload.items);
+      })
+      .catch((error: Error) => {
+        if (!cancelled) setPublicError(error.message);
+      })
+      .finally(() => {
+        if (!cancelled) setPublicLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -132,10 +155,35 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     setWorkspaceStatus(status);
   };
 
-  const createBrowserDraft = async () => {
-    const title = draftTitle.trim() || "Untitled browser draft";
-    await saveWorkspaceItem(createDraftWorkspaceItem(title));
-    setWorkspaceMessage("Saved to this browser.");
+  const addPrivateAsset = async (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (!file) return;
+    await saveWorkspaceItem(createPrivateAssetWorkspaceItem(file, assetLabel || file.name));
+    setAssetLabel("");
+    setWorkspaceMessage(`${file.name} added to Private Assets.`);
+    await refreshWorkspace();
+  };
+
+  const importPublicItem = async (item: LibraryItem) => {
+    const now = new Date().toISOString();
+    const creatorName = item.creator?.displayName || item.creator?.creatorSlug || "Faceless creator";
+    await saveWorkspaceItem({
+      id: `public-${item.id}`,
+      title: item.title,
+      kind: item.kind,
+      source: "public-library",
+      creatorName,
+      createdAt: now,
+      updatedAt: now,
+      metadata: {
+        libraryItemId: item.id,
+        creatorName,
+        description: item.description,
+        tags: item.tags,
+        files: item.files,
+      },
+    });
+    setWorkspaceMessage(`${item.title} added to Private Assets.`);
     await refreshWorkspace();
   };
 
@@ -185,7 +233,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
               Help
             </button>
             <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => setShowSettings((value) => !value)}>
-              Settings
+              {showSettings ? "Close Settings" : "Settings"}
             </button>
           </div>
         </section>
@@ -210,10 +258,16 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             {activePanel === "library" ? (
               <LibraryWorkspacePanel
                 workspaceItems={workspaceItems}
-                draftTitle={draftTitle}
+                assetLabel={assetLabel}
                 workspaceMessage={workspaceMessage}
-                setDraftTitle={setDraftTitle}
-                createBrowserDraft={createBrowserDraft}
+                publicItems={publicItems}
+                publicLoading={publicLoading}
+                publicError={publicError}
+                publicQuery={publicQuery}
+                setAssetLabel={setAssetLabel}
+                setPublicQuery={setPublicQuery}
+                addPrivateAsset={addPrivateAsset}
+                importPublicItem={importPublicItem}
                 refreshWorkspace={refreshWorkspace}
                 setWorkspaceMessage={setWorkspaceMessage}
               />
@@ -223,29 +277,34 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           </div>
 
           <aside className="home-v2-card dance-station-context-panel">
-            <p className="home-v2-kicker">Session</p>
-            <h2>{session.authenticated ? "Connected" : "Not connected"}</h2>
-            <p>
-              {session.authenticated
-                ? `Wallet ${session.publicKey.slice(0, 6)}...${session.publicKey.slice(-4)}`
-                : "Connect a wallet when you want to sync or publish account-owned assets."}
-            </p>
-            <div className="dance-station-storage-grid dance-station-storage-grid--compact">
-              <StatusChip label="Local Save" value={workspaceStatus?.indexedDb ? "Ready" : "Unavailable"} good={Boolean(workspaceStatus?.indexedDb)} />
-              <StatusChip label="Protection" value={workspaceStatus?.persisted ? "Granted" : "Optional"} good={Boolean(workspaceStatus?.persisted)} />
-            </div>
+            {showSettings ? (
+              <BrowserWorkspaceSettings
+                workspaceStatus={workspaceStatus}
+                workspaceMessage={workspaceMessage}
+                refreshWorkspace={refreshWorkspace}
+                requestPersistence={requestPersistence}
+                setShowStorageHelp={setShowStorageHelp}
+              />
+            ) : (
+              <>
+                <p className="home-v2-kicker">Session</p>
+                <h2>{session.authenticated ? "Connected" : "Not connected"}</h2>
+                <p>
+                  {session.authenticated
+                    ? `Wallet ${session.publicKey.slice(0, 6)}...${session.publicKey.slice(-4)}`
+                    : "Connect a wallet when you want to sync or publish account-owned assets."}
+                </p>
+                <div className="dance-station-storage-grid dance-station-storage-grid--compact">
+                  <StatusChip label="Private Assets" value={workspaceStatus?.indexedDb ? "Ready" : "Unavailable"} good={Boolean(workspaceStatus?.indexedDb)} />
+                  <StatusChip label="Protection" value={workspaceStatus?.persisted ? "Granted" : "Optional"} good={Boolean(workspaceStatus?.persisted)} />
+                </div>
+              </>
+            )}
           </aside>
         </section>
 
         {showSettings ? (
           <section className="dance-station-settings-grid">
-            <BrowserWorkspaceSettings
-              workspaceStatus={workspaceStatus}
-              workspaceMessage={workspaceMessage}
-              refreshWorkspace={refreshWorkspace}
-              requestPersistence={requestPersistence}
-              setShowStorageHelp={setShowStorageHelp}
-            />
             <PublishConnectionSettings
               session={session}
               setSession={setSession}
@@ -267,62 +326,180 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
 
 function LibraryWorkspacePanel({
   workspaceItems,
-  draftTitle,
+  assetLabel,
   workspaceMessage,
-  setDraftTitle,
-  createBrowserDraft,
+  publicItems,
+  publicLoading,
+  publicError,
+  publicQuery,
+  setAssetLabel,
+  setPublicQuery,
+  addPrivateAsset,
+  importPublicItem,
   refreshWorkspace,
   setWorkspaceMessage,
 }: {
   workspaceItems: BrowserWorkspaceItem[];
-  draftTitle: string;
+  assetLabel: string;
   workspaceMessage: string;
-  setDraftTitle: (value: string) => void;
-  createBrowserDraft: () => Promise<void>;
+  publicItems: LibraryItem[];
+  publicLoading: boolean;
+  publicError: string | null;
+  publicQuery: string;
+  setAssetLabel: (value: string) => void;
+  setPublicQuery: (value: string) => void;
+  addPrivateAsset: (fileList: FileList | null) => Promise<void>;
+  importPublicItem: (item: LibraryItem) => Promise<void>;
   refreshWorkspace: () => Promise<void>;
   setWorkspaceMessage: (value: string) => void;
 }): JSX.Element {
+  const privateItems = workspaceItems.filter((item) => item.source === "private" || item.source === "public-library");
+  const filteredPublicItems = publicItems.filter((item) => {
+    const needle = publicQuery.trim().toLowerCase();
+    if (!needle) return true;
+    return [item.title, item.description ?? "", item.kind, item.tags.join(" ")]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle);
+  });
+
   return (
     <>
       <div className="dance-station-panel-head">
         <div>
           <p className="home-v2-kicker">Library</p>
-          <h2>Browser workspace</h2>
+          <h2>Private Assets</h2>
         </div>
         <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => refreshWorkspace().catch((error) => setWorkspaceMessage(error.message))}>
           Refresh
         </button>
       </div>
       <p>
-        Save browser-local drafts, then import from the public library or sync to your account as those flows come
-        online in the shared Dance Station app.
+        Add audio and image files to your private workspace, import public items, then publish selected assets when
+        the browser publish flow is connected.
       </p>
 
       <div className="dance-station-draft-row">
         <label>
-          <span>Draft label</span>
-          <input value={draftTitle} onInput={(event) => setDraftTitle((event.currentTarget as HTMLInputElement).value)} />
+          <span>Asset label</span>
+          <input value={assetLabel} onInput={(event) => setAssetLabel((event.currentTarget as HTMLInputElement).value)} placeholder="optional display name" />
         </label>
-        <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => createBrowserDraft().catch((error) => setWorkspaceMessage(error.message))}>
-          Save Browser Draft
-        </button>
+        <label>
+          <span>Upload private asset</span>
+          <input type="file" accept="audio/*,image/*" onChange={(event) => addPrivateAsset((event.currentTarget as HTMLInputElement).files).catch((error) => setWorkspaceMessage(error.message))} />
+        </label>
       </div>
       {workspaceMessage ? <p className="small">{workspaceMessage}</p> : null}
 
       <div className="dance-station-workspace-list">
-        {workspaceItems.length ? workspaceItems.map((item) => (
-          <article className="dance-station-workspace-item" key={item.id}>
-            <div>
-              <strong>{item.title}</strong>
-              <span>{item.kind} · {item.source}</span>
-            </div>
-            <span>{new Date(item.updatedAt).toLocaleString()}</span>
-          </article>
+        {privateItems.length ? privateItems.map((item) => (
+          <PrivateAssetRow key={item.id} item={item} />
         )) : (
-          <div className="library-empty">No browser-local workspace items yet.</div>
+          <div className="library-empty">No private assets yet.</div>
         )}
       </div>
+
+      <div className="dance-station-section-divider"></div>
+
+      <div className="dance-station-panel-head">
+        <div>
+          <p className="home-v2-kicker">Public Library</p>
+          <h2>Browse and import</h2>
+        </div>
+      </div>
+      <div className="library-toolbar dance-station-library-toolbar" aria-label="Dance Station public library filters">
+        <label>
+          <span>Search public items</span>
+          <input
+            value={publicQuery}
+            onInput={(event) => setPublicQuery((event.currentTarget as HTMLInputElement).value)}
+            placeholder="title, kind, tag"
+          />
+        </label>
+      </div>
+      {publicLoading ? <div className="library-empty">Loading public library...</div> : null}
+      {publicError ? <div className="library-empty library-empty--error">{publicError}</div> : null}
+      {!publicLoading && !publicError && filteredPublicItems.length === 0 ? (
+        <div className="library-empty">No public items match this search.</div>
+      ) : null}
+      <section className="library-grid dance-station-public-grid">
+        {filteredPublicItems.map((item) => (
+          <PublicLibraryAssetCard key={item.id} item={item} importPublicItem={importPublicItem} setWorkspaceMessage={setWorkspaceMessage} />
+        ))}
+      </section>
     </>
+  );
+}
+
+function PrivateAssetRow({ item }: { item: BrowserWorkspaceItem }): JSX.Element {
+  const metadata = item.metadata;
+  const size = typeof metadata.sizeBytes === "number" ? formatBytes(metadata.sizeBytes) : "";
+  const mime = typeof metadata.mimeType === "string" ? metadata.mimeType : item.source === "public-library" ? "public library item" : "";
+  const updated = new Date(item.updatedAt);
+  return (
+    <article className="dance-station-workspace-item">
+      <div>
+        <strong>{item.title}</strong>
+        <span>{formatKind(item.kind)} · {item.source === "public-library" ? "Imported" : "Private"}{item.creatorName ? ` · ${item.creatorName}` : ""}</span>
+        {mime || size ? <small>{[mime, size].filter(Boolean).join(" · ")}</small> : null}
+      </div>
+      <div className="dance-station-asset-actions">
+        <span>{Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString()}</span>
+        <button type="button" className="home-v2-btn home-v2-btn--secondary" disabled>
+          Publish Soon
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function PublicLibraryAssetCard({
+  item,
+  importPublicItem,
+  setWorkspaceMessage,
+}: {
+  item: LibraryItem;
+  importPublicItem: (item: LibraryItem) => Promise<void>;
+  setWorkspaceMessage: (value: string) => void;
+}): JSX.Element {
+  const audioFile = item.files.find((file) => file.role === "audio" || file.role === "preview");
+  const coverFile = item.files.find((file) => file.role === "cover");
+  const datasetSamples = item.files.filter((file) => file.role === "dataset_sample").length;
+  const creatorName = item.creator?.displayName || item.creator?.creatorSlug || "Faceless creator";
+  const cardImage = coverFile?.publicUrl || item.creator?.bannerUrl || item.creator?.avatarUrl || "";
+
+  return (
+    <article className="library-card dance-station-public-card">
+      <div
+        className={`library-card__media${cardImage ? "" : " library-card__media--empty"}`}
+        style={cardImage ? { backgroundImage: `url(${cardImage})` } : undefined}
+      >
+        <span className="home-v2-tag">{formatKind(item.kind)}</span>
+      </div>
+      <div className="library-card__topline">
+        <span>By {creatorName}</span>
+        <span>{item.files.length} files</span>
+      </div>
+      <h2>{item.title}</h2>
+      <p>{item.description || fallbackDescription(item.kind)}</p>
+      <div className="library-card__facts">
+        {item.kind === "dataset" ? <span>{datasetSamples} samples</span> : null}
+        {item.license ? <span>{item.license}</span> : null}
+      </div>
+      {item.tags.length ? (
+        <div className="library-card__tags">
+          {item.tags.slice(0, 4).map((tag) => (
+            <span key={tag}>{tag}</span>
+          ))}
+        </div>
+      ) : null}
+      {audioFile?.publicUrl ? (
+        <audio className="library-card__audio" controls preload="metadata" src={audioFile.publicUrl}></audio>
+      ) : null}
+      <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => importPublicItem(item).catch((error) => setWorkspaceMessage(error.message))}>
+        Add to Private Assets
+      </button>
+    </article>
   );
 }
 
@@ -351,7 +528,7 @@ function BrowserWorkspaceSettings({
   setShowStorageHelp: (value: boolean) => void;
 }): JSX.Element {
   return (
-    <section className="home-v2-card dance-station-workspace-panel">
+    <section className="dance-station-workspace-panel dance-station-settings-panel">
       <div className="dance-station-panel-head">
         <div>
           <p className="home-v2-kicker">Browser Workspace Settings</p>
@@ -461,7 +638,7 @@ function PublishConnectionSettings({
 function StorageCaveats({ includeSettingsNote = false }: { includeSettingsNote?: boolean }): JSX.Element {
   return (
     <ul className="dance-station-storage-caveats">
-      <li>Browser-local work is tied to this browser, device, and site address.</li>
+      <li>Private assets are tied to this browser, device, and site address until synced or published.</li>
       <li>Closing the site and coming back normally should keep it available.</li>
       <li>Clearing site data, using private browsing, or browser storage cleanup can remove it.</li>
       <li>Persistent storage can add another layer of protection in Browser Workspace settings.</li>
@@ -485,4 +662,21 @@ function formatStorageEstimate(status: BrowserWorkspaceStatus | null): string {
   const usage = status.estimate.usage / (1024 * 1024);
   const quota = status.estimate.quota / (1024 * 1024);
   return `${usage.toFixed(0)} / ${quota.toFixed(0)} MB`;
+}
+
+function formatKind(kind: string): string {
+  return kind.replace(/_/g, " ");
+}
+
+function fallbackDescription(kind: string): string {
+  if (kind === "dataset") return "Captioned training dataset prepared for creator workflows.";
+  if (kind === "lokr") return "Trained LoKr adapter for compatible Dance Station generation workflows.";
+  if (kind === "rhythm_game") return "Rhythm-game-ready music and metadata package.";
+  return "Published Dance Station library item.";
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }

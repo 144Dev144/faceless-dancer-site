@@ -4463,6 +4463,10 @@ label {
   min-width: 118px;
 }
 
+.dance-station-header-actions .home-v2-btn--primary {
+  border-color: rgba(98, 247, 216, 0.45);
+}
+
 .dance-station-tool-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -4538,9 +4542,52 @@ label {
 
 .dance-station-settings-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.6fr);
+  grid-template-columns: minmax(320px, 0.6fr);
   gap: 16px;
   margin-top: 16px;
+}
+
+.dance-station-settings-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.dance-station-section-divider {
+  height: 1px;
+  margin: 26px 0;
+  background: linear-gradient(90deg, transparent, rgba(117, 162, 212, 0.32), transparent);
+}
+
+.dance-station-library-toolbar {
+  margin: 12px 0 18px;
+}
+
+.dance-station-public-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.dance-station-public-card .home-v2-btn {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.dance-station-workspace-item small {
+  display: block;
+  margin-top: 4px;
+  color: #7186a7;
+}
+
+.dance-station-asset-actions {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.dance-station-asset-actions .home-v2-btn {
+  width: auto;
+  min-height: 34px;
+  padding: 8px 12px;
+  opacity: 0.72;
 }
 
 .dance-station-token-panel {
