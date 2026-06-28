@@ -56,6 +56,22 @@ export interface LibraryItem {
   files: LibraryFile[];
 }
 
+export interface CreatorProfile {
+  displayName: string | null;
+  creatorSlug: string | null;
+  bio: string | null;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
+}
+
+export interface AuthSessionResponse {
+  authenticated: boolean;
+  publicKey: string;
+  isHolder: boolean;
+  isAdmin: boolean;
+  creatorProfile: CreatorProfile;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
@@ -81,16 +97,41 @@ export const api = {
   }),
 
   verify: (payload: { publicKey: string; nonce: string; message: string; signature: string }) =>
-    apiFetch<{ authenticated: boolean; publicKey: string; isHolder: boolean; isAdmin: boolean }>("/auth/verify", {
+    apiFetch<AuthSessionResponse>("/auth/verify", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
 
-  me: () => apiFetch<{ authenticated: boolean; publicKey: string; isHolder: boolean; isAdmin: boolean }>("/auth/me"),
+  me: () => apiFetch<AuthSessionResponse>("/auth/me"),
 
   refresh: () => apiFetch<{ refreshed: boolean }>("/auth/refresh", { method: "POST" }),
 
   logout: () => apiFetch<{ loggedOut: boolean }>("/auth/logout", { method: "POST" }),
+
+  saveCreatorProfile: (payload: { displayName?: string | null; creatorSlug?: string | null; bio?: string | null }) =>
+    apiFetch<AuthSessionResponse>("/auth/profile", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  uploadCreatorProfileMedia: async (kind: "avatar" | "banner", file: File) => {
+    const formData = new FormData();
+    formData.set("kind", kind);
+    formData.set("file", file);
+
+    const response = await fetch(`${API_BASE}/auth/profile/media`, {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error ?? `Upload failed (${response.status})`);
+    }
+
+    return response.json() as Promise<AuthSessionResponse>;
+  },
 
   createSubmission: (payload: { title: string; notes?: string; desiredStart: string; desiredEnd: string }) =>
     apiFetch<{ submissionId: string; status: string }>("/submissions", {
