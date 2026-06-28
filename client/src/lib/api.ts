@@ -72,6 +72,14 @@ export interface AuthSessionResponse {
   creatorProfile: CreatorProfile;
 }
 
+export interface CreatorPublishTokenRecord {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
@@ -132,6 +140,19 @@ export const api = {
 
     return response.json() as Promise<AuthSessionResponse>;
   },
+
+  creatorPublishTokens: () => apiFetch<{ tokens: CreatorPublishTokenRecord[] }>("/auth/publish-tokens"),
+
+  createCreatorPublishToken: (name: string) =>
+    apiFetch<{ token: string; record: CreatorPublishTokenRecord }>("/auth/publish-tokens", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  revokeCreatorPublishToken: (tokenId: string) =>
+    apiFetch<{ revoked: boolean }>(`/auth/publish-tokens/${encodeURIComponent(tokenId)}/revoke`, {
+      method: "POST",
+    }),
 
   createSubmission: (payload: { title: string; notes?: string; desiredStart: string; desiredEnd: string }) =>
     apiFetch<{ submissionId: string; status: string }>("/submissions", {

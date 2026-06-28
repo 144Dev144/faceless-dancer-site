@@ -64,7 +64,14 @@ export function HolderToolsSection({
                   <button
                     type="button"
                     className="secondary"
-                    onClick={() => api.logout().then(() => setSession({ loading: false, authenticated: false, publicKey: "", isHolder: false, isAdmin: false }))}
+                    onClick={() => api.logout().then(() => setSession({
+                      loading: false,
+                      authenticated: false,
+                      publicKey: "",
+                      isHolder: false,
+                      isAdmin: false,
+                      creatorProfile: null,
+                    }))}
                   >
                     Logout
                   </button>

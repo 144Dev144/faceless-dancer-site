@@ -33,3 +33,7 @@ export const creatorProfileUpdateSchema = z.object({
 });
 
 export const creatorProfileMediaKindSchema = z.enum(["avatar", "banner"]);
+
+export const createCreatorPublishTokenSchema = z.object({
+  name: z.string().trim().min(1).max(120).default("Dance Station"),
+});

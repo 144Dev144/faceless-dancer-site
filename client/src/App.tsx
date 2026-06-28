@@ -50,7 +50,7 @@ export function App() {
   }
 
   if (path === "/dance-station") {
-    return <DanceStationPage />;
+    return <DanceStationPage session={state} setSession={setState} />;
   }
 
   return (

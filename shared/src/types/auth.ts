@@ -22,3 +22,11 @@ export interface AuthSessionResponse {
   isAdmin: boolean;
   creatorProfile: CreatorProfile;
 }
+
+export interface CreatorPublishTokenRecord {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}

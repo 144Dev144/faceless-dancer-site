@@ -4,6 +4,7 @@ import { type Response, Router } from "express";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 import {
+  createCreatorPublishTokenSchema,
   creatorProfileMediaKindSchema,
   creatorProfileUpdateSchema,
   nonceRequestSchema,
@@ -381,6 +382,68 @@ router.post("/profile/media", requireAuth, upload.single("file"), async (req, re
   } catch (error: any) {
     return res.status(500).json({ error: error.message ?? "Failed to upload creator media" });
   }
+});
+
+router.get("/publish-tokens", requireAuth, async (req, res) => {
+  const result = await pool.query(
+    `SELECT id, name, created_at, last_used_at, revoked_at
+     FROM creator_publish_tokens
+     WHERE user_id = $1
+     ORDER BY created_at DESC`,
+    [req.session!.userId]
+  );
+
+  return res.json({
+    tokens: result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      createdAt: row.created_at,
+      lastUsedAt: row.last_used_at,
+      revokedAt: row.revoked_at,
+    })),
+  });
+});
+
+router.post("/publish-tokens", requireAuth, async (req, res) => {
+  const parsed = createCreatorPublishTokenSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid payload", details: parsed.error.flatten() });
+  }
+
+  const token = `fdpub_${randomToken(42)}`;
+  const tokenId = createId();
+  await pool.query(
+    `INSERT INTO creator_publish_tokens (id, user_id, token_hash, name)
+     VALUES ($1, $2, $3, $4)`,
+    [tokenId, req.session!.userId, hashToken(token), parsed.data.name]
+  );
+
+  return res.status(201).json({
+    token,
+    record: {
+      id: tokenId,
+      name: parsed.data.name,
+      createdAt: new Date().toISOString(),
+      lastUsedAt: null,
+      revokedAt: null,
+    },
+  });
+});
+
+router.post("/publish-tokens/:tokenId/revoke", requireAuth, async (req, res) => {
+  const result = await pool.query(
+    `UPDATE creator_publish_tokens
+     SET revoked_at = now()
+     WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+     RETURNING id`,
+    [req.params.tokenId, req.session!.userId]
+  );
+
+  if (!result.rows[0]) {
+    return res.status(404).json({ error: "Publish token not found" });
+  }
+
+  return res.json({ revoked: true });
 });
 
 export const authRouter = router;

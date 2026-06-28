@@ -60,6 +60,24 @@ export const createLibraryFileSchema = z.object({
   metadata: libraryJsonObjectSchema,
 });
 
+export const libraryFileUploadFieldsSchema = z.object({
+  role: libraryFileRoleSchema,
+  metadata: z.preprocess((value) => {
+    if (typeof value !== "string" || !value.trim()) {
+      return {};
+    }
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }, libraryJsonObjectSchema),
+});
+
+export const publishLibraryItemSchema = createLibraryItemSchema.extend({
+  localId: z.string().trim().min(1).max(200).optional(),
+});
+
 export const libraryListQuerySchema = z.object({
   kind: libraryKindSchema.optional(),
   tag: z.string().trim().min(1).max(48).optional(),

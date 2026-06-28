@@ -4402,6 +4402,60 @@ label {
   margin-bottom: 16px;
 }
 
+.dance-station-token-panel {
+  margin-top: 20px;
+}
+
+.dance-station-token-controls {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.dance-station-token-controls label {
+  display: grid;
+  gap: 7px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.88rem;
+}
+
+.dance-station-token-controls input,
+.dance-station-token-controls textarea {
+  width: 100%;
+  border: 1px solid rgba(117, 162, 212, 0.26);
+  border-radius: 12px;
+  background: rgba(6, 15, 29, 0.74);
+  color: #fff;
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.dance-station-token-list {
+  display: grid;
+  gap: 12px;
+}
+
+.dance-station-token-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(117, 162, 212, 0.18);
+  border-radius: 14px;
+  padding: 13px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.dance-station-token-row div {
+  display: grid;
+  gap: 4px;
+}
+
+.dance-station-token-row span {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.82rem;
+}
+
 .home-v2-token-row {
   margin-top: 16px;
   display: flex;

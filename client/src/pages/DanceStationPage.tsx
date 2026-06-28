@@ -1,11 +1,49 @@
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { HomeTopNav } from "../components/home/HomeTopNav";
+import { WalletAuthCard } from "../components/WalletAuthCard";
+import { api, type CreatorPublishTokenRecord } from "../lib/api";
+import type { SessionState } from "../hooks/useSession";
 
-export function DanceStationPage(): JSX.Element {
+interface Props {
+  session: SessionState;
+  setSession: (next: SessionState) => void;
+}
+
+export function DanceStationPage({ session, setSession }: Props): JSX.Element {
+  const [tokens, setTokens] = useState<CreatorPublishTokenRecord[]>([]);
+  const [tokenName, setTokenName] = useState("Dance Station");
+  const [newToken, setNewToken] = useState("");
+  const [tokenStatus, setTokenStatus] = useState("");
+
   useEffect(() => {
     document.body.classList.add("home-page-body");
     return () => document.body.classList.remove("home-page-body");
   }, []);
+
+  useEffect(() => {
+    if (!session.authenticated) {
+      setTokens([]);
+      return;
+    }
+    api.creatorPublishTokens()
+      .then((payload) => setTokens(payload.tokens))
+      .catch((error: Error) => setTokenStatus(error.message));
+  }, [session.authenticated]);
+
+  const createToken = async () => {
+    setTokenStatus("Creating token...");
+    const payload = await api.createCreatorPublishToken(tokenName || "Dance Station");
+    setNewToken(payload.token);
+    setTokens((current) => [payload.record, ...current]);
+    setTokenStatus("Token created. Copy it now; it will only be shown once.");
+  };
+
+  const revokeToken = async (tokenId: string) => {
+    await api.revokeCreatorPublishToken(tokenId);
+    setTokens((current) => current.map((token) => (
+      token.id === tokenId ? { ...token, revokedAt: new Date().toISOString() } : token
+    )));
+  };
 
   return (
     <main className="home-v2 library-page-shell">
@@ -38,6 +76,54 @@ export function DanceStationPage(): JSX.Element {
             <h2>Later</h2>
             <p>Remote compute for ACE-Step generation, extraction, autotransition, and Side-Step training.</p>
           </article>
+        </section>
+
+        <section className="home-v2-card dance-station-token-panel">
+          <p className="home-v2-kicker">Publish Connection</p>
+          <h2>Connect the local app to your public library</h2>
+          <p>
+            Generate a creator publish token, then paste it into Dance Station's Library connection settings. Media
+            uploads go through the site API and are stored in Bunny CDN.
+          </p>
+
+          {session.authenticated ? (
+            <div className="dance-station-token-controls">
+              <label>
+                <span>Token name</span>
+                <input
+                  value={tokenName}
+                  onInput={(event) => setTokenName((event.currentTarget as HTMLInputElement).value)}
+                />
+              </label>
+              <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => createToken().catch((error) => setTokenStatus(error.message))}>
+                Create Publish Token
+              </button>
+              {newToken ? (
+                <label>
+                  <span>New token</span>
+                  <textarea readOnly rows={3} value={newToken}></textarea>
+                </label>
+              ) : null}
+              {tokenStatus ? <p className="small">{tokenStatus}</p> : null}
+              <div className="dance-station-token-list">
+                {tokens.map((token) => (
+                  <div className="dance-station-token-row" key={token.id}>
+                    <div>
+                      <strong>{token.name}</strong>
+                      <span>{token.revokedAt ? "Revoked" : token.lastUsedAt ? `Last used ${new Date(token.lastUsedAt).toLocaleString()}` : "Not used yet"}</span>
+                    </div>
+                    {!token.revokedAt ? (
+                      <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => revokeToken(token.id).catch((error) => setTokenStatus(error.message))}>
+                        Revoke
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <WalletAuthCard onVerified={(next) => setSession({ loading: false, ...next })} />
+          )}
         </section>
       </div>
     </main>
