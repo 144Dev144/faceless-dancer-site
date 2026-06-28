@@ -4523,6 +4523,10 @@ label {
   gap: 16px;
 }
 
+.dance-station-main-grid--wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .dance-station-main-panel,
 .dance-station-context-panel {
   min-height: 360px;

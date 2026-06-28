@@ -654,7 +654,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           ))}
         </section>
 
-        <section className="dance-station-main-grid">
+        <section className={`dance-station-main-grid${activePanel === "instrument-lab" ? " dance-station-main-grid--wide" : ""}`}>
           <div className="home-v2-card dance-station-main-panel">
             {activePanel === "library" ? (
               <LibraryWorkspacePanel
@@ -681,7 +681,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             )}
           </div>
 
-          <aside className="home-v2-card dance-station-context-panel">
+          {activePanel !== "instrument-lab" ? <aside className="home-v2-card dance-station-context-panel">
             {showSettings ? (
               <BrowserWorkspaceSettings
                 workspaceStatus={workspaceStatus}
@@ -699,7 +699,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                     saveCurrentEdit={requestAudioMassWorkspaceSave}
                   />
                 ) : null}
-                {activePanel === "instrument-lab" ? <InstrumentLabWorkspaceControls audioAssetCount={countAudioWorkspaceItems(workspaceItems)} /> : null}
                 <p className="home-v2-kicker">Session</p>
                 <h2>{session.authenticated ? "Connected" : "Not connected"}</h2>
                 <p>
@@ -713,7 +712,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                 </div>
               </>
             )}
-          </aside>
+          </aside> : null}
         </section>
 
         {showSettings ? (
