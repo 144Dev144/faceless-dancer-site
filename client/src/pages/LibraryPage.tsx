@@ -112,14 +112,23 @@ export function LibraryPage(): JSX.Element {
 
 function LibraryCard({ item }: { item: LibraryItem }): JSX.Element {
   const audioFile = item.files.find((file) => file.role === "audio" || file.role === "preview");
+  const coverFile = item.files.find((file) => file.role === "cover");
   const datasetSamples = item.files.filter((file) => file.role === "dataset_sample").length;
   const fileCount = item.files.length;
   const updated = new Date(item.updatedAt);
+  const creatorName = item.creator?.displayName || item.creator?.creatorSlug || "Faceless creator";
+  const cardImage = coverFile?.publicUrl || item.creator?.bannerUrl || item.creator?.avatarUrl || "";
 
   return (
     <article className="library-card">
-      <div className="library-card__topline">
+      <div
+        className={`library-card__media${cardImage ? "" : " library-card__media--empty"}`}
+        style={cardImage ? { backgroundImage: `url(${cardImage})` } : undefined}
+      >
         <span className="home-v2-tag">{formatKind(item.kind)}</span>
+      </div>
+      <div className="library-card__topline">
+        <span>By {creatorName}</span>
         <span>{Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString()}</span>
       </div>
       <h2>{item.title}</h2>

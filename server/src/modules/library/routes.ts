@@ -40,6 +40,14 @@ function mapLibraryItem(row: any, files: any[] = []) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     files,
+    creator: row.owner_user_id
+      ? {
+          displayName: row.creator_display_name ?? null,
+          creatorSlug: row.creator_slug ?? null,
+          avatarUrl: row.creator_avatar_url ?? null,
+          bannerUrl: row.creator_banner_url ?? null,
+        }
+      : null,
   };
 }
 
@@ -100,7 +108,18 @@ async function resolvePublishUser(req: any, res: any): Promise<{ userId: string;
 }
 
 async function readItemWithFiles(itemId: string) {
-  const itemResult = await pool.query(`SELECT * FROM library_items WHERE id = $1 LIMIT 1`, [itemId]);
+  const itemResult = await pool.query(
+    `SELECT li.*,
+            u.display_name AS creator_display_name,
+            u.creator_slug,
+            u.avatar_public_url AS creator_avatar_url,
+            u.banner_public_url AS creator_banner_url
+     FROM library_items li
+     LEFT JOIN users u ON u.id = li.owner_user_id
+     WHERE li.id = $1
+     LIMIT 1`,
+    [itemId]
+  );
   const item = itemResult.rows[0];
   if (!item) {
     return null;
@@ -134,9 +153,15 @@ router.get("/", async (req, res) => {
   const offsetIndex = values.length;
 
   const result = await pool.query(
-    `SELECT * FROM library_items
-     WHERE ${filters.join(" AND ")}
-     ORDER BY created_at DESC
+    `SELECT li.*,
+            u.display_name AS creator_display_name,
+            u.creator_slug,
+            u.avatar_public_url AS creator_avatar_url,
+            u.banner_public_url AS creator_banner_url
+     FROM library_items li
+     LEFT JOIN users u ON u.id = li.owner_user_id
+     WHERE ${filters.map((filter) => `li.${filter}`).join(" AND ")}
+     ORDER BY li.created_at DESC
      LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
     values
   );
@@ -377,7 +402,15 @@ router.post("/publish/items/:itemId/publish", async (req, res) => {
 
 router.get("/:itemId", async (req, res) => {
   const itemResult = await pool.query(
-    `SELECT * FROM library_items WHERE id = $1 AND visibility = 'public' AND status = 'published' LIMIT 1`,
+    `SELECT li.*,
+            u.display_name AS creator_display_name,
+            u.creator_slug,
+            u.avatar_public_url AS creator_avatar_url,
+            u.banner_public_url AS creator_banner_url
+     FROM library_items li
+     LEFT JOIN users u ON u.id = li.owner_user_id
+     WHERE li.id = $1 AND li.visibility = 'public' AND li.status = 'published'
+     LIMIT 1`,
     [req.params.itemId]
   );
   const item = itemResult.rows[0];

@@ -38,6 +38,13 @@ export interface LibraryFile {
   createdAt: string;
 }
 
+export interface LibraryCreator {
+  displayName: string | null;
+  creatorSlug: string | null;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
+}
+
 export interface LibraryItem {
   id: string;
   ownerId: string | null;
@@ -54,6 +61,7 @@ export interface LibraryItem {
   createdAt: string;
   updatedAt: string;
   files: LibraryFile[];
+  creator: LibraryCreator | null;
 }
 
 export interface CreatorProfile {

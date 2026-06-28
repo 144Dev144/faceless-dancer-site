@@ -4346,6 +4346,24 @@ label {
   box-shadow: 0 18px 54px rgba(0, 0, 0, 0.26);
 }
 
+.library-card__media {
+  display: flex;
+  min-height: 138px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 12px;
+  border: 1px solid rgba(117, 162, 212, 0.18);
+  border-radius: 14px;
+  background-position: center;
+  background-size: cover;
+}
+
+.library-card__media--empty {
+  background:
+    radial-gradient(circle at 20% 18%, rgba(98, 247, 216, 0.24), transparent 30%),
+    linear-gradient(135deg, rgba(36, 53, 91, 0.92), rgba(6, 15, 29, 0.96));
+}
+
 .library-card__topline,
 .library-card__facts,
 .library-card__tags {

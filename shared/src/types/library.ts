@@ -45,6 +45,13 @@ export interface LibraryFileRecord {
   createdAt: string;
 }
 
+export interface LibraryCreatorRecord {
+  displayName: string | null;
+  creatorSlug: string | null;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
+}
+
 export interface LibraryItemRecord {
   id: string;
   ownerId: string | null;
@@ -61,4 +68,5 @@ export interface LibraryItemRecord {
   createdAt: string;
   updatedAt: string;
   files: LibraryFileRecord[];
+  creator: LibraryCreatorRecord | null;
 }
