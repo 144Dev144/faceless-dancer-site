@@ -11,15 +11,17 @@ Start the site-hosted Dance Station experience with a browser-local workspace th
   - IndexedDB availability
   - Origin Private File System availability
   - persistent-storage grant status
-- Request persistent storage with `navigator.storage.persist()` from the UI.
+- Request persistent storage with `navigator.storage.persist()` from the Browser Workspace settings UI.
 - Add first-use storage guidance explaining:
   - browser-local work is per browser/device/site origin
   - clearing site data removes it
   - private/incognito sessions are not durable
   - browser storage may still be evicted under pressure unless persistent storage is granted
   - account sync/public publishing are the durable cross-device paths
+- Keep the first-use popup informational only. Do not ask for persistence from the popup.
 - Add a Help/Storage panel so users can revisit the caveats later.
 - Add a small browser-local library shell that can create a draft item and list stored workspace items.
+- Replace the placeholder landing page with a tool-first Dance Station app shell.
 
 ## Affected Files
 
