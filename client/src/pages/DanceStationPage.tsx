@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { WalletAuthCard } from "../components/WalletAuthCard";
 import { api, type CreatorPublishTokenRecord, type LibraryItem } from "../lib/api";
@@ -39,15 +39,15 @@ const tools: Array<{
   {
     id: "audio-edit",
     label: "Audio Edit",
-    status: "Next",
-    available: false,
+    status: "Available",
+    available: true,
     description: "AudioMass browser editing with workspace import/export.",
   },
   {
     id: "instrument-lab",
     label: "Instrument Lab",
-    status: "Next",
-    available: false,
+    status: "Available",
+    available: true,
     description: "Browser instruments, MIDI-style clips, and rendered workspace assets.",
   },
   {
@@ -89,10 +89,33 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [publicLoading, setPublicLoading] = useState(true);
   const [publicError, setPublicError] = useState<string | null>(null);
   const [publicQuery, setPublicQuery] = useState("");
+  const [selectedEditAssetId, setSelectedEditAssetId] = useState("");
+  const [editAudioUrl, setEditAudioUrl] = useState("");
+  const [editSourceLabel, setEditSourceLabel] = useState("No audio asset loaded");
+  const [editLabel, setEditLabel] = useState("Edited audio");
+  const [instrumentLabel, setInstrumentLabel] = useState("Instrument idea");
+  const [instrumentBpm, setInstrumentBpm] = useState(120);
+  const [instrumentBars, setInstrumentBars] = useState(4);
+  const [instrumentOctave, setInstrumentOctave] = useState(4);
+  const [instrumentId, setInstrumentId] = useState("synth.lead");
+  const [instrumentNotes, setInstrumentNotes] = useState<InstrumentNote[]>([]);
+  const [instrumentStatus, setInstrumentStatus] = useState("Ready");
+  const [instrumentPreviewUrl, setInstrumentPreviewUrl] = useState("");
+  const editObjectUrlRef = useRef("");
+  const instrumentObjectUrlRef = useRef("");
+  const liveAudioContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     document.body.classList.add("home-page-body");
     return () => document.body.classList.remove("home-page-body");
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (editObjectUrlRef.current) URL.revokeObjectURL(editObjectUrlRef.current);
+      if (instrumentObjectUrlRef.current) URL.revokeObjectURL(instrumentObjectUrlRef.current);
+      void liveAudioContextRef.current?.close();
+    };
   }, []);
 
   useEffect(() => {
@@ -202,6 +225,141 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     setShowStorageHelp(false);
   };
 
+  const audioAssets = useMemo(() => workspaceItems.filter(isAudioWorkspaceItem), [workspaceItems]);
+
+  const loadAudioForEdit = async (itemId: string) => {
+    setSelectedEditAssetId(itemId);
+    const item = workspaceItems.find((candidate) => candidate.id === itemId);
+    if (!item) {
+      setEditAudioUrl("");
+      setEditSourceLabel("No audio asset loaded");
+      return;
+    }
+    const url = await workspaceItemAudioUrl(item);
+    if (!url) {
+      setWorkspaceMessage("That asset does not include playable audio.");
+      return;
+    }
+    if (editObjectUrlRef.current) URL.revokeObjectURL(editObjectUrlRef.current);
+    editObjectUrlRef.current = url.startsWith("blob:") ? url : "";
+    setEditAudioUrl(url);
+    setEditSourceLabel(item.title);
+  };
+
+  const loadAudioFileForEdit = (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (!file) return;
+    if (editObjectUrlRef.current) URL.revokeObjectURL(editObjectUrlRef.current);
+    const url = URL.createObjectURL(file);
+    editObjectUrlRef.current = url;
+    setSelectedEditAssetId("");
+    setEditAudioUrl(url);
+    setEditSourceLabel(file.name);
+    setEditLabel(file.name.replace(/\.[^.]+$/, "") || "Edited audio");
+  };
+
+  const saveEditedAsset = async (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (!file) {
+      setWorkspaceMessage("Choose the exported audio file from your editor.");
+      return;
+    }
+    await saveWorkspaceItem(createPrivateAssetWorkspaceItem(file, editLabel || file.name, "edit"));
+    setWorkspaceMessage(`${file.name} saved as an edit.`);
+    await refreshWorkspace();
+  };
+
+  const addInstrumentNote = (pitch: number, startBeat?: number) => {
+    const start = startBeat ?? nextInstrumentStart(instrumentNotes);
+    setInstrumentNotes((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        pitch,
+        start,
+        duration: 0.5,
+        velocity: 0.82,
+      },
+    ]);
+  };
+
+  const clearInstrumentNotes = () => {
+    setInstrumentNotes([]);
+    setInstrumentStatus("Ready");
+  };
+
+  const playInstrumentClip = async () => {
+    if (!instrumentNotes.length) {
+      setInstrumentStatus("Add notes first");
+      return;
+    }
+    const context = liveAudioContextRef.current || new AudioContext();
+    liveAudioContextRef.current = context;
+    await context.resume();
+    setInstrumentStatus("Playing");
+    const destination = context.destination;
+    const startAt = context.currentTime + 0.04;
+    instrumentNotes.forEach((note) => scheduleInstrumentNote(context, destination, note, instrumentBpm, instrumentId, startAt));
+    window.setTimeout(() => setInstrumentStatus("Ready"), Math.max(600, instrumentDurationSeconds(instrumentNotes, instrumentBpm) * 1000 + 200));
+  };
+
+  const stopInstrumentClip = async () => {
+    await liveAudioContextRef.current?.close();
+    liveAudioContextRef.current = null;
+    setInstrumentStatus("Ready");
+  };
+
+  const renderInstrumentClip = async () => {
+    if (!instrumentNotes.length) {
+      setInstrumentStatus("Add notes first");
+      return null;
+    }
+    setInstrumentStatus("Rendering");
+    const file = await renderInstrumentWav({
+      notes: instrumentNotes,
+      bpm: instrumentBpm,
+      bars: instrumentBars,
+      instrumentId,
+      label: instrumentLabel,
+    });
+    if (instrumentObjectUrlRef.current) URL.revokeObjectURL(instrumentObjectUrlRef.current);
+    const url = URL.createObjectURL(file);
+    instrumentObjectUrlRef.current = url;
+    setInstrumentPreviewUrl(url);
+    setInstrumentStatus("Rendered");
+    return file;
+  };
+
+  const saveInstrumentClip = async () => {
+    const file = await renderInstrumentClip();
+    if (!file) return;
+    const item = createPrivateAssetWorkspaceItem(file, instrumentLabel || file.name, "instrument");
+    item.metadata = {
+      ...item.metadata,
+      bpm: instrumentBpm,
+      bars: instrumentBars,
+      instrumentId,
+      notes: instrumentNotes,
+    };
+    await saveWorkspaceItem(item);
+    setWorkspaceMessage(`${item.title} saved to Private Assets.`);
+    await refreshWorkspace();
+  };
+
+  useEffect(() => {
+    if (activePanel !== "instrument-lab") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      const semitone = KEYBOARD_NOTE_MAP[event.key.toLowerCase()];
+      if (semitone === undefined) return;
+      event.preventDefault();
+      addInstrumentNote((instrumentOctave + 1) * 12 + semitone);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activePanel, instrumentNotes, instrumentOctave]);
+
   return (
     <main className="home-v2 library-page-shell dance-station-app-shell">
       <div className="home-v2-shell">
@@ -270,6 +428,41 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                 importPublicItem={importPublicItem}
                 refreshWorkspace={refreshWorkspace}
                 setWorkspaceMessage={setWorkspaceMessage}
+              />
+            ) : activePanel === "audio-edit" ? (
+              <AudioEditPanel
+                audioAssets={audioAssets}
+                selectedEditAssetId={selectedEditAssetId}
+                editAudioUrl={editAudioUrl}
+                editSourceLabel={editSourceLabel}
+                editLabel={editLabel}
+                setEditLabel={setEditLabel}
+                loadAudioForEdit={loadAudioForEdit}
+                loadAudioFileForEdit={loadAudioFileForEdit}
+                saveEditedAsset={saveEditedAsset}
+                setWorkspaceMessage={setWorkspaceMessage}
+              />
+            ) : activePanel === "instrument-lab" ? (
+              <InstrumentLabPanel
+                label={instrumentLabel}
+                bpm={instrumentBpm}
+                bars={instrumentBars}
+                octave={instrumentOctave}
+                instrumentId={instrumentId}
+                notes={instrumentNotes}
+                status={instrumentStatus}
+                previewUrl={instrumentPreviewUrl}
+                setLabel={setInstrumentLabel}
+                setBpm={setInstrumentBpm}
+                setBars={setInstrumentBars}
+                setOctave={setInstrumentOctave}
+                setInstrumentId={setInstrumentId}
+                addNote={addInstrumentNote}
+                clearNotes={clearInstrumentNotes}
+                playClip={playInstrumentClip}
+                stopClip={stopInstrumentClip}
+                renderClip={renderInstrumentClip}
+                saveClip={saveInstrumentClip}
               />
             ) : (
               <UnavailablePanel tool={tools.find((tool) => tool.id === activePanel) ?? tools[0]} />
@@ -503,6 +696,225 @@ function PublicLibraryAssetCard({
   );
 }
 
+function AudioEditPanel({
+  audioAssets,
+  selectedEditAssetId,
+  editAudioUrl,
+  editSourceLabel,
+  editLabel,
+  setEditLabel,
+  loadAudioForEdit,
+  loadAudioFileForEdit,
+  saveEditedAsset,
+  setWorkspaceMessage,
+}: {
+  audioAssets: BrowserWorkspaceItem[];
+  selectedEditAssetId: string;
+  editAudioUrl: string;
+  editSourceLabel: string;
+  editLabel: string;
+  setEditLabel: (value: string) => void;
+  loadAudioForEdit: (itemId: string) => Promise<void>;
+  loadAudioFileForEdit: (fileList: FileList | null) => void;
+  saveEditedAsset: (fileList: FileList | null) => Promise<void>;
+  setWorkspaceMessage: (value: string) => void;
+}): JSX.Element {
+  return (
+    <div className="dance-station-tool-panel">
+      <div className="dance-station-panel-head">
+        <div>
+          <p className="home-v2-kicker">Audio Edit</p>
+          <h2>Edit private audio</h2>
+        </div>
+      </div>
+      <p>
+        Load audio from Private Assets, work in the browser editor flow, then save the exported result back into
+        Private Assets.
+      </p>
+      <div className="dance-station-edit-grid">
+        <section className="dance-station-inner-panel">
+          <label>
+            <span>Source audio</span>
+            <select
+              value={selectedEditAssetId}
+              onChange={(event) => loadAudioForEdit((event.currentTarget as HTMLSelectElement).value).catch((error) => setWorkspaceMessage(error.message))}
+            >
+              <option value="">Choose private audio</option>
+              {audioAssets.map((asset) => (
+                <option key={asset.id} value={asset.id}>{asset.title}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Open audio from disk</span>
+            <input type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a" onChange={(event) => loadAudioFileForEdit((event.currentTarget as HTMLInputElement).files)} />
+          </label>
+          <div className="dance-station-editor-preview">
+            <strong>{editSourceLabel}</strong>
+            {editAudioUrl ? <audio controls preload="metadata" src={editAudioUrl}></audio> : <span>No audio loaded.</span>}
+          </div>
+        </section>
+
+        <section className="dance-station-inner-panel dance-station-editor-frame-shell">
+          <div>
+            <strong>AudioMass</strong>
+            <span>Site bundle not vendored yet. Use the browser preview and save an exported file below for this pass.</span>
+          </div>
+          <div className="dance-station-editor-placeholder">
+            AudioMass integration slot
+          </div>
+        </section>
+
+        <section className="dance-station-inner-panel">
+          <label>
+            <span>Edit name</span>
+            <input value={editLabel} onInput={(event) => setEditLabel((event.currentTarget as HTMLInputElement).value)} />
+          </label>
+          <label>
+            <span>Save exported audio</span>
+            <input
+              type="file"
+              accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a"
+              onChange={(event) => saveEditedAsset((event.currentTarget as HTMLInputElement).files).catch((error) => setWorkspaceMessage(error.message))}
+            />
+          </label>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function InstrumentLabPanel({
+  label,
+  bpm,
+  bars,
+  octave,
+  instrumentId,
+  notes,
+  status,
+  previewUrl,
+  setLabel,
+  setBpm,
+  setBars,
+  setOctave,
+  setInstrumentId,
+  addNote,
+  clearNotes,
+  playClip,
+  stopClip,
+  renderClip,
+  saveClip,
+}: {
+  label: string;
+  bpm: number;
+  bars: number;
+  octave: number;
+  instrumentId: string;
+  notes: InstrumentNote[];
+  status: string;
+  previewUrl: string;
+  setLabel: (value: string) => void;
+  setBpm: (value: number) => void;
+  setBars: (value: number) => void;
+  setOctave: (value: number) => void;
+  setInstrumentId: (value: string) => void;
+  addNote: (pitch: number) => void;
+  clearNotes: () => void;
+  playClip: () => Promise<void>;
+  stopClip: () => Promise<void>;
+  renderClip: () => Promise<File | null>;
+  saveClip: () => Promise<void>;
+}): JSX.Element {
+  return (
+    <div className="dance-station-tool-panel">
+      <div className="dance-station-panel-head">
+        <div>
+          <p className="home-v2-kicker">Instrument Lab</p>
+          <h2>Browser instrument sketchpad</h2>
+        </div>
+        <span className="dance-station-status-pill">{status}</span>
+      </div>
+      <p>Play notes with the on-screen keys or computer keys A W S E D F T G Y H U J K, then render a WAV into Private Assets.</p>
+
+      <div className="dance-station-instrument-grid">
+        <section className="dance-station-inner-panel">
+          <label>
+            <span>Clip name</span>
+            <input value={label} onInput={(event) => setLabel((event.currentTarget as HTMLInputElement).value)} />
+          </label>
+          <div className="dance-station-control-row">
+            <label>
+              <span>BPM</span>
+              <input type="number" min="40" max="240" value={bpm} onInput={(event) => setBpm(Number((event.currentTarget as HTMLInputElement).value || 120))} />
+            </label>
+            <label>
+              <span>Bars</span>
+              <input type="number" min="1" max="16" value={bars} onInput={(event) => setBars(Number((event.currentTarget as HTMLInputElement).value || 4))} />
+            </label>
+            <label>
+              <span>Octave</span>
+              <input type="number" min="1" max="7" value={octave} onInput={(event) => setOctave(Number((event.currentTarget as HTMLInputElement).value || 4))} />
+            </label>
+          </div>
+          <label>
+            <span>Instrument</span>
+            <select value={instrumentId} onChange={(event) => setInstrumentId((event.currentTarget as HTMLSelectElement).value)}>
+              {INSTRUMENT_BANK.map((instrument) => (
+                <option key={instrument.id} value={instrument.id}>{instrument.name}</option>
+              ))}
+            </select>
+          </label>
+        </section>
+
+        <section className="dance-station-inner-panel">
+          <div className="dance-station-piano">
+            {PIANO_KEYS.map((key) => (
+              <button
+                key={key.semitone}
+                type="button"
+                className={key.black ? "black" : ""}
+                onClick={() => addNote((octave + 1) * 12 + key.semitone)}
+              >
+                {key.label}
+              </button>
+            ))}
+          </div>
+          <div className="dance-station-note-lane">
+            {notes.length ? notes.map((note) => (
+              <span key={note.id} style={{ left: `${Math.min(94, note.start * 8)}%`, width: `${Math.max(4, note.duration * 8)}%` }}>
+                {midiNoteLabel(note.pitch)}
+              </span>
+            )) : <em>No notes yet.</em>}
+          </div>
+          <div className="dance-station-panel-actions">
+            <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => playClip()}>
+              Play
+            </button>
+            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => stopClip()}>
+              Stop
+            </button>
+            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={clearNotes}>
+              Clear
+            </button>
+          </div>
+        </section>
+
+        <section className="dance-station-inner-panel">
+          <div className="dance-station-panel-actions">
+            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => renderClip()}>
+              Render Preview
+            </button>
+            <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => saveClip()}>
+              Save Clip
+            </button>
+          </div>
+          {previewUrl ? <audio controls preload="metadata" src={previewUrl}></audio> : <div className="library-empty">No rendered preview yet.</div>}
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function UnavailablePanel({ tool }: { tool: typeof tools[number] }): JSX.Element {
   return (
     <div className="dance-station-unavailable-panel">
@@ -662,6 +1074,208 @@ function formatStorageEstimate(status: BrowserWorkspaceStatus | null): string {
   const usage = status.estimate.usage / (1024 * 1024);
   const quota = status.estimate.quota / (1024 * 1024);
   return `${usage.toFixed(0)} / ${quota.toFixed(0)} MB`;
+}
+
+interface InstrumentNote {
+  id: string;
+  pitch: number;
+  start: number;
+  duration: number;
+  velocity: number;
+}
+
+interface InstrumentDefinition {
+  id: string;
+  name: string;
+  oscillator: OscillatorType;
+  attack: number;
+  release: number;
+  octave: number;
+}
+
+const INSTRUMENT_BANK: InstrumentDefinition[] = [
+  { id: "synth.lead", name: "Lead Synth", oscillator: "sawtooth", attack: 0.01, release: 0.18, octave: 0 },
+  { id: "synth.square-lead", name: "Square Lead", oscillator: "square", attack: 0.005, release: 0.16, octave: 0 },
+  { id: "bass.synth", name: "Bass Synth", oscillator: "square", attack: 0.005, release: 0.12, octave: -12 },
+  { id: "bass.sub", name: "Sub Bass", oscillator: "sine", attack: 0.01, release: 0.22, octave: -24 },
+  { id: "keys.soft-pad", name: "Soft Pad", oscillator: "triangle", attack: 0.14, release: 0.45, octave: 0 },
+  { id: "keys.pluck", name: "Pluck", oscillator: "triangle", attack: 0.005, release: 0.08, octave: 12 },
+  { id: "strings.synthetic", name: "Synthetic Strings", oscillator: "sawtooth", attack: 0.22, release: 0.55, octave: 0 },
+  { id: "brass.soft", name: "Soft Brass", oscillator: "sawtooth", attack: 0.08, release: 0.25, octave: 0 },
+];
+
+const PIANO_KEYS = [
+  { label: "C", semitone: 0 },
+  { label: "C#", semitone: 1, black: true },
+  { label: "D", semitone: 2 },
+  { label: "D#", semitone: 3, black: true },
+  { label: "E", semitone: 4 },
+  { label: "F", semitone: 5 },
+  { label: "F#", semitone: 6, black: true },
+  { label: "G", semitone: 7 },
+  { label: "G#", semitone: 8, black: true },
+  { label: "A", semitone: 9 },
+  { label: "A#", semitone: 10, black: true },
+  { label: "B", semitone: 11 },
+];
+
+const KEYBOARD_NOTE_MAP: Record<string, number> = {
+  a: 0,
+  w: 1,
+  s: 2,
+  e: 3,
+  d: 4,
+  f: 5,
+  t: 6,
+  g: 7,
+  y: 8,
+  h: 9,
+  u: 10,
+  j: 11,
+  k: 12,
+};
+
+function isAudioWorkspaceItem(item: BrowserWorkspaceItem): boolean {
+  if (item.kind === "audio" || item.kind === "edit" || item.kind === "instrument") return true;
+  if (typeof item.metadata.mimeType === "string" && item.metadata.mimeType.startsWith("audio/")) return true;
+  const files = Array.isArray(item.metadata.files) ? item.metadata.files : [];
+  return files.some((file) => {
+    const candidate = file as { role?: string; publicUrl?: string | null; mimeType?: string };
+    return Boolean(candidate.publicUrl && (candidate.role === "audio" || candidate.role === "preview" || candidate.mimeType?.startsWith("audio/")));
+  });
+}
+
+async function workspaceItemAudioUrl(item: BrowserWorkspaceItem): Promise<string> {
+  const blob = item.metadata.blob;
+  if (blob instanceof Blob) {
+    return URL.createObjectURL(blob);
+  }
+  const files = Array.isArray(item.metadata.files) ? item.metadata.files : [];
+  const audioFile = files.find((file) => {
+    const candidate = file as { role?: string; publicUrl?: string | null; mimeType?: string };
+    return Boolean(candidate.publicUrl && (candidate.role === "audio" || candidate.role === "preview" || candidate.mimeType?.startsWith("audio/")));
+  }) as { publicUrl?: string | null } | undefined;
+  return audioFile?.publicUrl || "";
+}
+
+function nextInstrumentStart(notes: InstrumentNote[]): number {
+  if (!notes.length) return 0;
+  const end = Math.max(...notes.map((note) => note.start + note.duration));
+  return Math.round(end * 2) / 2;
+}
+
+function midiFrequency(pitch: number): number {
+  return 440 * Math.pow(2, (pitch - 69) / 12);
+}
+
+function instrumentDefinition(instrumentId: string): InstrumentDefinition {
+  return INSTRUMENT_BANK.find((instrument) => instrument.id === instrumentId) ?? INSTRUMENT_BANK[0];
+}
+
+function beatSeconds(bpm: number): number {
+  return 60 / Math.max(20, bpm || 120);
+}
+
+function scheduleInstrumentNote(
+  context: BaseAudioContext,
+  destination: AudioNode,
+  note: InstrumentNote,
+  bpm: number,
+  instrumentId: string,
+  offsetSeconds = 0
+): void {
+  const instrument = instrumentDefinition(instrumentId);
+  const start = offsetSeconds + note.start * beatSeconds(bpm);
+  const duration = Math.max(0.05, note.duration * beatSeconds(bpm));
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = instrument.oscillator;
+  oscillator.frequency.setValueAtTime(midiFrequency(note.pitch + instrument.octave), start);
+  gain.gain.setValueAtTime(0, start);
+  gain.gain.linearRampToValueAtTime(note.velocity * 0.75, start + instrument.attack);
+  gain.gain.setValueAtTime(note.velocity * 0.75, start + Math.max(instrument.attack, duration - instrument.release));
+  gain.gain.linearRampToValueAtTime(0, start + duration + instrument.release);
+  oscillator.connect(gain).connect(destination);
+  oscillator.start(start);
+  oscillator.stop(start + duration + instrument.release + 0.05);
+}
+
+function instrumentDurationSeconds(notes: InstrumentNote[], bpm: number): number {
+  if (!notes.length) return 0;
+  return Math.max(...notes.map((note) => note.start + note.duration)) * beatSeconds(bpm);
+}
+
+async function renderInstrumentWav({
+  notes,
+  bpm,
+  bars,
+  instrumentId,
+  label,
+}: {
+  notes: InstrumentNote[];
+  bpm: number;
+  bars: number;
+  instrumentId: string;
+  label: string;
+}): Promise<File> {
+  const duration = Math.max(bars * 4 * beatSeconds(bpm), instrumentDurationSeconds(notes, bpm) + 0.5);
+  const sampleRate = 44100;
+  const context = new OfflineAudioContext(2, Math.ceil(sampleRate * duration), sampleRate);
+  const master = context.createGain();
+  master.gain.value = 0.86;
+  master.connect(context.destination);
+  notes.forEach((note) => scheduleInstrumentNote(context, master, note, bpm, instrumentId, 0));
+  const buffer = await context.startRendering();
+  const wav = audioBufferToWav(buffer);
+  return new File([wav], `${safeFileStem(label || "instrument")}.wav`, { type: "audio/wav" });
+}
+
+function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
+  const channels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const samples = buffer.length;
+  const bytesPerSample = 2;
+  const blockAlign = channels * bytesPerSample;
+  const dataSize = samples * blockAlign;
+  const wav = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(wav);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+  let offset = 44;
+  for (let index = 0; index < samples; index += 1) {
+    for (let channel = 0; channel < channels; channel += 1) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[index]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += bytesPerSample;
+    }
+  }
+  return wav;
+}
+
+function writeAscii(view: DataView, offset: number, value: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
+  }
+}
+
+function safeFileStem(value: string): string {
+  return value.trim().replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
+}
+
+function midiNoteLabel(pitch: number): string {
+  const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  return `${names[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
 }
 
 function formatKind(kind: string): string {

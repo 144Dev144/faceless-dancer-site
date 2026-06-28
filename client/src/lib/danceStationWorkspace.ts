@@ -116,14 +116,14 @@ export async function requestPersistentWorkspaceStorage(): Promise<boolean> {
   return navigator.storage.persist();
 }
 
-export function createPrivateAssetWorkspaceItem(file: File, title?: string): BrowserWorkspaceItem {
+export function createPrivateAssetWorkspaceItem(file: File, title?: string, kindOverride?: string): BrowserWorkspaceItem {
   const now = new Date().toISOString();
   const id = `private-${crypto.randomUUID()}`;
-  const kind = file.type.startsWith("audio/")
+  const kind = kindOverride || (file.type.startsWith("audio/")
     ? "audio"
     : file.type.startsWith("image/")
       ? "image"
-      : "file";
+      : "file");
   return {
     id,
     title: title?.trim() || file.name,
