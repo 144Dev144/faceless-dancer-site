@@ -13,7 +13,8 @@
     "start": "npm run start --workspace server",
     "migrate": "npm run migrate --workspace server",
     "import:db": "npm run import:db --workspace server",
-    "import:beat-storage": "npm run import:beat-storage --workspace server"
+    "import:beat-storage": "npm run import:beat-storage --workspace server",
+    "check:instrument-lab": "node client/public/dance-station/instrument-lab/scripts/check-source-snapshot.js"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
