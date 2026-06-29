@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Preflight persistent paths on VPS
         uses: appleboy/ssh-action@v1.0.3
