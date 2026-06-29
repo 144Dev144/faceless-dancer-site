@@ -112,8 +112,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const audioMassFrameRef = useRef<HTMLIFrameElement | null>(null);
   const instrumentLabFrameRef = useRef<HTMLIFrameElement | null>(null);
   const workspaceItemsRef = useRef<BrowserWorkspaceItem[]>([]);
-  const audioMassObjectUrlsRef = useRef<string[]>([]);
-  const instrumentAssetObjectUrlsRef = useRef<string[]>([]);
+  const audioMassObjectUrlsRef = useRef<Map<string, string>>(new Map());
+  const instrumentAssetObjectUrlsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     document.body.classList.add("home-page-body");
@@ -583,14 +583,29 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     }, window.location.origin);
   };
 
-  const loadAudioMassAsset = (asset: AudioMassWorkspaceAsset) => {
-    audioMassFrameRef.current?.contentWindow?.postMessage({
-      type: "dance-station:load-audio",
-      payload: {
-        url: asset.url,
-        name: asset.title,
-      },
-    }, window.location.origin);
+  const loadAudioMassAsset = async (asset: AudioMassWorkspaceAsset) => {
+    setWorkspaceMessage(`Loading ${asset.title} into Audio Edit...`);
+    try {
+      const response = await fetch(asset.url);
+      if (!response.ok) throw new Error(`Could not read audio asset (${response.status}).`);
+      const buffer = await response.arrayBuffer();
+      audioMassFrameRef.current?.contentWindow?.postMessage({
+        type: "dance-station:load-audio-buffer",
+        payload: {
+          buffer,
+          name: asset.title,
+          mimeType: response.headers.get("content-type") || "audio/wav",
+        },
+      }, window.location.origin, [buffer]);
+    } catch {
+      audioMassFrameRef.current?.contentWindow?.postMessage({
+        type: "dance-station:load-audio",
+        payload: {
+          url: asset.url,
+          name: asset.title,
+        },
+      }, window.location.origin);
+    }
     setAudioEditPickerOpen(false);
     setWorkspaceMessage(`${asset.title} loaded into Audio Edit.`);
   };
@@ -1003,7 +1018,7 @@ function AudioMassAssetPicker({
   onClose,
 }: {
   assets: AudioMassWorkspaceAsset[];
-  onLoad: (asset: AudioMassWorkspaceAsset) => void;
+  onLoad: (asset: AudioMassWorkspaceAsset) => void | Promise<void>;
   onClose: () => void;
 }): JSX.Element {
   return (
@@ -1020,7 +1035,7 @@ function AudioMassAssetPicker({
         </div>
         <div className="dance-station-picker-list">
           {assets.length ? assets.map((asset) => (
-            <button key={asset.id} type="button" onClick={() => onLoad(asset)}>
+            <button key={asset.id} type="button" onClick={() => { void onLoad(asset); }}>
               <strong>{asset.title}</strong>
               <span>{asset.kind}{asset.creatorName ? ` - ${asset.creatorName}` : ""}</span>
             </button>
@@ -1660,10 +1675,15 @@ function instrumentNoteStyle(note: InstrumentNote, bars: number): Record<string,
 
 function buildAudioMassWorkspaceAssets(
   items: BrowserWorkspaceItem[],
-  objectUrlsRef: { current: string[] }
+  objectUrlsRef: { current: Map<string, string> }
 ): AudioMassWorkspaceAsset[] {
-  objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-  objectUrlsRef.current = [];
+  const liveIds = new Set(items.map((item) => item.id));
+  objectUrlsRef.current.forEach((url, id) => {
+    if (!liveIds.has(id)) {
+      URL.revokeObjectURL(url);
+      objectUrlsRef.current.delete(id);
+    }
+  });
   return items.flatMap((item) => {
     const url = workspaceItemAudioUrl(item, objectUrlsRef);
     if (!url) return [];
@@ -1696,12 +1716,14 @@ function workspaceItemHasAudio(item: BrowserWorkspaceItem): boolean {
 
 function workspaceItemAudioUrl(
   item: BrowserWorkspaceItem,
-  objectUrlsRef: { current: string[] }
+  objectUrlsRef: { current: Map<string, string> }
 ): string | null {
   const blob = item.metadata?.blob;
   if (blob instanceof Blob && blob.type.startsWith("audio/")) {
+    const existing = objectUrlsRef.current.get(item.id);
+    if (existing) return existing;
     const url = URL.createObjectURL(blob);
-    objectUrlsRef.current.push(url);
+    objectUrlsRef.current.set(item.id, url);
     return url;
   }
   const files = item.metadata?.files;
