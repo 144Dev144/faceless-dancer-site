@@ -4,6 +4,8 @@ import { HomePage } from "./pages/HomePage";
 import { AdminGamePage } from "./pages/AdminGamePage";
 import { GamePage } from "./pages/GamePage";
 import { PlaygroundPage } from "./pages/PlaygroundPage";
+import { LibraryPage } from "./pages/LibraryPage";
+import { DanceStationPage } from "./pages/DanceStationPage";
 
 function currentPath(): string {
   return window.location.pathname || "/";
@@ -41,6 +43,14 @@ export function App() {
 
   if (path === "/playground") {
     return <PlaygroundPage />;
+  }
+
+  if (path === "/library") {
+    return <LibraryPage session={state} setSession={setState} />;
+  }
+
+  if (path === "/dance-station") {
+    return <DanceStationPage session={state} setSession={setState} />;
   }
 
   return (

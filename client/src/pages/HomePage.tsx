@@ -5,7 +5,6 @@ import { PlatformVisionSection } from "../components/home/PlatformVisionSection"
 import { ApplicationsSection } from "../components/home/ApplicationsSection";
 import { RoadmapSection } from "../components/home/RoadmapSection";
 import { WhyMattersSection } from "../components/home/WhyMattersSection";
-import { HolderToolsSection } from "../components/home/HolderToolsSection";
 import { HomeFooter } from "../components/home/HomeFooter";
 import { api, type SiteSettings } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
@@ -51,19 +50,12 @@ export function HomePage({ session, setSession, refreshSession }: Props): JSX.El
   return (
     <main className="home-v2">
       <div className="home-v2-shell">
-        <HomeTopNav />
+        <HomeTopNav session={session} setSession={setSession} />
         <HeroSection settings={siteSettings} />
         <PlatformVisionSection />
         <ApplicationsSection />
         <RoadmapSection />
         <WhyMattersSection />
-        <HolderToolsSection
-          session={session}
-          setSession={setSession}
-          refreshSession={refreshSession}
-          siteSettings={siteSettings}
-          onSiteSettingsSaved={setSiteSettings}
-        />
         <HomeFooter />
       </div>
     </main>

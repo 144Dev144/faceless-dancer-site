@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import bs58 from "bs58";
-import { api } from "../lib/api";
+import { api, type AuthSessionResponse } from "../lib/api";
 import {
   detectConnectedWalletPublicKey,
   getPreferredWallet,
@@ -10,7 +10,7 @@ import {
 } from "../lib/walletConnection";
 
 interface Props {
-  onVerified: (session: { authenticated: boolean; publicKey: string; isHolder: boolean; isAdmin: boolean }) => void;
+  onVerified: (session: AuthSessionResponse) => void;
 }
 
 const walletLabels: Record<SupportedWallet, string> = {

@@ -14,12 +14,6 @@ export function HomeFooter(): JSX.Element {
           <a href="#apps">Apps</a>
           <a href="#roadmap">Roadmap</a>
         </div>
-        <div>
-          <h3>Resources</h3>
-          <a href="#docs">Docs</a>
-          <a href="#docs">API</a>
-          <a href="#docs">Whitepaper</a>
-        </div>
         <div id="community">
           <h3>Community</h3>
           <a href="#community">X / Twitter</a>

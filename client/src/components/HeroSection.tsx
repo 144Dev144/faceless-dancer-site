@@ -42,7 +42,7 @@ export function HeroSection({ settings }: Props): JSX.Element {
               target="_blank"
               rel="noreferrer"
             >
-              Autotransition - Github
+              Dance Station : Github
             </a>
           ) : null}
         </div>

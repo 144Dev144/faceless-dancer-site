@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { api } from "../lib/api";
+import { api, type CreatorProfile } from "../lib/api";
 
 export interface SessionState {
   loading: boolean;
@@ -7,6 +7,7 @@ export interface SessionState {
   publicKey: string;
   isHolder: boolean;
   isAdmin: boolean;
+  creatorProfile: CreatorProfile | null;
 }
 
 export function useSession() {
@@ -16,6 +17,7 @@ export function useSession() {
     publicKey: "",
     isHolder: false,
     isAdmin: false,
+    creatorProfile: null,
   };
 
   const [state, setState] = useState<SessionState>({
@@ -24,6 +26,7 @@ export function useSession() {
     publicKey: "",
     isHolder: false,
     isAdmin: false,
+    creatorProfile: null,
   });
 
   useEffect(() => {

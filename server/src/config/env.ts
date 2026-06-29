@@ -52,6 +52,7 @@ const envSchema = z.object({
 
   ADMIN_WALLETS: z.string().default(""),
   MAX_UPLOAD_SIZE_MB: z.coerce.number().positive().default(20),
+  LIBRARY_MAX_UPLOAD_SIZE_MB: z.coerce.number().positive().default(500),
   ALLOWED_IMAGE_MIME: z.string().default("image/png,image/jpeg,image/webp"),
   ALLOWED_AUDIO_MIME: z.string().default("audio/mpeg,audio/wav,audio/x-wav"),
 
@@ -86,6 +87,7 @@ export const env = {
   allowedImageMime: data.ALLOWED_IMAGE_MIME.split(",").map((value) => value.trim()),
   allowedAudioMime: data.ALLOWED_AUDIO_MIME.split(",").map((value) => value.trim()),
   maxUploadSizeBytes: data.MAX_UPLOAD_SIZE_MB * 1024 * 1024,
+  libraryMaxUploadSizeBytes: data.LIBRARY_MAX_UPLOAD_SIZE_MB * 1024 * 1024,
   siteShowTwitter: data.SITE_SHOW_TWITTER === "true",
   siteShowYoutube: data.SITE_SHOW_YOUTUBE === "true",
   siteShowYoutubeEmbed: data.SITE_SHOW_YOUTUBE_EMBED === "true",
