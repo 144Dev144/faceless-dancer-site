@@ -186,6 +186,77 @@ export const api = {
 
   publicLibraryItem: (itemId: string) => apiFetch<{ item: LibraryItem }>(`/library/${encodeURIComponent(itemId)}`),
 
+  upsertOwnedLibraryItem: (payload: {
+    visibility: string;
+    kind: string;
+    title: string;
+    description?: string | null;
+    tags?: string[];
+    metadata: Record<string, unknown>;
+    sourceLineage: Record<string, unknown>;
+    localId?: string;
+    license?: string | null;
+    attribution?: string | null;
+  }) =>
+    apiFetch<{ item: LibraryItem }>("/library/publish/items", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  createDraftLibraryItem: (payload: {
+    visibility: string;
+    kind: string;
+    title: string;
+    description?: string | null;
+    tags?: string[];
+    metadata: Record<string, unknown>;
+    sourceLineage: Record<string, unknown>;
+    license?: string | null;
+    attribution?: string | null;
+  }) =>
+    apiFetch<{ itemId: string; status: string }>("/library", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  uploadDraftLibraryFile: async (
+    itemId: string,
+    payload: { role: string; metadata?: Record<string, unknown>; file: File },
+  ) => {
+    const formData = new FormData();
+    formData.set("role", payload.role);
+    formData.set("metadata", JSON.stringify(payload.metadata ?? {}));
+    formData.set("file", payload.file);
+
+    const response = await fetch(`${API_BASE}/library/publish/items/${encodeURIComponent(itemId)}/files`, {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error ?? `Upload failed (${response.status})`);
+    }
+
+    return response.json() as Promise<{ item: LibraryItem }>;
+  },
+
+  clearOwnedLibraryItemFiles: (itemId: string) =>
+    apiFetch<{ item: LibraryItem }>(`/library/publish/items/${encodeURIComponent(itemId)}/files`, {
+      method: "DELETE",
+    }),
+
+  publishDraftLibraryItem: (itemId: string) =>
+    apiFetch<{ item: LibraryItem }>(`/library/publish/items/${encodeURIComponent(itemId)}/publish`, {
+      method: "POST",
+    }),
+
+  revokeOwnedLibraryItem: (itemId: string) =>
+    apiFetch<{ item: LibraryItem }>(`/library/publish/items/${encodeURIComponent(itemId)}/revoke`, {
+      method: "POST",
+    }),
+
   adminSiteSettings: () => apiFetch<SiteSettings>("/site-settings/admin"),
 
   saveAdminSiteSettings: (payload: SiteSettings) =>

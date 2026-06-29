@@ -49,6 +49,14 @@ function storeRequest<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
+function transactionComplete(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error ?? new Error("Browser workspace transaction aborted"));
+    tx.onerror = () => reject(tx.error ?? new Error("Browser workspace transaction failed"));
+  });
+}
+
 export async function listWorkspaceItems(): Promise<BrowserWorkspaceItem[]> {
   const db = await openWorkspaceDb();
   try {
@@ -65,6 +73,7 @@ export async function saveWorkspaceItem(item: BrowserWorkspaceItem): Promise<Bro
   try {
     const tx = db.transaction(ITEM_STORE, "readwrite");
     await storeRequest(tx.objectStore(ITEM_STORE).put(item));
+    await transactionComplete(tx);
     return item;
   } finally {
     db.close();
@@ -87,6 +96,7 @@ export async function setWorkspaceSetting<T>(key: string, value: T): Promise<voi
   try {
     const tx = db.transaction(SETTINGS_STORE, "readwrite");
     await storeRequest(tx.objectStore(SETTINGS_STORE).put({ key, value }));
+    await transactionComplete(tx);
   } finally {
     db.close();
   }

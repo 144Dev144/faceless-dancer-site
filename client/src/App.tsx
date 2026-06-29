@@ -46,7 +46,7 @@ export function App() {
   }
 
   if (path === "/library") {
-    return <LibraryPage />;
+    return <LibraryPage session={state} setSession={setState} />;
   }
 
   if (path === "/dance-station") {

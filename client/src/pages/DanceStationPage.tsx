@@ -1,8 +1,8 @@
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { HomeTopNav } from "../components/home/HomeTopNav";
-import { WalletAuthCard } from "../components/WalletAuthCard";
-import { api, type CreatorPublishTokenRecord, type LibraryItem } from "../lib/api";
+import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
+import { api, type LibraryItem } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
 import {
   createPrivateAssetWorkspaceItem,
@@ -33,42 +33,42 @@ const tools: Array<{
   {
     id: "library",
     label: "Library",
-    status: "Available",
+    status: "",
     available: true,
     description: "Private assets, public library browsing, account sync, and publishing.",
   },
   {
     id: "audio-edit",
     label: "Audio Edit",
-    status: "Available",
+    status: "",
     available: true,
     description: "AudioMass browser editing with workspace import/export.",
   },
   {
     id: "instrument-lab",
     label: "Instrument Lab",
-    status: "Available",
+    status: "",
     available: true,
     description: "Browser instruments, MIDI-style clips, and rendered workspace assets.",
   },
   {
     id: "generation",
     label: "Generation",
-    status: "Remote compute later",
+    status: "COMING SOON",
     available: false,
     description: "ACE-Step jobs once hosted compute is connected.",
   },
   {
     id: "extraction",
     label: "Extraction",
-    status: "Remote compute later",
+    status: "COMING SOON",
     available: false,
     description: "Stem and track extraction once hosted compute is connected.",
   },
   {
     id: "training",
     label: "LoKr Training",
-    status: "Remote compute later",
+    status: "COMING SOON",
     available: false,
     description: "Side-Step training once GPU workers are available.",
   },
@@ -76,10 +76,6 @@ const tools: Array<{
 
 export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [activePanel, setActivePanel] = useState<DanceStationPanel>("library");
-  const [tokens, setTokens] = useState<CreatorPublishTokenRecord[]>([]);
-  const [tokenName, setTokenName] = useState("Dance Station");
-  const [newToken, setNewToken] = useState("");
-  const [tokenStatus, setTokenStatus] = useState("");
   const [workspaceItems, setWorkspaceItems] = useState<BrowserWorkspaceItem[]>([]);
   const [workspaceStatus, setWorkspaceStatus] = useState<BrowserWorkspaceStatus | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
@@ -103,6 +99,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [instrumentCountIn, setInstrumentCountIn] = useState(0);
   const [instrumentCursorBeat, setInstrumentCursorBeat] = useState(0);
   const [audioEditPickerOpen, setAudioEditPickerOpen] = useState(false);
+  const [audioEditLabel, setAudioEditLabel] = useState("");
+  const [audioEditSaveStatus, setAudioEditSaveStatus] = useState("");
   const instrumentObjectUrlRef = useRef("");
   const liveAudioContextRef = useRef<AudioContext | null>(null);
   const instrumentAudioBufferCacheRef = useRef<Map<string, AudioBuffer>>(new Map());
@@ -114,6 +112,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const workspaceItemsRef = useRef<BrowserWorkspaceItem[]>([]);
   const audioMassObjectUrlsRef = useRef<Map<string, string>>(new Map());
   const instrumentAssetObjectUrlsRef = useRef<Map<string, string>>(new Map());
+  const workspaceCardObjectUrlsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     document.body.classList.add("home-page-body");
@@ -125,6 +124,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       if (instrumentObjectUrlRef.current) URL.revokeObjectURL(instrumentObjectUrlRef.current);
       audioMassObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       instrumentAssetObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      workspaceCardObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       void liveAudioContextRef.current?.close();
     };
   }, []);
@@ -139,6 +139,12 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   useEffect(() => {
     workspaceItemsRef.current = workspaceItems;
   }, [workspaceItems]);
+
+  useEffect(() => {
+    if (!audioEditSaveStatus) return;
+    const timeout = window.setTimeout(() => setAudioEditSaveStatus(""), 2200);
+    return () => window.clearTimeout(timeout);
+  }, [audioEditSaveStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,31 +165,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     };
   }, []);
 
-  useEffect(() => {
-    if (!session.authenticated) {
-      setTokens([]);
-      return;
-    }
-    api.creatorPublishTokens()
-      .then((payload) => setTokens(payload.tokens))
-      .catch((error: Error) => setTokenStatus(error.message));
-  }, [session.authenticated]);
-
-  const createToken = async () => {
-    setTokenStatus("Creating token...");
-    const payload = await api.createCreatorPublishToken(tokenName || "Dance Station");
-    setNewToken(payload.token);
-    setTokens((current) => [payload.record, ...current]);
-    setTokenStatus("Token created. Copy it now; it will only be shown once.");
-  };
-
-  const revokeToken = async (tokenId: string) => {
-    await api.revokeCreatorPublishToken(tokenId);
-    setTokens((current) => current.map((token) => (
-      token.id === tokenId ? { ...token, revokedAt: new Date().toISOString() } : token
-    )));
-  };
-
   const refreshWorkspace = async () => {
     const [items, status] = await Promise.all([
       listWorkspaceItems(),
@@ -203,6 +184,9 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   };
 
   const importPublicItem = async (item: LibraryItem) => {
+    if (!session.authenticated) {
+      throw new Error("Login to import public items.");
+    }
     const now = new Date().toISOString();
     const creatorName = item.creator?.displayName || item.creator?.creatorSlug || "Faceless creator";
     await saveWorkspaceItem({
@@ -222,6 +206,109 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       },
     });
     setWorkspaceMessage(`${item.title} added to Private Assets.`);
+    await refreshWorkspace();
+  };
+
+  const publishWorkspaceItem = async (item: BrowserWorkspaceItem) => {
+    if (!session.authenticated) {
+      throw new Error("Connect a wallet before publishing.");
+    }
+    if (item.source !== "private") {
+      throw new Error("Only private assets with local files can be published from the site right now.");
+    }
+    const blob = item.metadata.blob;
+    if (!(blob instanceof File)) {
+      throw new Error("This private asset is missing its local file data. Re-add it from disk before publishing.");
+    }
+
+    const tags = Array.isArray(item.metadata.tags)
+      ? item.metadata.tags.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : [];
+    const description = typeof item.metadata.description === "string" && item.metadata.description.trim()
+      ? item.metadata.description.trim()
+      : undefined;
+    const fileRole = blob.type.startsWith("audio/")
+      ? "audio"
+      : blob.type.startsWith("image/")
+        ? "cover"
+        : "metadata";
+
+    const currentlyPublished = isPublishedLibraryRecord(item.metadata.publicLibrary);
+    setWorkspaceMessage(`${currentlyPublished ? "Updating" : "Publishing"} ${item.title}...`);
+
+    const managed = await api.upsertOwnedLibraryItem({
+      visibility: "public",
+      kind: item.kind as any,
+      title: item.title,
+      description,
+      tags,
+      metadata: {
+        sourceTool: item.metadata.sourceTool,
+        mimeType: item.metadata.mimeType,
+        sizeBytes: item.metadata.sizeBytes,
+      },
+      sourceLineage: {
+        localId: item.id,
+        source: "dance-station-site",
+      },
+      localId: item.id,
+    });
+    await api.clearOwnedLibraryItemFiles(managed.item.id);
+
+    await api.uploadDraftLibraryFile(managed.item.id, {
+      role: fileRole,
+      metadata: {
+        originalTitle: item.title,
+      },
+      file: blob,
+    });
+    const coverBlob = item.metadata.cardImageBlob;
+    if (coverBlob instanceof File) {
+      await api.uploadDraftLibraryFile(managed.item.id, {
+        role: "cover",
+        metadata: {
+          originalTitle: coverBlob.name,
+        },
+        file: coverBlob,
+      });
+    }
+
+    const published = await api.publishDraftLibraryItem(managed.item.id);
+    await saveWorkspaceItem({
+      ...item,
+      creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || item.creatorName,
+      updatedAt: new Date().toISOString(),
+      metadata: {
+        ...item.metadata,
+        publicLibrary: published.item,
+        libraryItemId: published.item.id,
+      },
+    });
+    setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
+    await refreshWorkspace();
+  };
+
+  const revokeWorkspaceItem = async (item: BrowserWorkspaceItem) => {
+    const libraryItemId = typeof item.metadata.libraryItemId === "string"
+      ? item.metadata.libraryItemId
+      : (item.metadata.publicLibrary && typeof item.metadata.publicLibrary === "object"
+        ? String((item.metadata.publicLibrary as { id?: unknown }).id ?? "")
+        : "");
+    if (!libraryItemId) {
+      throw new Error("This asset is not linked to a published library item.");
+    }
+    setWorkspaceMessage(`Revoking ${item.title}...`);
+    const revoked = await api.revokeOwnedLibraryItem(libraryItemId);
+    await saveWorkspaceItem({
+      ...item,
+      updatedAt: new Date().toISOString(),
+      metadata: {
+        ...item.metadata,
+        publicLibrary: revoked.item,
+        libraryItemId: revoked.item.id,
+      },
+    });
+    setWorkspaceMessage(`${item.title} removed from the public library.`);
     await refreshWorkspace();
   };
 
@@ -250,6 +337,31 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     creatorName: item.creatorName,
   }));
 
+  const setWorkspaceCardImage = async (item: BrowserWorkspaceItem, fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      throw new Error("Select an image file for the card background.");
+    }
+    const existing = workspaceCardObjectUrlsRef.current.get(`${item.id}:card-image`);
+    if (existing) {
+      URL.revokeObjectURL(existing);
+      workspaceCardObjectUrlsRef.current.delete(`${item.id}:card-image`);
+    }
+    await saveWorkspaceItem({
+      ...item,
+      updatedAt: new Date().toISOString(),
+      metadata: {
+        ...item.metadata,
+        cardImageBlob: file,
+        cardImageFileName: file.name,
+        cardImageMimeType: file.type,
+      },
+    });
+    setWorkspaceMessage(`${item.title} card image updated.`);
+    await refreshWorkspace();
+  };
+
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const message = event.data || {};
@@ -259,23 +371,21 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           setAudioEditPickerOpen(true);
           return;
         }
-        if (message.type === "dance-station:exported-audio") {
-          void saveAudioMassExport(message.payload).catch((error: Error) => setWorkspaceMessage(error.message));
+        if (message.type === "dance-station:audiomass-loaded") {
+          const sourceName = typeof message.payload?.sourceName === "string" ? message.payload.sourceName : "";
+          const suggested = sourceName.replace(/\.[^.]+$/, "").trim();
+          if (suggested) {
+            setAudioEditLabel(suggested);
+          }
+          setAudioEditSaveStatus("");
           return;
         }
         if (message.type === "dance-station:native-download") {
           downloadAudioMassFile(message.payload);
           return;
         }
-        if (message.type === "dance-station-export-audio-result") {
-          if (message.ok) {
-            void saveAudioMassExport(message).catch((error: Error) => setWorkspaceMessage(error.message));
-          } else {
-            setWorkspaceMessage(message.error || "AudioMass could not export the current edit.");
-          }
-          return;
-        }
         if (message.type === "dance-station:audiomass-error") {
+          setAudioEditSaveStatus("Save failed");
           setWorkspaceMessage(message.payload?.message || "AudioMass reported an error.");
         }
         return;
@@ -483,9 +593,11 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     channels?: number;
   }) => {
     if (!payload?.audio) throw new Error("AudioMass did not return exported audio.");
-    const name = payload.name || `dance-station-edit-${Date.now()}.wav`;
+    const label = audioEditLabel.trim();
+    if (!label) throw new Error("Enter an asset name before saving.");
+    const name = `${label}.wav`;
     const file = new File([payload.audio], name, { type: payload.mimeType || "audio/wav" });
-    const item = createPrivateAssetWorkspaceItem(file, name.replace(/\.[^.]+$/, ""), "edit");
+    const item = createPrivateAssetWorkspaceItem(file, label, "edit");
     item.metadata = {
       ...item.metadata,
       sourceTool: "audio-edit",
@@ -495,6 +607,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     };
     await saveWorkspaceItem(item);
     setWorkspaceMessage(`${item.title} saved to Private Assets.`);
+    setAudioEditLabel(item.title);
+    setAudioEditSaveStatus("Saved");
     await refreshWorkspace();
   };
 
@@ -585,6 +699,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
 
   const loadAudioMassAsset = async (asset: AudioMassWorkspaceAsset) => {
     setWorkspaceMessage(`Loading ${asset.title} into Audio Edit...`);
+    setAudioEditLabel(asset.title.replace(/\.[^.]+$/, ""));
+    setAudioEditSaveStatus("");
     try {
       const response = await fetch(asset.url);
       if (!response.ok) throw new Error(`Could not read audio asset (${response.status}).`);
@@ -610,13 +726,69 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     setWorkspaceMessage(`${asset.title} loaded into Audio Edit.`);
   };
 
+  const requestAudioMassEditorAudio = (label: string) => {
+    const frameWindow = audioMassFrameRef.current?.contentWindow;
+    if (!frameWindow) {
+      return Promise.reject(new Error("Audio Edit is not ready."));
+    }
+    const requestId = crypto.randomUUID();
+    return new Promise<{
+      audio: ArrayBuffer;
+      name?: string;
+      mimeType?: string;
+      duration?: number;
+      sampleRate?: number;
+      channels?: number;
+    }>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener("message", onMessage);
+        reject(new Error("Audio Edit did not return the rendered audio."));
+      }, 15000);
+
+      function onMessage(event: MessageEvent) {
+        if (event.source !== frameWindow) return;
+        const message = event.data || {};
+        if (message.type !== "dance-station-export-audio-result" || message.requestId !== requestId) return;
+        window.clearTimeout(timeout);
+        window.removeEventListener("message", onMessage);
+        if (!message.ok) {
+          reject(new Error(message.error || "Audio Edit export failed."));
+          return;
+        }
+        resolve({
+          audio: message.audio,
+          name: message.name,
+          mimeType: message.mimeType,
+          duration: message.duration,
+          sampleRate: message.sampleRate,
+          channels: message.channels,
+        });
+      }
+
+      window.addEventListener("message", onMessage);
+      frameWindow.postMessage({
+        type: "dance-station-export-audio",
+        requestId,
+        name: `${label}.wav`,
+      }, window.location.origin);
+    });
+  };
+
   const requestAudioMassWorkspaceSave = () => {
-    audioMassFrameRef.current?.contentWindow?.postMessage({
-      type: "dance-station-export-audio",
-      requestId: crypto.randomUUID(),
-      name: `dance-station-edit-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`,
-    }, window.location.origin);
-    setWorkspaceMessage("Saving current Audio Edit buffer to Private Assets...");
+    const label = audioEditLabel.trim();
+    if (!label) {
+      setAudioEditSaveStatus("Enter a label");
+      setWorkspaceMessage("Enter a label for the edit before saving.");
+      return;
+    }
+    setAudioEditSaveStatus("Saving");
+    setWorkspaceMessage(`Saving ${label} to Private Assets...`);
+    void requestAudioMassEditorAudio(label)
+      .then((payload) => saveAudioMassExport(payload))
+      .catch((error: Error) => {
+        setAudioEditSaveStatus("Save failed");
+        setWorkspaceMessage(error.message);
+      });
   };
 
   useEffect(() => {
@@ -656,7 +828,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   return (
     <main className="home-v2 library-page-shell dance-station-app-shell">
       <div className="home-v2-shell">
-        <HomeTopNav />
+        <HomeTopNav session={session} setSession={setSession} />
 
         {showStorageHelp ? (
           <section className="dance-station-storage-modal" role="dialog" aria-modal="true" aria-label="Browser storage notice">
@@ -676,7 +848,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         <section className="dance-station-app-header">
           <div>
             <p className="home-v2-kicker">Dance Station</p>
-            <h1>Creator workspace</h1>
             <p>Build, import, edit, sync, and publish music assets from one browser workspace.</p>
           </div>
           <div className="dance-station-header-actions">
@@ -697,7 +868,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
               className={`dance-station-tool-card${activePanel === tool.id ? " active" : ""}${tool.available ? "" : " disabled"}`}
               onClick={() => setActivePanel(tool.id)}
             >
-              <span>{tool.status}</span>
+              {!tool.available ? <span>{tool.status}</span> : null}
               <strong>{tool.label}</strong>
               <small>{tool.description}</small>
             </button>
@@ -706,22 +877,35 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
 
         <section className={`dance-station-main-grid${activePanel === "instrument-lab" ? " dance-station-main-grid--wide" : ""}`}>
           <div className="home-v2-card dance-station-main-panel">
-            {activePanel === "library" ? (
-              <LibraryWorkspacePanel
-                workspaceItems={workspaceItems}
-                assetLabel={assetLabel}
+            {showSettings ? (
+              <BrowserWorkspaceSettings
+                workspaceStatus={workspaceStatus}
                 workspaceMessage={workspaceMessage}
-                publicItems={publicItems}
+                refreshWorkspace={refreshWorkspace}
+                requestPersistence={requestPersistence}
+                setShowStorageHelp={setShowStorageHelp}
+              />
+            ) : activePanel === "library" ? (
+                <LibraryWorkspacePanel
+                  workspaceItems={workspaceItems}
+                  session={session}
+                  assetLabel={assetLabel}
+                  workspaceMessage={workspaceMessage}
+                  publicItems={publicItems}
                 publicLoading={publicLoading}
                 publicError={publicError}
                 publicQuery={publicQuery}
                 setAssetLabel={setAssetLabel}
                 setPublicQuery={setPublicQuery}
-                addPrivateAsset={addPrivateAsset}
-                importPublicItem={importPublicItem}
-                refreshWorkspace={refreshWorkspace}
-                setWorkspaceMessage={setWorkspaceMessage}
-              />
+                  addPrivateAsset={addPrivateAsset}
+                  importPublicItem={importPublicItem}
+                  publishWorkspaceItem={publishWorkspaceItem}
+                  revokeWorkspaceItem={revokeWorkspaceItem}
+                  setWorkspaceCardImage={setWorkspaceCardImage}
+                  workspaceCardObjectUrlsRef={workspaceCardObjectUrlsRef}
+                  refreshWorkspace={refreshWorkspace}
+                  setWorkspaceMessage={setWorkspaceMessage}
+                />
             ) : activePanel === "audio-edit" ? (
               <AudioEditPanel frameRef={audioMassFrameRef} />
             ) : activePanel === "instrument-lab" ? (
@@ -733,18 +917,18 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
 
           {activePanel !== "instrument-lab" ? <aside className="home-v2-card dance-station-context-panel">
             {showSettings ? (
-              <BrowserWorkspaceSettings
+              <SettingsSummaryPanel
+                session={session}
                 workspaceStatus={workspaceStatus}
-                workspaceMessage={workspaceMessage}
-                refreshWorkspace={refreshWorkspace}
-                requestPersistence={requestPersistence}
-                setShowStorageHelp={setShowStorageHelp}
               />
             ) : (
               <>
                 {activePanel === "audio-edit" ? (
                   <AudioEditWorkspaceControls
                     audioAssetCount={countAudioWorkspaceItems(workspaceItems)}
+                    label={audioEditLabel}
+                    setLabel={setAudioEditLabel}
+                    saveStatus={audioEditSaveStatus}
                     openPrivateAssets={() => setAudioEditPickerOpen(true)}
                     saveCurrentEdit={requestAudioMassWorkspaceSave}
                   />
@@ -756,31 +940,10 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                     ? `Wallet ${session.publicKey.slice(0, 6)}...${session.publicKey.slice(-4)}`
                     : "Connect a wallet when you want to sync or publish account-owned assets."}
                 </p>
-                <div className="dance-station-storage-grid dance-station-storage-grid--compact">
-                  <StatusChip label="Private Assets" value={workspaceStatus?.indexedDb ? "Ready" : "Unavailable"} good={Boolean(workspaceStatus?.indexedDb)} />
-                  <StatusChip label="Protection" value={workspaceStatus?.persisted ? "Granted" : "Optional"} good={Boolean(workspaceStatus?.persisted)} />
-                </div>
               </>
             )}
           </aside> : null}
         </section>
-
-        {showSettings ? (
-          <section className="dance-station-settings-grid">
-            <PublishConnectionSettings
-              session={session}
-              setSession={setSession}
-              tokens={tokens}
-              tokenName={tokenName}
-              newToken={newToken}
-              tokenStatus={tokenStatus}
-              setTokenName={setTokenName}
-              createToken={createToken}
-              revokeToken={revokeToken}
-              setTokenStatus={setTokenStatus}
-            />
-          </section>
-        ) : null}
 
         {audioEditPickerOpen ? (
           <AudioMassAssetPicker
@@ -796,6 +959,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
 
 function LibraryWorkspacePanel({
   workspaceItems,
+  session,
   assetLabel,
   workspaceMessage,
   publicItems,
@@ -806,10 +970,15 @@ function LibraryWorkspacePanel({
   setPublicQuery,
   addPrivateAsset,
   importPublicItem,
+  publishWorkspaceItem,
+  revokeWorkspaceItem,
+  setWorkspaceCardImage,
+  workspaceCardObjectUrlsRef,
   refreshWorkspace,
   setWorkspaceMessage,
 }: {
   workspaceItems: BrowserWorkspaceItem[];
+  session: SessionState;
   assetLabel: string;
   workspaceMessage: string;
   publicItems: LibraryItem[];
@@ -820,6 +989,10 @@ function LibraryWorkspacePanel({
   setPublicQuery: (value: string) => void;
   addPrivateAsset: (fileList: FileList | null) => Promise<void>;
   importPublicItem: (item: LibraryItem) => Promise<void>;
+  publishWorkspaceItem: (item: BrowserWorkspaceItem) => Promise<void>;
+  revokeWorkspaceItem: (item: BrowserWorkspaceItem) => Promise<void>;
+  setWorkspaceCardImage: (item: BrowserWorkspaceItem, fileList: FileList | null) => Promise<void>;
+  workspaceCardObjectUrlsRef: { current: Map<string, string> };
   refreshWorkspace: () => Promise<void>;
   setWorkspaceMessage: (value: string) => void;
 }): JSX.Element {
@@ -861,12 +1034,24 @@ function LibraryWorkspacePanel({
       </div>
       {workspaceMessage ? <p className="small">{workspaceMessage}</p> : null}
 
-      <div className="dance-station-workspace-list">
-        {privateItems.length ? privateItems.map((item) => (
-          <PrivateAssetRow key={item.id} item={item} />
-        )) : (
-          <div className="library-empty">No private assets yet.</div>
-        )}
+      <div className="dance-station-library-scroll">
+        <div className="dance-station-workspace-list">
+          {privateItems.length ? privateItems.map((item) => (
+            <PrivateAssetRow
+              key={item.id}
+              item={item}
+              canPublish={session.authenticated && item.source === "private" && item.metadata.blob instanceof File}
+              isAuthenticated={session.authenticated}
+              onPublish={publishWorkspaceItem}
+              onRevoke={revokeWorkspaceItem}
+              onSetCardImage={setWorkspaceCardImage}
+              workspaceCardObjectUrlsRef={workspaceCardObjectUrlsRef}
+              setWorkspaceMessage={setWorkspaceMessage}
+            />
+          )) : (
+            <div className="library-empty">No private assets yet.</div>
+          )}
+        </div>
       </div>
 
       <div className="dance-station-section-divider"></div>
@@ -892,32 +1077,110 @@ function LibraryWorkspacePanel({
       {!publicLoading && !publicError && filteredPublicItems.length === 0 ? (
         <div className="library-empty">No public items match this search.</div>
       ) : null}
-      <section className="library-grid dance-station-public-grid">
-        {filteredPublicItems.map((item) => (
-          <PublicLibraryAssetCard key={item.id} item={item} importPublicItem={importPublicItem} setWorkspaceMessage={setWorkspaceMessage} />
-        ))}
-      </section>
+      <div className="dance-station-library-scroll">
+        <section className="library-grid dance-station-public-grid">
+          {filteredPublicItems.map((item) => (
+            <PublicLibraryAssetCard
+              key={item.id}
+              item={item}
+              canImport={session.authenticated}
+              importPublicItem={importPublicItem}
+              setWorkspaceMessage={setWorkspaceMessage}
+            />
+          ))}
+        </section>
+      </div>
     </>
   );
 }
 
-function PrivateAssetRow({ item }: { item: BrowserWorkspaceItem }): JSX.Element {
+function PrivateAssetRow({
+  item,
+  canPublish,
+  isAuthenticated,
+  onPublish,
+  onRevoke,
+  onSetCardImage,
+  workspaceCardObjectUrlsRef,
+  setWorkspaceMessage,
+}: {
+  item: BrowserWorkspaceItem;
+  canPublish: boolean;
+  isAuthenticated: boolean;
+  onPublish: (item: BrowserWorkspaceItem) => Promise<void>;
+  onRevoke: (item: BrowserWorkspaceItem) => Promise<void>;
+  onSetCardImage: (item: BrowserWorkspaceItem, fileList: FileList | null) => Promise<void>;
+  workspaceCardObjectUrlsRef: { current: Map<string, string> };
+  setWorkspaceMessage: (value: string) => void;
+}): JSX.Element {
+  const cardImageInputRef = useRef<HTMLInputElement | null>(null);
   const metadata = item.metadata;
   const size = typeof metadata.sizeBytes === "number" ? formatBytes(metadata.sizeBytes) : "";
   const mime = typeof metadata.mimeType === "string" ? metadata.mimeType : item.source === "public-library" ? "public library item" : "";
   const updated = new Date(item.updatedAt);
+  const published = isPublishedLibraryRecord(metadata.publicLibrary);
+  const hasLinkedLibraryItem = Boolean(
+    (typeof metadata.libraryItemId === "string" && metadata.libraryItemId)
+    || (metadata.publicLibrary && typeof metadata.publicLibrary === "object" && (metadata.publicLibrary as Record<string, unknown>).id)
+  );
+  const publishHint = !canPublish
+    ? item.source === "public-library"
+      ? "Imported assets cannot be republished from the site yet."
+      : "Login to publish"
+    : "";
+  const cardImageUrl = workspaceItemCardImageUrl(item, workspaceCardObjectUrlsRef);
   return (
-    <article className="dance-station-workspace-item">
-      <div>
+    <article
+      className={`dance-station-workspace-item${cardImageUrl ? " dance-station-workspace-item--image" : ""}`}
+      style={cardImageUrl ? { backgroundImage: `linear-gradient(180deg, rgba(4, 10, 19, 0.24), rgba(4, 10, 19, 0.92)), url(${cardImageUrl})` } : undefined}
+    >
+      <div className="dance-station-workspace-item__body">
+        <div className="dance-station-workspace-item__meta">
+          <span className="home-v2-tag">{formatKind(item.kind)}</span>
+          <span className="home-v2-tag">{item.source === "public-library" ? "Imported" : "Private"}</span>
+          {item.creatorName ? <span className="home-v2-tag">{item.creatorName}</span> : null}
+        </div>
         <strong>{item.title}</strong>
-        <span>{formatKind(item.kind)} · {item.source === "public-library" ? "Imported" : "Private"}{item.creatorName ? ` · ${item.creatorName}` : ""}</span>
+        <span>{Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString()}</span>
         {mime || size ? <small>{[mime, size].filter(Boolean).join(" · ")}</small> : null}
       </div>
       <div className="dance-station-asset-actions">
-        <span>{Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString()}</span>
-        <button type="button" className="home-v2-btn home-v2-btn--secondary" disabled>
-          Publish Soon
+        {item.source === "private" ? (
+          <>
+            <input
+              ref={cardImageInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(event) => onSetCardImage(item, (event.currentTarget as HTMLInputElement).files).catch((error) => setWorkspaceMessage(error.message))}
+            />
+            <button
+              type="button"
+              className="home-v2-btn home-v2-btn--secondary"
+              onClick={() => cardImageInputRef.current?.click()}
+            >
+              Set Card Image
+            </button>
+          </>
+        ) : null}
+        <button
+          type="button"
+          className="home-v2-btn home-v2-btn--secondary"
+          disabled={!canPublish && !published}
+          onClick={() => onPublish(item).catch((error) => setWorkspaceMessage(error.message))}
+          title={published ? "Update the current public library item" : publishHint}
+        >
+          {published ? "Update Published Item" : hasLinkedLibraryItem ? (isAuthenticated ? "Republish" : "Login to Publish") : item.source === "public-library" ? "Imported" : isAuthenticated ? "Publish" : "Login to Publish"}
         </button>
+        {published ? (
+          <button
+            type="button"
+            className="home-v2-btn home-v2-btn--secondary"
+            onClick={() => onRevoke(item).catch((error) => setWorkspaceMessage(error.message))}
+          >
+            Revoke
+          </button>
+        ) : null}
       </div>
     </article>
   );
@@ -925,51 +1188,24 @@ function PrivateAssetRow({ item }: { item: BrowserWorkspaceItem }): JSX.Element 
 
 function PublicLibraryAssetCard({
   item,
+  canImport,
   importPublicItem,
   setWorkspaceMessage,
 }: {
   item: LibraryItem;
+  canImport: boolean;
   importPublicItem: (item: LibraryItem) => Promise<void>;
   setWorkspaceMessage: (value: string) => void;
 }): JSX.Element {
-  const audioFile = item.files.find((file) => file.role === "audio" || file.role === "preview");
-  const coverFile = item.files.find((file) => file.role === "cover");
-  const datasetSamples = item.files.filter((file) => file.role === "dataset_sample").length;
-  const creatorName = item.creator?.displayName || item.creator?.creatorSlug || "Faceless creator";
-  const cardImage = coverFile?.publicUrl || item.creator?.bannerUrl || item.creator?.avatarUrl || "";
-
   return (
-    <article className="library-card dance-station-public-card">
-      <div
-        className={`library-card__media${cardImage ? "" : " library-card__media--empty"}`}
-        style={cardImage ? { backgroundImage: `url(${cardImage})` } : undefined}
-      >
-        <span className="home-v2-tag">{formatKind(item.kind)}</span>
-      </div>
-      <div className="library-card__topline">
-        <span>By {creatorName}</span>
-        <span>{item.files.length} files</span>
-      </div>
-      <h2>{item.title}</h2>
-      <p>{item.description || fallbackDescription(item.kind)}</p>
-      <div className="library-card__facts">
-        {item.kind === "dataset" ? <span>{datasetSamples} samples</span> : null}
-        {item.license ? <span>{item.license}</span> : null}
-      </div>
-      {item.tags.length ? (
-        <div className="library-card__tags">
-          {item.tags.slice(0, 4).map((tag) => (
-            <span key={tag}>{tag}</span>
-          ))}
-        </div>
-      ) : null}
-      {audioFile?.publicUrl ? (
-        <audio className="library-card__audio" controls preload="metadata" src={audioFile.publicUrl}></audio>
-      ) : null}
-      <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => importPublicItem(item).catch((error) => setWorkspaceMessage(error.message))}>
-        Add to Private Assets
-      </button>
-    </article>
+    <LibraryAssetCard
+      item={item}
+      className="dance-station-public-card"
+      actionLabel={canImport ? "Add to Private Assets" : "Login to Import"}
+      actionDisabled={!canImport}
+      actionTitle={canImport ? undefined : "Login to import"}
+      onAction={() => importPublicItem(item).catch((error) => setWorkspaceMessage(error.message))}
+    />
   );
 }
 
@@ -1048,10 +1284,16 @@ function AudioMassAssetPicker({
 
 function AudioEditWorkspaceControls({
   audioAssetCount,
+  label,
+  setLabel,
+  saveStatus,
   openPrivateAssets,
   saveCurrentEdit,
 }: {
   audioAssetCount: number;
+  label: string;
+  setLabel: (value: string) => void;
+  saveStatus: string;
   openPrivateAssets: () => void;
   saveCurrentEdit: () => void;
 }): JSX.Element {
@@ -1063,10 +1305,19 @@ function AudioEditWorkspaceControls({
         <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={openPrivateAssets}>
           Open Private Asset
         </button>
-        <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={saveCurrentEdit}>
-          Save Current Edit
-        </button>
       </div>
+      <label className="dance-station-audio-edit-label">
+        <input
+          type="text"
+          value={label}
+          onInput={(event) => setLabel((event.currentTarget as HTMLInputElement).value)}
+          placeholder="Asset Name"
+        />
+      </label>
+      <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={saveCurrentEdit}>
+        Save Edit As Asset
+      </button>
+      {saveStatus ? <span className="dance-station-status-pill">{saveStatus}</span> : null}
       <p className="small">{audioAssetCount} audio assets available. Disk open and download stay in AudioMass File.</p>
     </section>
   );
@@ -1192,8 +1443,7 @@ function UnavailablePanel({ tool }: { tool: typeof tools[number] }): JSX.Element
     <div className="dance-station-unavailable-panel">
       <p className="home-v2-kicker">{tool.status}</p>
       <h2>{tool.label}</h2>
-      <p>{tool.description}</p>
-      <p className="small">This panel is part of the shared Dance Station shell. The feature will activate when its site adapter is connected.</p>
+      <p>Remote compute coming soon.</p>
     </div>
   );
 }
@@ -1226,6 +1476,7 @@ function BrowserWorkspaceSettings({
         Browser storage is available without this extra permission. Persistent storage is an optional protection layer
         that some browsers grant silently and some deny silently.
       </p>
+      <StorageCaveats includeSettingsNote />
       <div className="dance-station-storage-grid">
         <StatusChip label="IndexedDB" value={workspaceStatus?.indexedDb ? "Available" : "Unavailable"} good={Boolean(workspaceStatus?.indexedDb)} />
         <StatusChip label="OPFS" value={workspaceStatus?.opfs ? "Available" : "Not available"} good={Boolean(workspaceStatus?.opfs)} />
@@ -1245,76 +1496,43 @@ function BrowserWorkspaceSettings({
   );
 }
 
-function PublishConnectionSettings({
+function SettingsSummaryPanel({
   session,
-  setSession,
-  tokens,
-  tokenName,
-  newToken,
-  tokenStatus,
-  setTokenName,
-  createToken,
-  revokeToken,
-  setTokenStatus,
+  workspaceStatus,
 }: {
   session: SessionState;
-  setSession: (next: SessionState) => void;
-  tokens: CreatorPublishTokenRecord[];
-  tokenName: string;
-  newToken: string;
-  tokenStatus: string;
-  setTokenName: (value: string) => void;
-  createToken: () => Promise<void>;
-  revokeToken: (tokenId: string) => Promise<void>;
-  setTokenStatus: (value: string) => void;
+  workspaceStatus: BrowserWorkspaceStatus | null;
 }): JSX.Element {
   return (
-    <section className="home-v2-card dance-station-token-panel">
-      <p className="home-v2-kicker">Publish Connection</p>
-      <h2>Local app token</h2>
-      <p>
-        Generate a creator publish token for a local Dance Station install. The site version uses your signed-in
-        session directly for account sync and publish actions.
-      </p>
-
-      {session.authenticated ? (
-        <div className="dance-station-token-controls">
-          <label>
-            <span>Token name</span>
-            <input
-              value={tokenName}
-              onInput={(event) => setTokenName((event.currentTarget as HTMLInputElement).value)}
-            />
-          </label>
-          <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => createToken().catch((error) => setTokenStatus(error.message))}>
-            Create Publish Token
-          </button>
-          {newToken ? (
-            <label>
-              <span>New token</span>
-              <textarea readOnly rows={3} value={newToken}></textarea>
-            </label>
-          ) : null}
-          {tokenStatus ? <p className="small">{tokenStatus}</p> : null}
-          <div className="dance-station-token-list">
-            {tokens.map((token) => (
-              <div className="dance-station-token-row" key={token.id}>
-                <div>
-                  <strong>{token.name}</strong>
-                  <span>{token.revokedAt ? "Revoked" : token.lastUsedAt ? `Last used ${new Date(token.lastUsedAt).toLocaleString()}` : "Not used yet"}</span>
-                </div>
-                {!token.revokedAt ? (
-                  <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => revokeToken(token.id).catch((error) => setTokenStatus(error.message))}>
-                    Revoke
-                  </button>
-                ) : null}
-              </div>
-            ))}
-          </div>
+    <section className="dance-station-workspace-panel dance-station-settings-summary">
+      <p className="home-v2-kicker">Settings Summary</p>
+      <h2>{session.authenticated ? "Connected session" : "Guest session"}</h2>
+      <div className="dance-station-value-list">
+        <div className="dance-station-value-row">
+          <span>Wallet</span>
+          <strong>{session.authenticated ? `${session.publicKey.slice(0, 6)}...${session.publicKey.slice(-4)}` : "Not connected"}</strong>
         </div>
-      ) : (
-        <WalletAuthCard onVerified={(next) => setSession({ loading: false, ...next })} />
-      )}
+        <div className="dance-station-value-row">
+          <span>Display name</span>
+          <strong>{session.creatorProfile.displayName || "Not set"}</strong>
+        </div>
+        <div className="dance-station-value-row">
+          <span>IndexedDB</span>
+          <strong>{workspaceStatus?.indexedDb ? "Available" : "Unavailable"}</strong>
+        </div>
+        <div className="dance-station-value-row">
+          <span>OPFS</span>
+          <strong>{workspaceStatus?.opfs ? "Available" : "Not available"}</strong>
+        </div>
+        <div className="dance-station-value-row">
+          <span>Persistent storage</span>
+          <strong>{workspaceStatus?.persisted ? "Granted" : "Not granted"}</strong>
+        </div>
+        <div className="dance-station-value-row">
+          <span>Quota</span>
+          <strong>{formatStorageEstimate(workspaceStatus)}</strong>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1737,6 +1955,39 @@ function workspaceItemAudioUrl(
     return audioFile?.publicUrl || audioFile?.url || null;
   }
   return null;
+}
+
+function workspaceItemCardImageUrl(
+  item: BrowserWorkspaceItem,
+  objectUrlsRef: { current: Map<string, string> }
+): string | null {
+  const cardImageBlob = item.metadata?.cardImageBlob;
+  if (cardImageBlob instanceof Blob) {
+    const key = `${item.id}:card-image`;
+    const existing = objectUrlsRef.current.get(key);
+    if (existing) return existing;
+    const url = URL.createObjectURL(cardImageBlob);
+    objectUrlsRef.current.set(key, url);
+    return url;
+  }
+  const publicLibrary = item.metadata?.publicLibrary;
+  if (publicLibrary && typeof publicLibrary === "object") {
+    const files = (publicLibrary as { files?: Array<{ role?: string; publicUrl?: string | null }> }).files;
+    const cover = Array.isArray(files) ? files.find((file) => file?.role === "cover" && typeof file.publicUrl === "string") : null;
+    if (cover?.publicUrl) return cover.publicUrl;
+  }
+  const files = item.metadata?.files;
+  if (Array.isArray(files)) {
+    const cover = files.find((file) => file && typeof file === "object" && (file as { role?: string; publicUrl?: string }).role === "cover") as { publicUrl?: string } | undefined;
+    if (cover?.publicUrl) return cover.publicUrl;
+  }
+  return null;
+}
+
+function isPublishedLibraryRecord(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as { id?: unknown; status?: unknown; visibility?: unknown };
+  return typeof record.id === "string" && record.status === "published" && record.visibility === "public";
 }
 
 function midiNoteLabel(pitch: number): string {

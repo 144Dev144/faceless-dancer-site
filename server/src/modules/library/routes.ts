@@ -13,6 +13,7 @@ import { requireAuth } from "../../middleware/auth.js";
 import { env } from "../../config/env.js";
 import { createId, hashToken } from "../../utils/crypto.js";
 import { buildObjectPath, uploadBufferToBunny } from "../storage/bunnyStorage.js";
+import { verifyAccessToken } from "../auth/tokens.js";
 
 const router = Router();
 
@@ -73,10 +74,24 @@ function safeFileName(name: string) {
 }
 
 async function resolvePublishUser(req: any, res: any): Promise<{ userId: string; isAdmin: boolean } | null> {
+  const accessToken = req.cookies?.accessToken;
+  if (accessToken) {
+    try {
+      const session = verifyAccessToken(accessToken);
+      req.session = session;
+      return {
+        userId: session.userId,
+        isAdmin: session.isAdmin,
+      };
+    } catch {
+      // Fall through to token auth for local-app publish flows.
+    }
+  }
+
   const authorization = String(req.headers.authorization ?? "");
   const match = authorization.match(/^Bearer\s+(.+)$/i);
   if (!match) {
-    res.status(401).json({ error: "Missing creator publish token" });
+    res.status(401).json({ error: "Missing creator publish token or authenticated session" });
     return null;
   }
 
@@ -388,6 +403,25 @@ router.post("/publish/items/:itemId/publish", async (req, res) => {
   const result = await pool.query(
     `UPDATE library_items
      SET visibility = 'public', status = 'published', updated_at = now()
+     WHERE id = $1 AND owner_user_id = $2
+     RETURNING *`,
+    [req.params.itemId, publisher.userId]
+  );
+  const item = result.rows[0];
+  if (!item) {
+    return res.status(404).json({ error: "Library item not found" });
+  }
+  const fullItem = await readItemWithFiles(item.id);
+  return res.json({ item: fullItem });
+});
+
+router.post("/publish/items/:itemId/revoke", async (req, res) => {
+  const publisher = await resolvePublishUser(req, res);
+  if (!publisher) return;
+
+  const result = await pool.query(
+    `UPDATE library_items
+     SET visibility = 'private', status = 'archived', updated_at = now()
      WHERE id = $1 AND owner_user_id = $2
      RETURNING *`,
     [req.params.itemId, publisher.userId]

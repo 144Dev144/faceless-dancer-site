@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { HomeTopNav } from "../components/home/HomeTopNav";
-import { api, type LibraryItem } from "../lib/api";
+import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
+import { api } from "../lib/api";
+import type { SessionState } from "../hooks/useSession";
 
 const kindOptions = [
   { value: "", label: "All" },
@@ -14,7 +16,12 @@ const kindOptions = [
   { value: "tool", label: "Tools" },
 ];
 
-export function LibraryPage(): JSX.Element {
+interface Props {
+  session: SessionState;
+  setSession: (next: SessionState) => void;
+}
+
+export function LibraryPage({ session, setSession }: Props): JSX.Element {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [kind, setKind] = useState("");
   const [query, setQuery] = useState("");
@@ -59,7 +66,7 @@ export function LibraryPage(): JSX.Element {
   return (
     <main className="home-v2 library-page-shell">
       <div className="home-v2-shell">
-        <HomeTopNav />
+        <HomeTopNav session={session} setSession={setSession} />
 
         <section className="library-hero">
           <p className="home-v2-kicker">Public Library</p>
@@ -102,63 +109,10 @@ export function LibraryPage(): JSX.Element {
 
         <section className="library-grid">
           {filteredItems.map((item) => (
-            <LibraryCard key={item.id} item={item} />
+            <LibraryAssetCard key={item.id} item={item} />
           ))}
         </section>
       </div>
     </main>
   );
-}
-
-function LibraryCard({ item }: { item: LibraryItem }): JSX.Element {
-  const audioFile = item.files.find((file) => file.role === "audio" || file.role === "preview");
-  const coverFile = item.files.find((file) => file.role === "cover");
-  const datasetSamples = item.files.filter((file) => file.role === "dataset_sample").length;
-  const fileCount = item.files.length;
-  const updated = new Date(item.updatedAt);
-  const creatorName = item.creator?.displayName || item.creator?.creatorSlug || "Faceless creator";
-  const cardImage = coverFile?.publicUrl || item.creator?.bannerUrl || item.creator?.avatarUrl || "";
-
-  return (
-    <article className="library-card">
-      <div
-        className={`library-card__media${cardImage ? "" : " library-card__media--empty"}`}
-        style={cardImage ? { backgroundImage: `url(${cardImage})` } : undefined}
-      >
-        <span className="home-v2-tag">{formatKind(item.kind)}</span>
-      </div>
-      <div className="library-card__topline">
-        <span>By {creatorName}</span>
-        <span>{Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString()}</span>
-      </div>
-      <h2>{item.title}</h2>
-      <p>{item.description || fallbackDescription(item.kind)}</p>
-      <div className="library-card__facts">
-        <span>{fileCount} files</span>
-        {item.kind === "dataset" ? <span>{datasetSamples} samples</span> : null}
-        {item.license ? <span>{item.license}</span> : null}
-      </div>
-      {item.tags.length ? (
-        <div className="library-card__tags">
-          {item.tags.slice(0, 6).map((tag) => (
-            <span key={tag}>{tag}</span>
-          ))}
-        </div>
-      ) : null}
-      {audioFile?.publicUrl ? (
-        <audio className="library-card__audio" controls preload="metadata" src={audioFile.publicUrl}></audio>
-      ) : null}
-    </article>
-  );
-}
-
-function formatKind(kind: string): string {
-  return kind.replace(/_/g, " ");
-}
-
-function fallbackDescription(kind: string): string {
-  if (kind === "dataset") return "Captioned training dataset prepared for creator workflows.";
-  if (kind === "lokr") return "Trained LoKr adapter for compatible Dance Station generation workflows.";
-  if (kind === "rhythm_game") return "Rhythm-game-ready music and metadata package.";
-  return "Published Dance Station library item.";
 }
