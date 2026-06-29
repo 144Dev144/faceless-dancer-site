@@ -495,13 +495,22 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   };
 
   const sendInstrumentLabAssets = () => {
-    const assets = buildAudioMassWorkspaceAssets(workspaceItemsRef.current, instrumentAssetObjectUrlsRef).map((asset) => ({
-      id: asset.id,
-      title: asset.title,
-      kind: asset.kind,
-      creatorName: asset.creatorName,
-      url: asset.url,
-    }));
+    const assets = buildAudioMassWorkspaceAssets(workspaceItemsRef.current, instrumentAssetObjectUrlsRef).map((asset) => {
+      const item = workspaceItemsRef.current.find((candidate) => candidate.id === asset.id);
+      return {
+        id: asset.id,
+        title: asset.title,
+        kind: item?.kind || asset.kind,
+        creatorName: asset.creatorName,
+        url: asset.url,
+        metadata: {
+          bpm: item?.metadata?.bpm,
+          key: item?.metadata?.key,
+          bars: item?.metadata?.bars,
+          tracks: item?.metadata?.tracks,
+        },
+      };
+    });
     instrumentLabFrameRef.current?.contentWindow?.postMessage({
       source: "dance-station-host",
       type: "instrument-lab:assets",
