@@ -263,6 +263,10 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           void saveAudioMassExport(message.payload).catch((error: Error) => setWorkspaceMessage(error.message));
           return;
         }
+        if (message.type === "dance-station:native-download") {
+          downloadAudioMassFile(message.payload);
+          return;
+        }
         if (message.type === "dance-station-export-audio-result") {
           if (message.ok) {
             void saveAudioMassExport(message).catch((error: Error) => setWorkspaceMessage(error.message));
@@ -492,6 +496,28 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     await saveWorkspaceItem(item);
     setWorkspaceMessage(`${item.title} saved to Private Assets.`);
     await refreshWorkspace();
+  };
+
+  const downloadAudioMassFile = (payload: {
+    name?: string;
+    mimeType?: string;
+    buffer?: ArrayBuffer;
+  }) => {
+    if (!payload?.buffer) {
+      setWorkspaceMessage("AudioMass did not provide a file to download.");
+      return;
+    }
+    const blob = new Blob([payload.buffer], { type: payload.mimeType || "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = payload.name || "audiomass-output.mp3";
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setWorkspaceMessage(`${link.download} downloaded.`);
   };
 
   const sendInstrumentLabAssets = () => {
