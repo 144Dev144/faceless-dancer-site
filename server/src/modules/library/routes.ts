@@ -95,6 +95,17 @@ async function resolvePublishUser(req: any, res: any): Promise<{ userId: string;
     return null;
   }
 
+  try {
+    const session = verifyAccessToken(match[1]);
+    req.session = session;
+    return {
+      userId: session.userId,
+      isAdmin: session.isAdmin,
+    };
+  } catch {
+    // Fall back to legacy creator publish token lookup.
+  }
+
   const tokenHash = hashToken(match[1]);
   const result = await pool.query<{
     id: string;
