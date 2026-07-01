@@ -14,6 +14,8 @@ import { env } from "../../config/env.js";
 import { createId, hashToken } from "../../utils/crypto.js";
 import { buildObjectPath, uploadBufferToBunny } from "../storage/bunnyStorage.js";
 import { verifyAccessToken } from "../auth/tokens.js";
+import { listOfficialRhythmGameLibraryItems, readOfficialRhythmGameLibraryItem } from "./officialRhythmGames.js";
+import { normalizeLibraryItemMetadata, syncPublishedRhythmGameCatalogEntry } from "./rhythmGameLibrary.js";
 
 const router = Router();
 
@@ -34,7 +36,7 @@ function mapLibraryItem(row: any, files: any[] = []) {
     title: row.title,
     description: row.description,
     tags: row.tags_json ?? [],
-    metadata: row.metadata_json ?? {},
+    metadata: normalizeLibraryItemMetadata(row.kind, row.metadata_json ?? {}),
     sourceLineage: row.source_lineage_json ?? {},
     license: row.license,
     attribution: row.attribution,
@@ -173,11 +175,6 @@ router.get("/", async (req, res) => {
     filters.push(`tags_json @> $${values.length}::jsonb`);
   }
 
-  values.push(parsed.data.limit);
-  const limitIndex = values.length;
-  values.push(parsed.data.offset);
-  const offsetIndex = values.length;
-
   const result = await pool.query(
     `SELECT li.*,
             u.display_name AS creator_display_name,
@@ -187,8 +184,7 @@ router.get("/", async (req, res) => {
      FROM library_items li
      LEFT JOIN users u ON u.id = li.owner_user_id
      WHERE ${filters.map((filter) => `li.${filter}`).join(" AND ")}
-     ORDER BY li.created_at DESC
-     LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+     ORDER BY li.created_at DESC`,
     values
   );
 
@@ -205,7 +201,20 @@ router.get("/", async (req, res) => {
     }
   }
 
-  return res.json({ items: result.rows.map((row) => mapLibraryItem(row, filesByItem.get(row.id) ?? [])) });
+  let items = result.rows.map((row) => mapLibraryItem(row, filesByItem.get(row.id) ?? []));
+  if (!parsed.data.kind || parsed.data.kind === "rhythm_game") {
+    const officialItems = await listOfficialRhythmGameLibraryItems(req);
+    items = [...officialItems, ...items];
+  }
+  if (parsed.data.tag) {
+    items = items.filter((item) => Array.isArray(item.tags) && item.tags.includes(parsed.data.tag as string));
+  }
+  if (parsed.data.kind) {
+    items = items.filter((item) => item.kind === parsed.data.kind);
+  }
+  items.sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
+  const sliced = items.slice(parsed.data.offset, parsed.data.offset + parsed.data.limit);
+  return res.json({ items: sliced });
 });
 
 router.post("/publish/items", async (req, res) => {
@@ -218,6 +227,7 @@ router.post("/publish/items", async (req, res) => {
   }
 
   const item = parsed.data;
+  const normalizedMetadata = normalizeLibraryItemMetadata(item.kind, item.metadata);
   const localId = item.localId ?? String(item.sourceLineage.localId ?? item.sourceLineage.sourceId ?? "");
   const sourceLineage = { ...item.sourceLineage, ...(localId ? { localId } : {}) };
 
@@ -250,7 +260,7 @@ router.post("/publish/items", async (req, res) => {
         item.title,
         item.description ?? null,
         JSON.stringify(item.tags),
-        JSON.stringify(item.metadata),
+        JSON.stringify(normalizedMetadata),
         JSON.stringify(sourceLineage),
         item.license ?? null,
         item.attribution ?? null,
@@ -276,7 +286,7 @@ router.post("/publish/items", async (req, res) => {
         item.title,
         item.description ?? null,
         JSON.stringify(item.tags),
-        JSON.stringify(item.metadata),
+        JSON.stringify(normalizedMetadata),
         JSON.stringify(sourceLineage),
         item.license ?? null,
         item.attribution ?? null,
@@ -395,6 +405,7 @@ router.post("/publish/items/:itemId/submit", async (req, res) => {
   if (!item) {
     return res.status(404).json({ error: "Library item not found" });
   }
+  await syncPublishedRhythmGameCatalogEntry(item.id);
   const fullItem = await readItemWithFiles(item.id);
   return res.json({ item: fullItem });
 });
@@ -422,6 +433,7 @@ router.post("/publish/items/:itemId/publish", async (req, res) => {
   if (!item) {
     return res.status(404).json({ error: "Library item not found" });
   }
+  await syncPublishedRhythmGameCatalogEntry(item.id);
   const fullItem = await readItemWithFiles(item.id);
   return res.json({ item: fullItem });
 });
@@ -446,6 +458,10 @@ router.post("/publish/items/:itemId/revoke", async (req, res) => {
 });
 
 router.get("/:itemId", async (req, res) => {
+  const officialItem = await readOfficialRhythmGameLibraryItem(req, req.params.itemId);
+  if (officialItem) {
+    return res.json({ item: officialItem });
+  }
   const itemResult = await pool.query(
     `SELECT li.*,
             u.display_name AS creator_display_name,

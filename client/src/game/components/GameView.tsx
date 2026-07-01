@@ -48,6 +48,29 @@ interface EnabledSongSummary {
   availableDifficulties: GameDifficulty[];
   difficultyBeatCounts: Partial<Record<GameDifficulty, number>>;
   modeDifficultyBeatCounts: Partial<Record<GameMode, Partial<Record<GameDifficulty, number>>>>;
+  volumeId: string;
+  volumeLabel: string;
+  volumeSlug: string;
+  officialVolume: boolean;
+  creatorName: string;
+}
+
+interface SongVolumeSummary {
+  volumeId: string;
+  volumeLabel: string;
+  volumeSlug: string;
+  officialVolume: boolean;
+  songCount: number;
+}
+
+interface EnabledSongsResponse {
+  songs: EnabledSongSummary[];
+  total: number;
+  hasMore: boolean;
+  offset: number;
+  limit: number;
+  selectedVolumeId: string;
+  volumes: SongVolumeSummary[];
 }
 
 interface SongLeaderboardRow {
@@ -162,6 +185,7 @@ function formatGameModeLabel(gameMode: GameMode): string {
 const HOLD_MIN_SECONDS = 0.14;
 const HOLD_BONUS_POINTS = 120;
 const HOLD_BONUS_EASY_RELEASE_SECONDS = 0.5;
+const SONG_PAGE_SIZE = 10;
 const MENU_PREVIEW_SAMPLE_SECONDS = 15;
 const MENU_PREVIEW_FADE_SECONDS = 1.2;
 const MENU_PREVIEW_MAX_VOLUME = 0.5;
@@ -269,6 +293,10 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   });
 
   const [songs, setSongs] = useState<EnabledSongSummary[]>([]);
+  const [songVolumes, setSongVolumes] = useState<SongVolumeSummary[]>([]);
+  const [selectedVolumeId, setSelectedVolumeId] = useState("");
+  const [songsTotal, setSongsTotal] = useState(0);
+  const [songsHasMore, setSongsHasMore] = useState(false);
   const [selectedId, setSelectedId] = useState("");
   const [selectedEntry, setSelectedEntry] = useState<SavedBeatEntry | null>(null);
   const [analysisMajorBeats, setAnalysisMajorBeats] = useState<Array<{ timeSeconds: number; strength: number }> | null>(null);
@@ -278,6 +306,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   const [isLandscape, setIsLandscape] = useState(false);
 
   const [loadingSongs, setLoadingSongs] = useState(false);
+  const [loadingMoreSongs, setLoadingMoreSongs] = useState(false);
   const [loadingEntry, setLoadingEntry] = useState(false);
   const [menuAudioEnabled, setMenuAudioEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -564,20 +593,59 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     }
   };
 
-  const loadSongs = async (): Promise<void> => {
-    setLoadingSongs(true);
+  const loadSongs = async (options?: {
+    reset?: boolean;
+    volumeId?: string;
+    offset?: number;
+  }): Promise<void> => {
+    const reset = options?.reset ?? true;
+    const requestedVolumeId = options?.volumeId ?? selectedVolumeId;
+    const offset = options?.offset ?? 0;
+    if (reset) {
+      setLoadingSongs(true);
+    } else {
+      setLoadingMoreSongs(true);
+    }
     setError(null);
     try {
-      const result = await fetchJson<{ songs: EnabledSongSummary[] }>(`${apiBaseUrl}/api/public/songs/enabled`);
+      const params = new URLSearchParams({
+        limit: String(SONG_PAGE_SIZE),
+        offset: String(offset),
+      });
+      if (requestedVolumeId) {
+        params.set("volumeId", requestedVolumeId);
+      }
+      const result = await fetchJson<EnabledSongsResponse>(`${apiBaseUrl}/api/public/songs/enabled?${params.toString()}`);
       const next = result.songs ?? [];
-      setSongs(next);
-      if (next.length > 0) setSelectedId((prev) => prev || next[0].beatEntryId);
+      setSongVolumes(result.volumes ?? []);
+      setSelectedVolumeId(result.selectedVolumeId || requestedVolumeId || result.volumes?.[0]?.volumeId || "");
+      setSongsTotal(result.total ?? next.length);
+      setSongsHasMore(Boolean(result.hasMore));
+      setSongs((previous) => (reset ? next : [...previous, ...next]));
+      setSelectedId((previous) => {
+        if (!reset) {
+          return previous || next[0]?.beatEntryId || "";
+        }
+        if (previous && next.some((song) => song.beatEntryId === previous)) {
+          return previous;
+        }
+        return next[0]?.beatEntryId || "";
+      });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load songs.");
     } finally {
-      setLoadingSongs(false);
+      if (reset) {
+        setLoadingSongs(false);
+      } else {
+        setLoadingMoreSongs(false);
+      }
     }
   };
+
+  const selectedSongSummary = useMemo(
+    () => songs.find((song) => song.beatEntryId === selectedId) ?? null,
+    [selectedId, songs]
+  );
 
   useEffect(() => {
     scoreRef.current = score;
@@ -942,6 +1010,20 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
 
   const handleRolodexScroll = (): void => {
     updateSelectedSongFromRolodex();
+    const container = rolodexRef.current;
+    if (
+      container &&
+      songsHasMore &&
+      !loadingSongs &&
+      !loadingMoreSongs &&
+      container.scrollTop + container.clientHeight >= container.scrollHeight - 220
+    ) {
+      void loadSongs({
+        reset: false,
+        volumeId: selectedVolumeId,
+        offset: songs.length,
+      });
+    }
     if (rolodexRafRef.current !== null) {
       window.cancelAnimationFrame(rolodexRafRef.current);
     }
@@ -1571,7 +1653,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
       window.cancelAnimationFrame(rafId);
       window.removeEventListener("resize", onResize);
     };
-  }, [mode, songs.length]);
+  }, [mode, selectedId, songs]);
 
   useEffect(() => {
     if (!selectedId || mode !== "scores") return;
@@ -1603,10 +1685,17 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     rebuildChart();
   }, [selectedDifficulty, selectedGameMode, selectedEntry?.id, analysisMajorBeats?.length]);
 
-  const selectedSongSummary = useMemo(
-    () => songs.find((song) => song.beatEntryId === selectedId) ?? null,
-    [selectedId, songs]
-  );
+  useEffect(() => {
+    if (songs.length === 0) {
+      if (selectedId) {
+        setSelectedId("");
+      }
+      return;
+    }
+    if (!songs.some((song) => song.beatEntryId === selectedId)) {
+      setSelectedId(songs[0].beatEntryId);
+    }
+  }, [selectedId, songs]);
 
   useEffect(() => {
     if (!selectedSongSummary) {
@@ -1818,19 +1907,50 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
           <h2 className="game-menu-title">
             <img src={gameTitleImage} alt="Faceless Dance Stage" draggable={false} />
           </h2>
-          <button type="button" onClick={() => loadSongs()} disabled={loadingSongs}>{loadingSongs ? "Refreshing..." : "Refresh Songs"}</button>
+          <button
+            type="button"
+            onClick={() => loadSongs({ reset: true, volumeId: selectedVolumeId, offset: 0 })}
+            disabled={loadingSongs}
+          >
+            {loadingSongs ? "Refreshing..." : "Refresh Songs"}
+          </button>
         </header>
 
         <div className="game-menu-screen game-menu-screen--arc">
           <div className="game-menu-heading">
             <h3>Select Your Beat</h3>
-            <button
-              type="button"
-              className={`game-menu-audio-toggle${menuAudioEnabled ? " enabled" : " secondary"}`}
-              onClick={enableMenuAudio}
-            >
-              {menuAudioEnabled ? "Audio Enabled" : "Enable Audio"}
-            </button>
+            <div className="game-menu-heading-actions">
+              <label className="game-menu-volume-field">
+                <span>Volume</span>
+                <select
+                  value={selectedVolumeId}
+                  onChange={(event) => {
+                    const nextVolumeId = event.currentTarget.value;
+                    setSelectedVolumeId(nextVolumeId);
+                    setSongs([]);
+                    setSelectedId("");
+                    void loadSongs({ reset: true, volumeId: nextVolumeId, offset: 0 });
+                  }}
+                  disabled={loadingSongs || songVolumes.length === 0}
+                >
+                  {songVolumes.map((volume) => (
+                    <option key={volume.volumeId} value={volume.volumeId}>
+                      {volume.volumeLabel} ({volume.songCount})
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  Loaded {songs.length} of {songsTotal}
+                </small>
+              </label>
+              <button
+                type="button"
+                className={`game-menu-audio-toggle${menuAudioEnabled ? " enabled" : " secondary"}`}
+                onClick={enableMenuAudio}
+              >
+                {menuAudioEnabled ? "Audio Enabled" : "Enable Audio"}
+              </button>
+            </div>
           </div>
 
           <div className="game-menu-arc-layout">
@@ -1841,28 +1961,41 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                     <span className="game-song-loading-spinner" aria-hidden="true" />
                     <strong>Loading</strong>
                   </div>
+                ) : songs.length === 0 ? (
+                  <div className="game-song-loading game-song-loading--empty" aria-live="polite">
+                    <strong>No songs in this volume yet.</strong>
+                  </div>
                 ) : (
-                  songs.map((song) => (
-                    <button
-                      key={song.beatEntryId}
-                      type="button"
-                      data-song-id={song.beatEntryId}
-                      className={`game-song-card${selectedId === song.beatEntryId ? " selected" : ""}`}
-                      onClick={() => focusSongCard(song.beatEntryId, true)}
-                    >
-                      {song.coverImageUrl ? (
-                        <img className="game-song-card-bg" src={song.coverImageUrl} alt="" draggable={false} />
-                      ) : null}
-                      <div className="game-song-card-overlay" />
-                      <div className="game-song-card-glare" />
-                      <strong>{song.title}</strong>
-                      <span>
-                        {song.availableDifficulties?.length > 0
-                          ? `${song.availableDifficulties.join(", ")}`
-                          : `${song.gameBeatCount || song.majorBeatCount} notes`}
-                      </span>
-                    </button>
-                  ))
+                  <>
+                    {songs.map((song) => (
+                      <button
+                        key={song.beatEntryId}
+                        type="button"
+                        data-song-id={song.beatEntryId}
+                        className={`game-song-card${selectedId === song.beatEntryId ? " selected" : ""}`}
+                        onClick={() => focusSongCard(song.beatEntryId, true)}
+                      >
+                        {song.coverImageUrl ? (
+                          <img className="game-song-card-bg" src={song.coverImageUrl} alt="" draggable={false} />
+                        ) : null}
+                        <div className="game-song-card-overlay" />
+                        <div className="game-song-card-glare" />
+                        <strong>{song.title}</strong>
+                        <span>
+                          {song.availableDifficulties?.length > 0
+                            ? `${song.availableDifficulties.join(", ")}`
+                            : `${song.gameBeatCount || song.majorBeatCount} notes`}
+                        </span>
+                        <span>{song.creatorName}</span>
+                      </button>
+                    ))}
+                    {loadingMoreSongs ? (
+                      <div className="game-song-loading game-song-loading--more" aria-live="polite">
+                        <span className="game-song-loading-spinner" aria-hidden="true" />
+                        <strong>Loading more</strong>
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </div>
             </div>
@@ -1927,7 +2060,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                     </div>
                   ) : null}
                   <p className="small game-menu-meta">
-                    {formatGameModeLabel(selectedGameMode)} | {selectedDifficulty} | notes{" "}
+                    {selectedSongSummary.volumeLabel} | {formatGameModeLabel(selectedGameMode)} | {selectedDifficulty} | notes{" "}
                     {selectedSongSummary.modeDifficultyBeatCounts?.[selectedGameMode]?.[selectedDifficulty] ?? 0}
                     {selectedGameMode === "laser_shoot" ? ` | AI ${selectedWizardAiDifficulty}` : ""}
                   </p>

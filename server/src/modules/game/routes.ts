@@ -45,6 +45,14 @@ import {
   upsertSongForEntry,
 } from "./service.js";
 import {
+  buildPublishedSongSummary,
+  createPublishedRhythmGameAudioReadStream,
+  createPublishedRhythmGameCoverReadStream,
+  readPublishedRhythmGameEntry,
+  readPublishedRhythmGameLibraryItem,
+  syncAllPublishedRhythmGameCatalogEntries,
+} from "../library/rhythmGameLibrary.js";
+import {
   validateGameBeatsPayload,
   validateSavePayload,
   validateSaveLyricsPayload,
@@ -72,6 +80,58 @@ async function readJsonBody(req: any): Promise<any> {
 function parsePositiveInt(value: unknown, fallback: number): number {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseNonNegativeInt(value: unknown, fallback: number): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+const OFFICIAL_VOLUME_ID = "faceless-volume-1";
+const OFFICIAL_VOLUME_LABEL = "Faceless Volume 1";
+let lastPublishedRhythmCatalogSyncAt = 0;
+
+async function ensurePublishedRhythmCatalogFresh(): Promise<void> {
+  const now = Date.now();
+  if (now - lastPublishedRhythmCatalogSyncAt < 30_000) {
+    return;
+  }
+  await syncAllPublishedRhythmGameCatalogEntries();
+  lastPublishedRhythmCatalogSyncAt = now;
+}
+
+async function readPlayableBeatEntry(entryId: string): Promise<Record<string, unknown> | null> {
+  const legacy = await readSavedBeatEntry(entryId);
+  if (legacy) {
+    return legacy;
+  }
+  return readPublishedRhythmGameEntry(entryId);
+}
+
+async function createPlayableAudioReadStream(
+  entryId: string,
+  entry: Record<string, unknown> | null
+): Promise<{ stream: NodeJS.ReadableStream; mimeType: string } | null> {
+  if (entry) {
+    const legacy = await createAudioReadStream(entry);
+    if (legacy) {
+      return legacy;
+    }
+  }
+  return createPublishedRhythmGameAudioReadStream(entryId);
+}
+
+async function createPlayableCoverReadStream(
+  entryId: string,
+  coverImageFileName: string | null | undefined
+): Promise<{ stream: NodeJS.ReadableStream; mimeType: string } | null> {
+  if (coverImageFileName) {
+    const legacy = await createSongCoverReadStream(coverImageFileName);
+    if (legacy) {
+      return legacy;
+    }
+  }
+  return createPublishedRhythmGameCoverReadStream(entryId);
 }
 
 function normalizeWorkerLyricsResult(result: unknown): Record<string, unknown> | null {
@@ -702,6 +762,7 @@ router.post("/api/catalog/previews/generate-missing", requireAuth, requireAdmin,
 });
 
 router.get("/api/public/songs/enabled", async (req, res) => {
+  await ensurePublishedRhythmCatalogFresh();
   const enabledSongs = await listEnabledSongs();
   const songs: Array<{
     beatEntryId: string;
@@ -715,10 +776,20 @@ router.get("/api/public/songs/enabled", async (req, res) => {
     modeDifficultyBeatCounts: Partial<
       Record<"step_arrows" | "orb_beat" | "laser_shoot", Partial<Record<"easy" | "normal" | "hard", number>>>
     >;
+    volumeId: string;
+    volumeLabel: string;
+    volumeSlug: string;
+    officialVolume: boolean;
+    creatorName: string;
   }> = [];
   for (const song of enabledSongs) {
-    const entry = await readSavedBeatEntry(song.beatEntryId);
+    const entry = await readPlayableBeatEntry(song.beatEntryId);
     if (!entry) {
+      continue;
+    }
+    const published = await readPublishedRhythmGameLibraryItem(song.beatEntryId);
+    if (published) {
+      songs.push(buildPublishedSongSummary(published, entry));
       continue;
     }
     songs.push({
@@ -733,20 +804,70 @@ router.get("/api/public/songs/enabled", async (req, res) => {
       coverImageUrl: song.coverImageFileName
         ? `${req.baseUrl}/api/public/songs/${encodeURIComponent(song.beatEntryId)}/cover`
         : null,
+      volumeId: OFFICIAL_VOLUME_ID,
+      volumeLabel: OFFICIAL_VOLUME_LABEL,
+      volumeSlug: OFFICIAL_VOLUME_ID,
+      officialVolume: true,
+      creatorName: "The Faceless Dancer",
     });
   }
-  return res.json({ songs });
+  const volumeMap = new Map<
+    string,
+    {
+      volumeId: string;
+      volumeLabel: string;
+      volumeSlug: string;
+      officialVolume: boolean;
+      songCount: number;
+    }
+  >();
+  for (const song of songs) {
+    const existing = volumeMap.get(song.volumeId);
+    if (existing) {
+      existing.songCount += 1;
+      continue;
+    }
+    volumeMap.set(song.volumeId, {
+      volumeId: song.volumeId,
+      volumeLabel: song.volumeLabel,
+      volumeSlug: song.volumeSlug,
+      officialVolume: song.officialVolume,
+      songCount: 1,
+    });
+  }
+  const volumes = Array.from(volumeMap.values()).sort((left, right) => {
+    if (left.officialVolume !== right.officialVolume) {
+      return left.officialVolume ? -1 : 1;
+    }
+    return left.volumeLabel.localeCompare(right.volumeLabel);
+  });
+  const requestedVolumeId = String(req.query.volumeId ?? "").trim();
+  const selectedVolumeId =
+    requestedVolumeId && volumeMap.has(requestedVolumeId)
+      ? requestedVolumeId
+      : volumes[0]?.volumeId || "";
+  const filteredSongs = selectedVolumeId ? songs.filter((song) => song.volumeId === selectedVolumeId) : songs;
+  const limit = Math.min(50, parsePositiveInt(req.query.limit, 10));
+  const offset = parseNonNegativeInt(req.query.offset, 0);
+  const pagedSongs = filteredSongs.slice(offset, offset + limit);
+  return res.json({
+    songs: pagedSongs,
+    total: filteredSongs.length,
+    hasMore: offset + pagedSongs.length < filteredSongs.length,
+    offset,
+    limit,
+    selectedVolumeId,
+    volumes,
+  });
 });
 
 router.get("/api/public/songs/:id/cover", async (req, res) => {
+  await ensurePublishedRhythmCatalogFresh();
   if (!(await isEntryEnabled(req.params.id))) {
     return res.status(404).json({ error: "Song not found." });
   }
   const song = await findSongByEntryId(req.params.id);
-  if (!song || !song.cover_image_file_name) {
-    return res.status(404).json({ error: "Cover image not found." });
-  }
-  const streamInfo = await createSongCoverReadStream(song.cover_image_file_name);
+  const streamInfo = await createPlayableCoverReadStream(req.params.id, song?.cover_image_file_name);
   if (!streamInfo) {
     return res.status(404).json({ error: "Cover image not found." });
   }
@@ -756,10 +877,11 @@ router.get("/api/public/songs/:id/cover", async (req, res) => {
 });
 
 router.get("/api/public/beats/:id", async (req, res) => {
+  await ensurePublishedRhythmCatalogFresh();
   if (!(await isEntryEnabled(req.params.id))) {
     return res.status(404).json({ error: "Song not found." });
   }
-  const entry = await readSavedBeatEntry(req.params.id);
+  const entry = await readPlayableBeatEntry(req.params.id);
   if (!entry) {
     return res.status(404).json({ error: "Saved entry not found." });
   }
@@ -767,14 +889,15 @@ router.get("/api/public/beats/:id", async (req, res) => {
 });
 
 router.get("/api/public/beats/:id/audio", async (req, res) => {
+  await ensurePublishedRhythmCatalogFresh();
   if (!(await isEntryEnabled(req.params.id))) {
     return res.status(404).json({ error: "Song not found." });
   }
-  const entry = await readSavedBeatEntry(req.params.id);
+  const entry = await readPlayableBeatEntry(req.params.id);
   if (!entry) {
     return res.status(404).json({ error: "Saved entry not found." });
   }
-  const streamInfo = await createAudioReadStream(entry);
+  const streamInfo = await createPlayableAudioReadStream(req.params.id, entry);
   if (!streamInfo) {
     return res.status(404).json({ error: "Saved audio not found." });
   }
