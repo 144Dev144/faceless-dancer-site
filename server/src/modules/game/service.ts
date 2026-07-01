@@ -105,6 +105,22 @@ export async function isEntryEnabled(beatEntryId: string): Promise<boolean> {
   return row?.is_enabled === 1;
 }
 
+export async function setSongEnabledForEntry(
+  beatEntryId: string,
+  isEnabled: boolean,
+  title?: string
+): Promise<GameSongRow | undefined> {
+  await pool.query(
+    `UPDATE game_songs
+     SET is_enabled = $1,
+         title = COALESCE($2, title),
+         updated_at = now()
+     WHERE beat_entry_id = $3`,
+    [isEnabled ? 1 : 0, title ?? null, beatEntryId]
+  );
+  return findSongByEntryId(beatEntryId);
+}
+
 export async function upsertSongForEntry(params: {
   beatEntryId: string;
   title: string;
