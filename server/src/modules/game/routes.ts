@@ -48,6 +48,7 @@ import {
   buildPublishedSongSummary,
   createPublishedRhythmGameAudioReadStream,
   createPublishedRhythmGameCoverReadStream,
+  listPublishedRhythmGameCatalogRows,
   readPublishedRhythmGameEntry,
   readPublishedRhythmGameLibraryItem,
   syncAllPublishedRhythmGameCatalogEntries,
@@ -762,45 +763,26 @@ router.post("/api/catalog/previews/generate-missing", requireAuth, requireAdmin,
 });
 
 router.get("/api/public/songs/enabled", async (req, res) => {
-  await ensurePublishedRhythmCatalogFresh();
   const enabledSongs = await listEnabledSongs();
-  const songs: Array<{
-    beatEntryId: string;
-    title: string;
-    majorBeatCount: number;
-    gameBeatCount: number;
-    coverImageUrl: string | null;
-    availableGameModes: Array<"step_arrows" | "orb_beat" | "laser_shoot">;
-    availableDifficulties: Array<"easy" | "normal" | "hard">;
-    difficultyBeatCounts: Partial<Record<"easy" | "normal" | "hard", number>>;
-    modeDifficultyBeatCounts: Partial<
-      Record<"step_arrows" | "orb_beat" | "laser_shoot", Partial<Record<"easy" | "normal" | "hard", number>>>
-    >;
-    volumeId: string;
-    volumeLabel: string;
-    volumeSlug: string;
-    officialVolume: boolean;
-    creatorName: string;
-  }> = [];
-  for (const song of enabledSongs) {
-    const entry = await readPlayableBeatEntry(song.beatEntryId);
-    if (!entry) {
-      continue;
-    }
-    const published = await readPublishedRhythmGameLibraryItem(song.beatEntryId);
+  const publishedCatalog = await listPublishedRhythmGameCatalogRows(enabledSongs.map((song) => song.beatEntryId));
+  const catalog = enabledSongs.map((song) => {
+    const published = publishedCatalog.get(song.beatEntryId);
     if (published) {
-      songs.push(buildPublishedSongSummary(published, entry));
-      continue;
+      return {
+        beatEntryId: song.beatEntryId,
+        title: published.title,
+        coverImageUrl: published.coverPublicUrl,
+        volumeId: published.metadata.volumeId,
+        volumeLabel: published.metadata.volumeLabel,
+        volumeSlug: published.metadata.volumeSlug,
+        officialVolume: published.metadata.officialVolume,
+        creatorName: published.creatorName,
+        published: true,
+      };
     }
-    songs.push({
+    return {
       beatEntryId: song.beatEntryId,
       title: song.title,
-      majorBeatCount: Array.isArray(entry.majorBeats) ? entry.majorBeats.length : 0,
-      gameBeatCount: getDifficultyBeatCounts(entry).normal ?? 0,
-      availableGameModes: getAvailableGameModes(entry),
-      availableDifficulties: getAvailableDifficulties(entry),
-      difficultyBeatCounts: getDifficultyBeatCounts(entry),
-      modeDifficultyBeatCounts: getModeDifficultyBeatCounts(entry),
       coverImageUrl: song.coverImageFileName
         ? `${req.baseUrl}/api/public/songs/${encodeURIComponent(song.beatEntryId)}/cover`
         : null,
@@ -809,8 +791,9 @@ router.get("/api/public/songs/enabled", async (req, res) => {
       volumeSlug: OFFICIAL_VOLUME_ID,
       officialVolume: true,
       creatorName: "The Faceless Dancer",
-    });
-  }
+      published: false,
+    };
+  });
   const volumeMap = new Map<
     string,
     {
@@ -821,7 +804,7 @@ router.get("/api/public/songs/enabled", async (req, res) => {
       songCount: number;
     }
   >();
-  for (const song of songs) {
+  for (const song of catalog) {
     const existing = volumeMap.get(song.volumeId);
     if (existing) {
       existing.songCount += 1;
@@ -846,14 +829,59 @@ router.get("/api/public/songs/enabled", async (req, res) => {
     requestedVolumeId && volumeMap.has(requestedVolumeId)
       ? requestedVolumeId
       : volumes[0]?.volumeId || "";
-  const filteredSongs = selectedVolumeId ? songs.filter((song) => song.volumeId === selectedVolumeId) : songs;
+  const filteredCatalog = selectedVolumeId ? catalog.filter((song) => song.volumeId === selectedVolumeId) : catalog;
   const limit = Math.min(50, parsePositiveInt(req.query.limit, 10));
   const offset = parseNonNegativeInt(req.query.offset, 0);
-  const pagedSongs = filteredSongs.slice(offset, offset + limit);
+  const pageCatalog = filteredCatalog.slice(offset, offset + limit);
+  const songs: Array<{
+    beatEntryId: string;
+    title: string;
+    majorBeatCount: number;
+    gameBeatCount: number;
+    coverImageUrl: string | null;
+    availableGameModes: Array<"step_arrows" | "orb_beat" | "laser_shoot">;
+    availableDifficulties: Array<"easy" | "normal" | "hard">;
+    difficultyBeatCounts: Partial<Record<"easy" | "normal" | "hard", number>>;
+    modeDifficultyBeatCounts: Partial<
+      Record<"step_arrows" | "orb_beat" | "laser_shoot", Partial<Record<"easy" | "normal" | "hard", number>>>
+    >;
+    volumeId: string;
+    volumeLabel: string;
+    volumeSlug: string;
+    officialVolume: boolean;
+    creatorName: string;
+  }> = [];
+  for (const song of pageCatalog) {
+    const entry = await readPlayableBeatEntry(song.beatEntryId);
+    if (!entry) {
+      continue;
+    }
+    const published = song.published ? await readPublishedRhythmGameLibraryItem(song.beatEntryId) : null;
+    if (published) {
+      songs.push(buildPublishedSongSummary(published, entry));
+      continue;
+    }
+    songs.push({
+      beatEntryId: song.beatEntryId,
+      title: song.title,
+      majorBeatCount: Array.isArray(entry.majorBeats) ? entry.majorBeats.length : 0,
+      gameBeatCount: getDifficultyBeatCounts(entry).normal ?? 0,
+      availableGameModes: getAvailableGameModes(entry),
+      availableDifficulties: getAvailableDifficulties(entry),
+      difficultyBeatCounts: getDifficultyBeatCounts(entry),
+      modeDifficultyBeatCounts: getModeDifficultyBeatCounts(entry),
+      volumeId: song.volumeId,
+      volumeLabel: song.volumeLabel,
+      volumeSlug: song.volumeSlug,
+      officialVolume: song.officialVolume,
+      coverImageUrl: song.coverImageUrl,
+      creatorName: song.creatorName,
+    });
+  }
   return res.json({
-    songs: pagedSongs,
-    total: filteredSongs.length,
-    hasMore: offset + pagedSongs.length < filteredSongs.length,
+    songs,
+    total: filteredCatalog.length,
+    hasMore: offset + pageCatalog.length < filteredCatalog.length,
     offset,
     limit,
     selectedVolumeId,

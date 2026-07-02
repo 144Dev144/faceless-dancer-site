@@ -1078,6 +1078,40 @@ label {
   perspective: 1600px;
 }
 
+.game-menu-volume-overlay {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 5;
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(3, 8, 16, 0.78);
+  border: 1px solid rgba(122, 208, 255, 0.24);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+.game-menu-volume-overlay span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(226, 241, 255, 0.84);
+}
+
+.game-menu-volume-overlay select {
+  width: 100%;
+  min-width: 0;
+}
+
+.game-menu-volume-overlay small {
+  font-size: 0.72rem;
+  color: rgba(210, 228, 247, 0.72);
+}
+
 .game-song-rolodex {
   position: absolute;
   inset: 0;

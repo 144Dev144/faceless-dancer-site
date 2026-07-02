@@ -43,6 +43,14 @@ type PublishedRhythmGameItemRow = {
   creator_banner_url: string | null;
 };
 
+export interface PublishedRhythmGameCatalogRow {
+  itemId: string;
+  title: string;
+  metadata: NormalizedRhythmGameMetadata;
+  creatorName: string;
+  coverPublicUrl: string | null;
+}
+
 export interface NormalizedRhythmGameMetadata {
   category: "rhythm_game";
   gameEnabled: boolean;
@@ -195,6 +203,19 @@ function mapPublishedItem(row: PublishedRhythmGameItemRow, files: LibraryFileRow
   };
 }
 
+function mapPublishedCatalogRow(
+  row: PublishedRhythmGameItemRow,
+  coverFile: Pick<LibraryFileRow, "public_url"> | null | undefined
+): PublishedRhythmGameCatalogRow {
+  return {
+    itemId: row.id,
+    title: row.title,
+    metadata: normalizeRhythmGameLibraryMetadata(row.metadata_json),
+    creatorName: row.creator_display_name || row.creator_slug || "Faceless creator",
+    coverPublicUrl: coverFile?.public_url || row.creator_banner_url || row.creator_avatar_url || null,
+  };
+}
+
 async function readItemRows(itemId: string): Promise<{ row: PublishedRhythmGameItemRow; files: LibraryFileRow[] } | null> {
   const itemResult = await pool.query<PublishedRhythmGameItemRow>(
     `SELECT li.*,
@@ -254,6 +275,53 @@ export async function listPublishedRhythmGameLibraryItems(): Promise<PublishedRh
     filesByItem.set(file.item_id, bucket);
   }
   return itemResult.rows.map((row) => mapPublishedItem(row, filesByItem.get(row.id) ?? []));
+}
+
+export async function listPublishedRhythmGameCatalogRows(
+  itemIds?: string[]
+): Promise<Map<string, PublishedRhythmGameCatalogRow>> {
+  const filters: string[] = [`li.kind = 'rhythm_game'`];
+  const values: unknown[] = [];
+  if (itemIds && itemIds.length > 0) {
+    values.push(itemIds);
+    filters.push(`li.id = ANY($${values.length}::text[])`);
+  }
+  const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const itemResult = await pool.query<PublishedRhythmGameItemRow>(
+    `SELECT li.*,
+            u.display_name AS creator_display_name,
+            u.creator_slug,
+            u.avatar_public_url AS creator_avatar_url,
+            u.banner_public_url AS creator_banner_url
+     FROM library_items li
+     LEFT JOIN users u ON u.id = li.owner_user_id
+     ${whereClause}`,
+    values
+  );
+  if (itemResult.rows.length === 0) {
+    return new Map();
+  }
+  const resolvedIds = itemResult.rows.map((row) => row.id);
+  const fileResult = await pool.query<Pick<LibraryFileRow, "item_id" | "public_url" | "role">>(
+    `SELECT item_id, public_url, role
+     FROM library_files
+     WHERE item_id = ANY($1::text[])
+       AND role = 'cover'
+     ORDER BY created_at ASC`,
+    [resolvedIds]
+  );
+  const coverByItem = new Map<string, Pick<LibraryFileRow, "public_url" | "role">>();
+  for (const file of fileResult.rows) {
+    if (!coverByItem.has(file.item_id)) {
+      coverByItem.set(file.item_id, file);
+    }
+  }
+  return new Map(
+    itemResult.rows.map((row) => [
+      row.id,
+      mapPublishedCatalogRow(row, coverByItem.get(row.id)),
+    ])
+  );
 }
 
 function filterEntryModes(entry: Record<string, unknown>, metadata: NormalizedRhythmGameMetadata) {

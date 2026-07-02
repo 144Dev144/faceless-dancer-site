@@ -1920,7 +1920,19 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
           <div className="game-menu-heading">
             <h3>Select Your Beat</h3>
             <div className="game-menu-heading-actions">
-              <label className="game-menu-volume-field">
+              <button
+                type="button"
+                className={`game-menu-audio-toggle${menuAudioEnabled ? " enabled" : " secondary"}`}
+                onClick={enableMenuAudio}
+              >
+                {menuAudioEnabled ? "Audio Enabled" : "Enable Audio"}
+              </button>
+            </div>
+          </div>
+
+          <div className="game-menu-arc-layout">
+            <div className="game-menu-arc-stage">
+              <label className="game-menu-volume-overlay">
                 <span>Volume</span>
                 <select
                   value={selectedVolumeId}
@@ -1943,18 +1955,6 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                   Loaded {songs.length} of {songsTotal}
                 </small>
               </label>
-              <button
-                type="button"
-                className={`game-menu-audio-toggle${menuAudioEnabled ? " enabled" : " secondary"}`}
-                onClick={enableMenuAudio}
-              >
-                {menuAudioEnabled ? "Audio Enabled" : "Enable Audio"}
-              </button>
-            </div>
-          </div>
-
-          <div className="game-menu-arc-layout">
-            <div className="game-menu-arc-stage">
               <div className="game-song-rolodex" ref={rolodexRef} onScroll={handleRolodexScroll}>
                 {loadingSongs ? (
                   <div className="game-song-loading" aria-live="polite" aria-label="Loading songs">
