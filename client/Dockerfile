@@ -1,5 +1,9 @@
 FROM node:22-alpine AS build
 WORKDIR /app/client
+ARG VITE_SOLANA_NETWORK=devnet
+ARG VITE_SOLANA_RPC_URL=https://api.devnet.solana.com
+ENV VITE_SOLANA_NETWORK=${VITE_SOLANA_NETWORK}
+ENV VITE_SOLANA_RPC_URL=${VITE_SOLANA_RPC_URL}
 COPY client/package.json ./
 RUN npm install
 COPY client ./

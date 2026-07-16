@@ -1,4 +1,5 @@
 import type { LibraryItem } from "../../lib/api";
+import { AudioPlayButton } from "../audio/SiteAudioPlayer";
 
 interface Props {
   item: LibraryItem;
@@ -60,7 +61,9 @@ export function LibraryAssetCard({
           </div>
         ) : null}
         {audioFile?.publicUrl ? (
-          <audio className="library-card__audio" controls preload="metadata" src={audioFile.publicUrl}></audio>
+          <div className="library-card__audio">
+            <AudioPlayButton track={{ id: `library-audio-${item.id}`, title: item.title, url: audioFile.publicUrl, mimeType: audioFile.mimeType }} />
+          </div>
         ) : null}
         {actionLabel ? (
           <button

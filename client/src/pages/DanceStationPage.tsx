@@ -1,7 +1,10 @@
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
+import { AudioWaveform, CircleHelp, LibraryBig, Piano, Settings2, Sparkles, type LucideIcon } from "lucide-preact";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
+import { RemoteGenerationPanel } from "../components/danceStation/RemoteGenerationPanel";
+import { AudioPlayButton } from "../components/audio/SiteAudioPlayer";
 import { api, type LibraryItem } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
 import {
@@ -21,61 +24,67 @@ interface Props {
   setSession: (next: SessionState) => void;
 }
 
-type DanceStationPanel = "library" | "audio-edit" | "instrument-lab" | "generation" | "extraction" | "training";
+type DanceStationPanel = "library" | "audio-edit" | "instrument-lab" | "generation";
+
+const panelHashById: Record<DanceStationPanel, string> = {
+  generation: "music-generation",
+  library: "library",
+  "audio-edit": "audio-edit",
+  "instrument-lab": "instrument-lab",
+};
+
+const panelIdByHash: Record<string, DanceStationPanel> = {
+  "music-generation": "generation",
+  generation: "generation",
+  library: "library",
+  "audio-edit": "audio-edit",
+  "instrument-lab": "instrument-lab",
+};
+
+function panelFromHash(): DanceStationPanel {
+  const hash = window.location.hash.replace(/^#/, "").trim().toLowerCase();
+  return panelIdByHash[hash] ?? "generation";
+}
 
 const tools: Array<{
   id: DanceStationPanel;
   label: string;
   status: string;
   available: boolean;
-  description: string;
+  Icon: LucideIcon;
 }> = [
   {
-    id: "library",
-    label: "Library",
-    status: "",
+    id: "generation",
+    label: "Music Generation",
+    status: "REMOTE",
     available: true,
-    description: "Private assets, public library browsing, account sync, and publishing.",
+    Icon: Sparkles,
   },
   {
     id: "audio-edit",
     label: "Audio Edit",
     status: "",
     available: true,
-    description: "AudioMass browser editing with workspace import/export.",
+    Icon: AudioWaveform,
   },
   {
     id: "instrument-lab",
     label: "Instrument Lab",
     status: "",
     available: true,
-    description: "Browser instruments, MIDI-style clips, and rendered workspace assets.",
+    Icon: Piano,
   },
   {
-    id: "generation",
-    label: "Generation",
-    status: "COMING SOON",
-    available: false,
-    description: "ACE-Step jobs once hosted compute is connected.",
-  },
-  {
-    id: "extraction",
-    label: "Extraction",
-    status: "COMING SOON",
-    available: false,
-    description: "Stem and track extraction once hosted compute is connected.",
-  },
-  {
-    id: "training",
-    label: "LoKr Training",
-    status: "COMING SOON",
-    available: false,
-    description: "Side-Step training once GPU workers are available.",
+    id: "library",
+    label: "Library",
+    status: "",
+    available: true,
+    Icon: LibraryBig,
   },
 ];
 
 export function DanceStationPage({ session, setSession }: Props): JSX.Element {
-  const [activePanel, setActivePanel] = useState<DanceStationPanel>("library");
+  const [activePanel, setActivePanel] = useState<DanceStationPanel>(panelFromHash);
   const [workspaceItems, setWorkspaceItems] = useState<BrowserWorkspaceItem[]>([]);
   const [workspaceStatus, setWorkspaceStatus] = useState<BrowserWorkspaceStatus | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
@@ -117,6 +126,15 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   useEffect(() => {
     document.body.classList.add("home-page-body");
     return () => document.body.classList.remove("home-page-body");
+  }, []);
+
+  useEffect(() => {
+    if (!window.location.hash || !panelIdByHash[window.location.hash.replace(/^#/, "").trim().toLowerCase()]) {
+      window.history.replaceState({}, "", `${window.location.pathname}#${panelHashById[activePanel]}`);
+    }
+    const onHashChange = () => setActivePanel(panelFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   useEffect(() => {
@@ -172,6 +190,12 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     ]);
     setWorkspaceItems(items);
     setWorkspaceStatus(status);
+  };
+
+  const selectPanel = (panel: DanceStationPanel) => {
+    setActivePanel(panel);
+    const nextHash = `#${panelHashById[panel]}`;
+    if (window.location.hash !== nextHash) window.location.hash = nextHash;
   };
 
   const addPrivateAsset = async (fileList: FileList | null) => {
@@ -826,7 +850,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   }, [activePanel, activeInstrumentTrackId, activeInstrumentNotes, instrumentOctave, instrumentRecording, instrumentBpm]);
 
   return (
-    <main className="home-v2 library-page-shell dance-station-app-shell">
+    <main className={`home-v2 library-page-shell dance-station-app-shell${activePanel === "generation" ? " dance-station-app-shell--generation" : ""}`}>
       <div className="home-v2-shell">
         <HomeTopNav session={session} setSession={setSession} />
 
@@ -848,14 +872,15 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         <section className="dance-station-app-header">
           <div>
             <p className="home-v2-kicker">Dance Station</p>
-            <p>Build, import, edit, sync, and publish music assets from one browser workspace.</p>
           </div>
           <div className="dance-station-header-actions">
             <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => setShowStorageHelp(true)}>
-              Help
+              <CircleHelp aria-hidden="true" size={15} strokeWidth={2} />
+              <span>Help</span>
             </button>
             <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => setShowSettings((value) => !value)}>
-              {showSettings ? "Close Settings" : "Settings"}
+              <Settings2 aria-hidden="true" size={15} strokeWidth={2} />
+              <span>{showSettings ? "Close Settings" : "Settings"}</span>
             </button>
           </div>
         </section>
@@ -866,16 +891,16 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
               key={tool.id}
               type="button"
               className={`dance-station-tool-card${activePanel === tool.id ? " active" : ""}${tool.available ? "" : " disabled"}`}
-              onClick={() => setActivePanel(tool.id)}
+              onClick={() => selectPanel(tool.id)}
             >
-              {!tool.available ? <span>{tool.status}</span> : null}
-              <strong>{tool.label}</strong>
-              <small>{tool.description}</small>
+              <tool.Icon aria-hidden="true" size={16} strokeWidth={2} />
+              <span className="dance-station-tool-card__label">{tool.label}</span>
+              {!tool.available ? <span className="dance-station-tool-card__status">{tool.status}</span> : null}
             </button>
           ))}
         </section>
 
-        <section className={`dance-station-main-grid${activePanel === "instrument-lab" ? " dance-station-main-grid--wide" : ""}`}>
+        <section className={`dance-station-main-grid${activePanel === "instrument-lab" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}`}>
           <div className="home-v2-card dance-station-main-panel">
             {showSettings ? (
               <BrowserWorkspaceSettings
@@ -910,12 +935,14 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
               <AudioEditPanel frameRef={audioMassFrameRef} />
             ) : activePanel === "instrument-lab" ? (
               <InstrumentLabPanel frameRef={instrumentLabFrameRef} />
+            ) : activePanel === "generation" ? (
+              <RemoteGenerationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
             ) : (
               <UnavailablePanel tool={tools.find((tool) => tool.id === activePanel) ?? tools[0]} />
             )}
           </div>
 
-          {activePanel !== "instrument-lab" ? <aside className="home-v2-card dance-station-context-panel">
+          {activePanel !== "instrument-lab" && activePanel !== "generation" ? <aside className="home-v2-card dance-station-context-panel">
             {showSettings ? (
               <SettingsSummaryPanel
                 session={session}
@@ -944,6 +971,15 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             )}
           </aside> : null}
         </section>
+
+        {activePanel === "generation" ? (
+          <footer className="dance-station-status-bar" aria-label="Dance Station status">
+            <span>Model: ACE-Step 1.5 XL Turbo</span>
+            <span>Workspace: Local assets</span>
+            <span>Queue: Remote launch</span>
+            <span>System status <strong>Live above</strong></span>
+          </footer>
+        ) : null}
 
         {audioEditPickerOpen ? (
           <AudioMassAssetPicker
@@ -1129,6 +1165,7 @@ function PrivateAssetRow({
       : "Login to publish"
     : "";
   const cardImageUrl = workspaceItemCardImageUrl(item, workspaceCardObjectUrlsRef);
+  const audioUrl = workspaceItemAudioUrl(item, workspaceCardObjectUrlsRef);
   return (
     <article
       className={`dance-station-workspace-item${cardImageUrl ? " dance-station-workspace-item--image" : ""}`}
@@ -1145,6 +1182,7 @@ function PrivateAssetRow({
         {mime || size ? <small>{[mime, size].filter(Boolean).join(" · ")}</small> : null}
       </div>
       <div className="dance-station-asset-actions">
+        {audioUrl ? <AudioPlayButton track={{ id: `workspace-audio-${item.id}`, title: item.title, url: audioUrl, mimeType: typeof metadata.mimeType === "string" ? metadata.mimeType : undefined }} /> : null}
         {item.source === "private" ? (
           <>
             <input
@@ -1922,6 +1960,9 @@ function countAudioWorkspaceItems(items: BrowserWorkspaceItem[]): number {
 function workspaceItemHasAudio(item: BrowserWorkspaceItem): boolean {
   const blob = item.metadata?.blob;
   if (blob instanceof Blob && blob.type.startsWith("audio/")) return true;
+  const directUrl = item.metadata?.publicUrl;
+  const directMime = item.metadata?.mimeType;
+  if (typeof directUrl === "string" && (typeof directMime !== "string" || directMime.startsWith("audio/"))) return true;
   const files = item.metadata?.files;
   if (!Array.isArray(files)) return false;
   return files.some((file) => {
@@ -1944,6 +1985,9 @@ function workspaceItemAudioUrl(
     objectUrlsRef.current.set(item.id, url);
     return url;
   }
+  const directUrl = item.metadata?.publicUrl;
+  const directMime = item.metadata?.mimeType;
+  if (typeof directUrl === "string" && (typeof directMime !== "string" || directMime.startsWith("audio/"))) return directUrl;
   const files = item.metadata?.files;
   if (Array.isArray(files)) {
     const audioFile = files.find((file) => {

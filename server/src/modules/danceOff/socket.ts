@@ -41,6 +41,12 @@ type FetchedDanceOffSocket = {
   emit: (eventName: string, payload: Record<string, unknown>) => void;
 };
 
+type SocketLifecycle = {
+  close: () => Promise<void>;
+};
+
+const socketLifecycles = new WeakMap<Server, SocketLifecycle>();
+
 function sanitizeDisplayName(input: unknown): string | null {
   const trimmed = String(input ?? "").trim();
   if (!trimmed) {
@@ -74,16 +80,16 @@ function countdownRemainingSeconds(countdownStartedAtIso: string | null): number
   return Math.max(0, 10 - elapsed);
 }
 
-async function configureRedisAdapter(io: Server): Promise<void> {
+async function configureRedisAdapter(io: Server): Promise<() => Promise<void>> {
   if (!env.danceOffRedisEnabled) {
     console.log("[danceoff] Redis adapter disabled (single-server mode).");
-    return;
+    return async () => {};
   }
 
   const redisUrl = sanitizeRedisUrl(env.DANCEOFF_REDIS_URL);
   if (!redisUrl) {
     console.log("[danceoff] Redis adapter disabled (DANCEOFF_REDIS_URL is empty).");
-    return;
+    return async () => {};
   }
 
   const clientConfig: Record<string, unknown> = { url: redisUrl };
@@ -110,6 +116,9 @@ async function configureRedisAdapter(io: Server): Promise<void> {
   await Promise.all([pubClient.connect(), subClient.connect()]);
   io.adapter(createAdapter(pubClient, subClient));
   console.log("[danceoff] Redis adapter enabled.");
+  return async () => {
+    await Promise.allSettled([pubClient.quit(), subClient.quit()]);
+  };
 }
 
 async function findSocketsForUserId(io: Server, userId: string): Promise<DanceOffSocket[]> {
@@ -160,7 +169,7 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
     },
   });
 
-  await configureRedisAdapter(io);
+  const closeRedis = await configureRedisAdapter(io);
 
   io.use((socket, next) => {
     try {
@@ -269,10 +278,35 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
     }
   };
 
-  const broadcastEverything = async (): Promise<void> => {
-    await Promise.all([broadcastOnlineUsers(), broadcastDanceOffState()]);
-  };
   const notifiedActiveStarts = new Set<string>();
+  let shuttingDown = false;
+  let broadcastInFlight: Promise<void> | null = null;
+  const queueBroadcastDanceOffState = (): Promise<void> => {
+    if (shuttingDown) {
+      return Promise.resolve();
+    }
+    if (broadcastInFlight) {
+      return broadcastInFlight;
+    }
+
+    broadcastInFlight = broadcastDanceOffState()
+      .catch((error) => {
+        console.error("[danceoff] state broadcast failed:", error);
+      })
+      .finally(() => {
+        broadcastInFlight = null;
+      });
+    return broadcastInFlight;
+  };
+
+  const broadcastEverything = async (): Promise<void> => {
+    await Promise.all([
+      broadcastOnlineUsers().catch((error) => {
+        console.error("[danceoff] online-user broadcast failed:", error);
+      }),
+      queueBroadcastDanceOffState(),
+    ]);
+  };
 
   const handleActionError = (callback: ((payload: Record<string, unknown>) => void) | undefined, error: unknown) => {
     const message = error instanceof Error ? error.message : "Action failed.";
@@ -345,7 +379,7 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
             competitors,
           });
           callback?.({ ok: true, danceOff });
-          await broadcastDanceOffState();
+          await queueBroadcastDanceOffState();
         } catch (error) {
           handleActionError(callback, error);
         }
@@ -367,7 +401,7 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
             displayName: socket.data.displayName,
           });
           callback?.({ ok: true, danceOff });
-          await broadcastDanceOffState();
+          await queueBroadcastDanceOffState();
         } catch (error) {
           handleActionError(callback, error);
         }
@@ -387,7 +421,7 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
             userId: socket.data.userId,
           });
           callback?.({ ok: true, danceOff });
-          await broadcastDanceOffState();
+          await queueBroadcastDanceOffState();
         } catch (error) {
           handleActionError(callback, error);
         }
@@ -415,7 +449,7 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
             await emitDanceOffToParticipants(io, danceOff, "danceoff:match:cancelled");
           }
           callback?.({ ok: true });
-          await broadcastDanceOffState();
+          await queueBroadcastDanceOffState();
         } catch (error) {
           handleActionError(callback, error);
         }
@@ -437,7 +471,7 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
             ready,
           });
           callback?.({ ok: true, danceOff });
-          await broadcastDanceOffState();
+          await queueBroadcastDanceOffState();
         } catch (error) {
           handleActionError(callback, error);
         }
@@ -458,7 +492,7 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
           });
           await emitDanceOffToParticipants(io, danceOff, "danceoff:match:cancelled");
           callback?.({ ok: true, danceOff });
-          await broadcastDanceOffState();
+          await queueBroadcastDanceOffState();
         } catch (error) {
           handleActionError(callback, error);
         }
@@ -488,14 +522,16 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
             await emitDanceOffToParticipants(io, danceOff, "danceoff:match:completed");
           }
           callback?.({ ok: true, danceOff });
-          await broadcastDanceOffState();
+          await queueBroadcastDanceOffState();
         } catch (error) {
           handleActionError(callback, error);
         }
       }
     );
 
-    void broadcastEverything();
+    void broadcastEverything().catch((error) => {
+      console.error("[danceoff] initial broadcast failed:", error);
+    });
 
     socket.on("disconnect", () => {
       void (async () => {
@@ -507,7 +543,9 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
           }
         }
         await broadcastEverything();
-      })();
+      })().catch((error) => {
+        console.error("[danceoff] disconnect cleanup failed:", error);
+      });
     });
   });
 
@@ -515,8 +553,14 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
     console.warn("[danceoff] socket connection rejected", error.message);
   });
 
-  setInterval(() => {
-    void (async () => {
+  let tickInFlight = false;
+  let tickPromise: Promise<void> | null = null;
+  const tickTimer = setInterval(() => {
+    if (shuttingDown || tickInFlight) {
+      return;
+    }
+    tickInFlight = true;
+    tickPromise = (async () => {
       const transitionedIds = await tickDanceOffTransitions();
       for (const danceOffId of transitionedIds) {
         const danceOff = await getDanceOffPayloadById(danceOffId);
@@ -530,9 +574,44 @@ export async function createDanceOffSocketServer(httpServer: HttpServer): Promis
           await emitDanceOffToParticipants(io, danceOff, "danceoff:match:completed");
         }
       }
-      await broadcastDanceOffState();
-    })();
+      await queueBroadcastDanceOffState();
+    })()
+      .catch((error) => {
+        console.error("[danceoff] transition tick failed:", error);
+      })
+      .finally(() => {
+        tickInFlight = false;
+        tickPromise = null;
+      });
+    void tickPromise;
   }, 1000);
+  tickTimer.unref();
+
+  socketLifecycles.set(io, {
+    close: async () => {
+      shuttingDown = true;
+      clearInterval(tickTimer);
+      if (tickPromise) {
+        await tickPromise;
+      }
+      if (broadcastInFlight) {
+        await broadcastInFlight;
+      }
+      await new Promise<void>((resolve) => io.close(() => resolve()));
+      await closeRedis();
+    },
+  });
 
   return io;
+}
+
+export async function closeDanceOffSocketServer(io: Server): Promise<void> {
+  const lifecycle = socketLifecycles.get(io);
+  if (lifecycle) {
+    socketLifecycles.delete(io);
+    await lifecycle.close();
+    return;
+  }
+
+  await new Promise<void>((resolve) => io.close(() => resolve()));
 }

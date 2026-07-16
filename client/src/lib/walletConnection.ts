@@ -10,6 +10,9 @@ export interface SolanaProvider {
   publicKey?: { toString(): string };
   connect: (options?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey?: { toString(): string } }>;
   signMessage: (message: Uint8Array, display?: string) => Promise<{ signature: Uint8Array }>;
+  sendTransaction?: (transaction: unknown, connection: unknown) => Promise<string>;
+  signAndSendTransaction?: (transaction: unknown, options?: unknown) => Promise<unknown>;
+  signTransaction?: (transaction: unknown) => Promise<unknown>;
 }
 
 export function setPreferredWallet(wallet: SupportedWallet): void {
@@ -51,6 +54,73 @@ export function getProvider(wallet: SupportedWallet): SolanaProvider | undefined
     default:
       return undefined;
   }
+}
+
+function supportsProviderCapability(
+  provider: SolanaProvider,
+  capability: "signMessage" | "sendTransaction",
+): boolean {
+  if (capability === "signMessage") return typeof provider.signMessage === "function";
+  return typeof provider.sendTransaction === "function"
+    || typeof provider.signAndSendTransaction === "function"
+    || typeof provider.signTransaction === "function";
+}
+
+function withTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error("Wallet provider discovery timed out")), timeoutMs);
+    task.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Resolve the provider that owns the authenticated address.
+ *
+ * Wallets can expose several wrapper objects for the same extension, and some
+ * only populate `publicKey` after a trusted reconnect. Prefer the wrapper
+ * selected during authentication, then probe the remaining wrappers silently.
+ */
+export async function resolveProviderForAddress(
+  walletAddress: string,
+  capability: "signMessage" | "sendTransaction",
+): Promise<SolanaProvider | undefined> {
+  const address = walletAddress.trim();
+  if (!address) return undefined;
+
+  const preferredWallet = getPreferredWallet();
+  const preferredProvider = preferredWallet ? getProvider(preferredWallet) : undefined;
+  const providers = Array.from(new Set([
+    ...(preferredProvider ? [preferredProvider] : []),
+    ...getInjectedProviders(),
+  ]));
+
+  const directMatch = providers.find((provider) =>
+    provider.publicKey?.toString?.() === address && supportsProviderCapability(provider, capability),
+  );
+  if (directMatch) return directMatch;
+
+  for (const provider of providers) {
+    if (!supportsProviderCapability(provider, capability)) continue;
+    try {
+      const result = await withTimeout(provider.connect({ onlyIfTrusted: true }), 1500);
+      const connectedAddress = result.publicKey?.toString?.() ?? provider.publicKey?.toString?.() ?? "";
+      if (connectedAddress === address) return provider;
+    } catch {
+      // Silent reconnect is only a discovery probe. The explicit signing or
+      // transaction call below remains responsible for user approval.
+    }
+  }
+
+  return undefined;
 }
 
 export function detectConnectedWalletPublicKey(): string {

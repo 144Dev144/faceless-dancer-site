@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { CSSProperties } from "preact/compat";
 import { runtimeConfig } from "../config/runtime";
 import gameTitleImage from "../../assets/game/game-title.png";
+import { navigateInApp } from "../../lib/clientNavigation";
 import { createPrecisePlaybackEngine, type PrecisePlaybackEngine } from "../lib/audio/precisePlaybackEngine";
 import {
   buildFallbackEntryFromBeats,
@@ -1903,7 +1904,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     return (
       <section className="game-view-shell game-view-shell--menu">
         <header className="game-ui-header">
-          <a className="game-ui-link" href={homeHref}>Back Home</a>
+          <a className="game-ui-link" href={homeHref} onClick={(event) => navigateInApp(event, homeHref)}>Back Home</a>
           <h2 className="game-menu-title">
             <img src={gameTitleImage} alt="Faceless Dance Stage" draggable={false} />
           </h2>
@@ -2131,7 +2132,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     return (
       <section className="game-view-shell">
         <header className="game-ui-header">
-          <a className="game-ui-link" href={homeHref}>Back Home</a>
+          <a className="game-ui-link" href={homeHref} onClick={(event) => navigateInApp(event, homeHref)}>Back Home</a>
           <h2>High Scores</h2>
           <button type="button" className="secondary" onClick={() => setMode("menu")}>Back To Game Menu</button>
         </header>

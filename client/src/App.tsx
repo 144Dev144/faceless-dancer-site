@@ -1,11 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
 import { useSession } from "./hooks/useSession";
 import { HomePage } from "./pages/HomePage";
-import { AdminGamePage } from "./pages/AdminGamePage";
 import { GamePage } from "./pages/GamePage";
 import { PlaygroundPage } from "./pages/PlaygroundPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { DanceStationPage } from "./pages/DanceStationPage";
+import { ProfilePage } from "./pages/ProfilePage";
+import { SiteAudioPlayerProvider } from "./components/audio/SiteAudioPlayer";
 
 function currentPath(): string {
   return window.location.pathname || "/";
@@ -21,43 +22,32 @@ export function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  if (path === "/admin/game") {
-    return (
-      <AdminGamePage
-        session={state}
-        setSession={setState}
-        refreshSession={refreshSession}
-      />
-    );
-  }
-
+  let page: JSX.Element;
   if (path === "/game") {
-    return (
+    page = (
       <GamePage
         session={state}
         setSession={setState}
         refreshSession={refreshSession}
       />
     );
+  } else if (path === "/playground") {
+    page = <PlaygroundPage />;
+  } else if (path === "/library") {
+    page = <LibraryPage session={state} setSession={setState} />;
+  } else if (path === "/dance-station") {
+    page = <DanceStationPage session={state} setSession={setState} />;
+  } else if (path === "/profile") {
+    page = <ProfilePage session={state} setSession={setState} />;
+  } else {
+    page = (
+      <HomePage
+        session={state}
+        setSession={setState}
+        refreshSession={refreshSession}
+      />
+    );
   }
 
-  if (path === "/playground") {
-    return <PlaygroundPage />;
-  }
-
-  if (path === "/library") {
-    return <LibraryPage session={state} setSession={setState} />;
-  }
-
-  if (path === "/dance-station") {
-    return <DanceStationPage session={state} setSession={setState} />;
-  }
-
-  return (
-    <HomePage
-      session={state}
-      setSession={setState}
-      refreshSession={refreshSession}
-    />
-  );
+  return <SiteAudioPlayerProvider>{page}</SiteAudioPlayerProvider>;
 }

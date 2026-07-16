@@ -13,29 +13,6 @@ services:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:${POSTGRES_PORT:-5432}"
     restart: unless-stopped
 
-  separation-worker:
-    build:
-      context: ./faceless-game-test
-      dockerfile: Dockerfile.worker
-    container_name: faceless-beat-separation-worker
-    environment:
-      SEPARATION_WORKER_PORT: "${SEPARATION_WORKER_PORT:-8792}"
-      BEAT_STORAGE_DIR: /app/beat-storage
-      BS_ROFORMER_MIN_CKPT_BYTES: "50000000"
-      BS_ROFORMER_INFER_DEVICE: "${BS_ROFORMER_INFER_DEVICE:-cpu}"
-      LYRICS_TIMEOUT_SECONDS: "${LYRICS_TIMEOUT_SECONDS:-1800}"
-      LYRICS_WHISPER_MODEL_SIZE: "${LYRICS_WHISPER_MODEL_SIZE:-small}"
-      LYRICS_WHISPER_DEVICE: "${LYRICS_WHISPER_DEVICE:-cpu}"
-      LYRICS_WHISPER_COMPUTE_TYPE: "${LYRICS_WHISPER_COMPUTE_TYPE:-int8}"
-      LYRICS_WHISPER_BEAM_SIZE: "${LYRICS_WHISPER_BEAM_SIZE:-5}"
-      LYRICS_WHISPER_VAD_FILTER: "${LYRICS_WHISPER_VAD_FILTER:-0}"
-      LYRICS_WHISPER_LANGUAGE: "${LYRICS_WHISPER_LANGUAGE:-}"
-      LYRICS_WHISPER_MODELS_DIR: "${LYRICS_WHISPER_MODELS_DIR:-/app/worker-models/faster-whisper}"
-    volumes:
-      - ${BEAT_STORAGE_HOST_PATH:-/var/lib/faceless-dancer/beat-storage}:/app/beat-storage
-      - ${WORKER_MODELS_HOST_PATH:-/var/lib/faceless-dancer/worker-models}:/app/worker-models
-    restart: unless-stopped
-
   server:
     build:
       context: .
@@ -44,20 +21,26 @@ services:
     depends_on:
       postgres:
         condition: service_started
-      separation-worker:
-        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - ./.env
     environment:
       PORT: "${PORT:-3001}"
       DATABASE_URL: "${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@postgres:${POSTGRES_PORT:-5432}/faceless_dancer}"
-      BEAT_SEPARATION_WORKER_URL: "http://separation-worker:${SEPARATION_WORKER_PORT:-8792}"
+      DATABASE_POOL_MAX: "${DATABASE_POOL_MAX:-5}"
+      DATABASE_CONNECTION_TIMEOUT_MS: "${DATABASE_CONNECTION_TIMEOUT_MS:-5000}"
+      DATABASE_IDLE_TIMEOUT_MS: "${DATABASE_IDLE_TIMEOUT_MS:-30000}"
+      DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: "${DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS:-60000}"
       DANCEOFF_REDIS_ENABLED: "${DANCEOFF_REDIS_ENABLED:-false}"
       DANCEOFF_REDIS_URL: "${DANCEOFF_REDIS_URL:-}"
       DANCEOFF_REDIS_USERNAME: "${DANCEOFF_REDIS_USERNAME:-}"
       DANCEOFF_REDIS_PASSWORD: "${DANCEOFF_REDIS_PASSWORD:-}"
       DANCEOFF_REDIS_TLS: "${DANCEOFF_REDIS_TLS:-false}"
       RUN_MIGRATIONS_ON_START: "${RUN_MIGRATIONS_ON_START:-false}"
+      REMOTE_GENERATION_ENABLED: "${REMOTE_GENERATION_ENABLED:-false}"
+      LAUNCH_SERVER_URL: "${LAUNCH_SERVER_URL_DOCKER:-http://host.docker.internal:4100}"
+      LAUNCH_SERVER_INTERNAL_TOKEN: "${LAUNCH_SERVER_INTERNAL_TOKEN:-local-development-token}"
     volumes:
       - ${BEAT_STORAGE_HOST_PATH:-/var/lib/faceless-dancer/beat-storage}:/app/beat-storage
     ports:
@@ -68,6 +51,9 @@ services:
     build:
       context: .
       dockerfile: client/Dockerfile
+      args:
+        VITE_SOLANA_NETWORK: "${VITE_SOLANA_NETWORK:-devnet}"
+        VITE_SOLANA_RPC_URL: "${VITE_SOLANA_RPC_URL:-https://api.devnet.solana.com}"
     container_name: faceless-dancer-client
     depends_on:
       - server

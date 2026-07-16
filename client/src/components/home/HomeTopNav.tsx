@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { ChevronDown, Gamepad2, LogOut, Share2, UserRound, WandSparkles } from "lucide-preact";
 import logoImage from "../../assets/hero/logo.png";
 import { api, type AuthSessionResponse } from "../../lib/api";
+import { navigateInApp } from "../../lib/clientNavigation";
 import type { SessionState } from "../../hooks/useSession";
 import {
   getPreferredWallet,
@@ -131,14 +132,14 @@ export function HomeTopNav({ session, setSession }: Props): JSX.Element {
 
   return (
     <header className="home-v2-nav">
-      <a className="home-v2-nav__brand" href="/">
+      <a className="home-v2-nav__brand" href="/" onClick={(event) => navigateInApp(event, "/")}>
         <img src={logoImage} alt="The Faceless Dancer logo" />
         <span>The Faceless Dancer</span>
       </a>
 
       <nav className="home-v2-nav__links" aria-label="Primary">
         {navLinks.map(({ href, label, Icon }) => (
-          <a key={href} href={href} aria-label={label} title={label}>
+          <a key={href} href={href} onClick={(event) => navigateInApp(event, href)} aria-label={label} title={label}>
             <Icon aria-hidden="true" size={17} strokeWidth={2.1} />
             <span>{label}</span>
           </a>
@@ -187,6 +188,10 @@ export function HomeTopNav({ session, setSession }: Props): JSX.Element {
                 <button type="button" className="home-v2-nav__menu-action" onClick={() => saveDisplayName().catch((error) => setProfileStatus(error.message))}>
                   Update Display Name
                 </button>
+                <a className="home-v2-nav__menu-action" href="/profile" onClick={(event) => { navigateInApp(event, "/profile"); setMenuOpen(false); }}>
+                  <UserRound aria-hidden="true" size={15} strokeWidth={2.1} />
+                  <span>Profile</span>
+                </a>
                 <button type="button" className="home-v2-nav__menu-action home-v2-nav__menu-action--danger" onClick={() => logout().catch((error) => setProfileStatus(error.message))}>
                   <LogOut aria-hidden="true" size={15} strokeWidth={2.1} />
                   <span>Logout</span>

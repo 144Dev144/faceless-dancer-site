@@ -17,6 +17,10 @@ const envSchema = z.object({
 
   DATABASE_URL: z.string().url(),
   DATABASE_SSL_REJECT_UNAUTHORIZED: z.enum(["true", "false"]).default("false"),
+  DATABASE_POOL_MAX: z.coerce.number().int().positive().max(50).default(5),
+  DATABASE_CONNECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  DATABASE_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
   RUN_MIGRATIONS_ON_START: z.enum(["true", "false"]).default("false"),
 
   AUTH_MESSAGE_PREFIX: z.string().default("Faceless Dancer wallet verification"),
@@ -54,7 +58,7 @@ const envSchema = z.object({
   MAX_UPLOAD_SIZE_MB: z.coerce.number().positive().default(20),
   LIBRARY_MAX_UPLOAD_SIZE_MB: z.coerce.number().positive().default(500),
   ALLOWED_IMAGE_MIME: z.string().default("image/png,image/jpeg,image/webp"),
-  ALLOWED_AUDIO_MIME: z.string().default("audio/mpeg,audio/wav,audio/x-wav"),
+  ALLOWED_AUDIO_MIME: z.string().default("audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/x-flac,audio/mp4,audio/x-m4a,audio/ogg,application/ogg,audio/opus,audio/aac,audio/webm"),
 
   BEAT_STORAGE_PROVIDER: z.literal("bunny"),
   BEAT_BUNNY_PREFIX: z.string().default("beat-storage"),
@@ -64,6 +68,10 @@ const envSchema = z.object({
   BEAT_SEPARATION_LOG_TAIL_LINES: z.coerce.number().int().positive().default(300),
   BEAT_PREVIEW_OFFSET_SECONDS: z.coerce.number().nonnegative().default(30),
   BEAT_PREVIEW_DURATION_SECONDS: z.coerce.number().positive().default(15),
+
+  REMOTE_GENERATION_ENABLED: z.enum(["true", "false"]).default("false"),
+  LAUNCH_SERVER_URL: z.string().url().default("http://localhost:4100"),
+  LAUNCH_SERVER_INTERNAL_TOKEN: z.string().min(8).default("local-development-token"),
 
   DANCEOFF_REDIS_URL: z.string().default(""),
   DANCEOFF_REDIS_USERNAME: z.string().default(""),
@@ -88,6 +96,10 @@ export const env = {
   allowedAudioMime: data.ALLOWED_AUDIO_MIME.split(",").map((value) => value.trim()),
   maxUploadSizeBytes: data.MAX_UPLOAD_SIZE_MB * 1024 * 1024,
   libraryMaxUploadSizeBytes: data.LIBRARY_MAX_UPLOAD_SIZE_MB * 1024 * 1024,
+  databasePoolMax: data.DATABASE_POOL_MAX,
+  databaseConnectionTimeoutMs: data.DATABASE_CONNECTION_TIMEOUT_MS,
+  databaseIdleTimeoutMs: data.DATABASE_IDLE_TIMEOUT_MS,
+  databaseIdleInTransactionTimeoutMs: data.DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS,
   siteShowTwitter: data.SITE_SHOW_TWITTER === "true",
   siteShowYoutube: data.SITE_SHOW_YOUTUBE === "true",
   siteShowYoutubeEmbed: data.SITE_SHOW_YOUTUBE_EMBED === "true",
@@ -100,6 +112,8 @@ export const env = {
     ? data.BEAT_LOCAL_CACHE_DIR
     : path.resolve(process.cwd(), data.BEAT_LOCAL_CACHE_DIR),
   runMigrationsOnStart: data.RUN_MIGRATIONS_ON_START === "true",
+  remoteGenerationEnabled: data.REMOTE_GENERATION_ENABLED === "true",
+  launchServerUrl: data.LAUNCH_SERVER_URL.replace(/\/$/, ""),
   databaseSslRejectUnauthorized: data.DATABASE_SSL_REJECT_UNAUTHORIZED === "true",
   danceOffRedisTls: data.DANCEOFF_REDIS_TLS === "true",
   danceOffRedisEnabled: data.DANCEOFF_REDIS_ENABLED === "true",
