@@ -129,3 +129,8 @@ dist
 
 # Local persistent sqlite bind mount
 data/
+
+# Local planning notes and generated diagnostics
+/docs/plans/*.md
+/expanded-prompt-check.png
+/pump_hourly.csv
