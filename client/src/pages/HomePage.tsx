@@ -1,11 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
-import { HeroSection } from "../components/HeroSection";
 import { HomeTopNav } from "../components/home/HomeTopNav";
-import { PlatformVisionSection } from "../components/home/PlatformVisionSection";
-import { ApplicationsSection } from "../components/home/ApplicationsSection";
-import { RoadmapSection } from "../components/home/RoadmapSection";
-import { WhyMattersSection } from "../components/home/WhyMattersSection";
 import { HomeFooter } from "../components/home/HomeFooter";
+import { HomeDashboard } from "../components/home/HomeDashboard";
 import { api, type SiteSettings } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
 
@@ -48,15 +44,11 @@ export function HomePage({ session, setSession, refreshSession }: Props): JSX.El
   }, []);
 
   return (
-    <main className="home-v2">
+    <main className="homepage">
       <div className="home-v2-shell">
         <HomeTopNav session={session} setSession={setSession} />
-        <HeroSection settings={siteSettings} />
-        <PlatformVisionSection />
-        <ApplicationsSection />
-        <RoadmapSection />
-        <WhyMattersSection />
-        <HomeFooter />
+        <HomeDashboard settings={siteSettings} session={session} />
+        <HomeFooter settings={siteSettings} />
       </div>
     </main>
   );

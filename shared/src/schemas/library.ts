@@ -78,9 +78,19 @@ export const publishLibraryItemSchema = createLibraryItemSchema.extend({
   localId: z.string().trim().min(1).max(200).optional(),
 });
 
+const libraryBooleanQuerySchema = z.preprocess(
+  (value) => value === true || value === "true" || value === "1",
+  z.boolean(),
+).default(false);
+
 export const libraryListQuerySchema = z.object({
   kind: libraryKindSchema.optional(),
   tag: z.string().trim().min(1).max(48).optional(),
+  search: z.string().trim().max(160).optional(),
+  sort: z.enum(["newest", "oldest"]).default("newest"),
+  playable: libraryBooleanQuerySchema,
+  artwork: libraryBooleanQuerySchema,
+  license: z.string().trim().max(160).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(24),
   offset: z.coerce.number().int().min(0).default(0),
 });

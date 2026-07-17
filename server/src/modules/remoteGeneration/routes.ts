@@ -95,6 +95,15 @@ router.post("/pricing", async (req, res, next) => {
   }
 });
 
+router.get("/pricing-config", async (req, res) => {
+  if (!requireEnabled(res)) return;
+  try {
+    return res.json(await launchServerClient.pricingConfig());
+  } catch (error) {
+    return respondRemoteGenerationError(error, res, "Generation pricing is temporarily unavailable. Please try again shortly.");
+  }
+});
+
 router.post("/availability", async (req, res, next) => {
   if (!requireEnabled(res)) return;
   try {

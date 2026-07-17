@@ -2,9 +2,12 @@ import crypto from "node:crypto";
 import path from "node:path";
 import multer from "multer";
 import { Router } from "express";
+import { z } from "zod";
 import {
   createLibraryItemSchema,
+  libraryFileRoleSchema,
   libraryFileUploadFieldsSchema,
+  libraryJsonObjectSchema,
   libraryListQuerySchema,
   publishLibraryItemSchema,
 } from "@faceless/shared";
@@ -12,7 +15,7 @@ import { pool } from "../../db/postgres.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { env } from "../../config/env.js";
 import { createId, hashToken } from "../../utils/crypto.js";
-import { buildObjectPath, uploadBufferToBunny } from "../storage/bunnyStorage.js";
+import { buildObjectPath, downloadFromBunny, uploadBufferToBunny } from "../storage/bunnyStorage.js";
 import { verifyAccessToken } from "../auth/tokens.js";
 import { listOfficialRhythmGameLibraryItems, readOfficialRhythmGameLibraryItem } from "./officialRhythmGames.js";
 import { normalizeLibraryItemMetadata, syncPublishedRhythmGameCatalogEntry } from "./rhythmGameLibrary.js";
@@ -27,6 +30,8 @@ const upload = multer({
 });
 
 function mapLibraryItem(row: any, files: any[] = []) {
+  const sourceLineage = row.source_lineage_json ?? {};
+  const isOfficialLegacyRhythmGame = sourceLineage.source === "legacy_game_catalog";
   return {
     id: row.id,
     ownerId: row.owner_user_id,
@@ -37,7 +42,7 @@ function mapLibraryItem(row: any, files: any[] = []) {
     description: row.description,
     tags: row.tags_json ?? [],
     metadata: normalizeLibraryItemMetadata(row.kind, row.metadata_json ?? {}),
-    sourceLineage: row.source_lineage_json ?? {},
+    sourceLineage,
     license: row.license,
     attribution: row.attribution,
     createdAt: row.created_at,
@@ -49,8 +54,17 @@ function mapLibraryItem(row: any, files: any[] = []) {
           creatorSlug: row.creator_slug ?? null,
           avatarUrl: row.creator_avatar_url ?? null,
           bannerUrl: row.creator_banner_url ?? null,
+          publicKey: row.creator_public_key ?? null,
         }
-      : null,
+      : isOfficialLegacyRhythmGame
+        ? {
+            displayName: "The Faceless Dancer",
+            creatorSlug: "the-faceless-dancer",
+            avatarUrl: null,
+            bannerUrl: null,
+            publicKey: null,
+          }
+        : null,
   };
 }
 
@@ -73,6 +87,12 @@ function mapLibraryFile(row: any) {
 function safeFileName(name: string) {
   const clean = name.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return clean.slice(0, 120) || "file";
+}
+
+function isRemoteGenerationObjectPath(objectPath: string): boolean {
+  return /^remote-generation(?:-[A-Za-z0-9-]+)?\/jobs\/[A-Za-z0-9-]+\/[^/]+(?:\/[^/]+)*$/.test(objectPath)
+    && !objectPath.includes("..")
+    && !objectPath.includes("\\");
 }
 
 async function resolvePublishUser(req: any, res: any): Promise<{ userId: string; isAdmin: boolean } | null> {
@@ -141,7 +161,8 @@ async function readItemWithFiles(itemId: string) {
             u.display_name AS creator_display_name,
             u.creator_slug,
             u.avatar_public_url AS creator_avatar_url,
-            u.banner_public_url AS creator_banner_url
+            u.banner_public_url AS creator_banner_url,
+            u.public_key AS creator_public_key
      FROM library_items li
      LEFT JOIN users u ON u.id = li.owner_user_id
      WHERE li.id = $1
@@ -162,31 +183,131 @@ router.get("/", async (req, res) => {
     return res.status(400).json({ error: "Invalid query", details: parsed.error.flatten() });
   }
 
-  const filters = ["visibility = 'public'", "status = 'published'"];
+  const filters = ["li.visibility = 'public'", "li.status = 'published'"];
   const values: unknown[] = [];
 
   if (parsed.data.kind) {
     values.push(parsed.data.kind);
-    filters.push(`kind = $${values.length}`);
+    filters.push(`li.kind = $${values.length}`);
   }
 
   if (parsed.data.tag) {
     values.push(JSON.stringify([parsed.data.tag]));
-    filters.push(`tags_json @> $${values.length}::jsonb`);
+    filters.push(`li.tags_json @> $${values.length}::jsonb`);
   }
 
-  const result = await pool.query(
-    `SELECT li.*,
-            u.display_name AS creator_display_name,
-            u.creator_slug,
-            u.avatar_public_url AS creator_avatar_url,
-            u.banner_public_url AS creator_banner_url
+  if (parsed.data.license) {
+    values.push(parsed.data.license);
+    filters.push(`li.license = $${values.length}`);
+  }
+
+  if (parsed.data.playable) {
+    filters.push(`EXISTS (
+      SELECT 1
+      FROM library_files playable_file
+      WHERE playable_file.item_id = li.id
+        AND playable_file.role IN ('audio', 'preview')
+        AND playable_file.public_url IS NOT NULL
+    )`);
+  }
+
+  if (parsed.data.artwork) {
+    filters.push(`EXISTS (
+      SELECT 1
+      FROM library_files artwork_file
+      WHERE artwork_file.item_id = li.id
+        AND artwork_file.role = 'cover'
+        AND artwork_file.public_url IS NOT NULL
+    )`);
+  }
+
+  const search = parsed.data.search?.trim() ?? "";
+  if (search) {
+    values.push(`%${search}%`);
+    const searchParam = `$${values.length}`;
+    filters.push(`(
+      li.title ILIKE ${searchParam}
+      OR COALESCE(li.description, '') ILIKE ${searchParam}
+      OR li.kind ILIKE ${searchParam}
+      OR li.tags_json::text ILIKE ${searchParam}
+    )`);
+  }
+
+  const countResult = await pool.query<{
+    count: string;
+    creators: string;
+    playable: string;
+    artwork: string;
+  }>(
+    `SELECT COUNT(*)::text AS count,
+            COUNT(DISTINCT li.owner_user_id)::text AS creators,
+            COUNT(*) FILTER (WHERE EXISTS (
+              SELECT 1
+              FROM library_files playable_file
+              WHERE playable_file.item_id = li.id
+                AND playable_file.role IN ('audio', 'preview')
+                AND playable_file.public_url IS NOT NULL
+            ))::text AS playable,
+            COUNT(*) FILTER (WHERE EXISTS (
+              SELECT 1
+              FROM library_files artwork_file
+              WHERE artwork_file.item_id = li.id
+                AND artwork_file.role = 'cover'
+                AND artwork_file.public_url IS NOT NULL
+            ))::text AS artwork
      FROM library_items li
-     LEFT JOIN users u ON u.id = li.owner_user_id
-     WHERE ${filters.map((filter) => `li.${filter}`).join(" AND ")}
-     ORDER BY li.created_at DESC`,
-    values
+     WHERE ${filters.join(" AND ")}`,
+    values,
   );
+  const databaseTotal = Number(countResult.rows[0]?.count ?? 0);
+  const databaseCreators = Number(countResult.rows[0]?.creators ?? 0);
+  const databasePlayable = Number(countResult.rows[0]?.playable ?? 0);
+  const databaseArtwork = Number(countResult.rows[0]?.artwork ?? 0);
+
+  const searchNeedle = search.toLowerCase();
+  const officialItems = !parsed.data.kind || parsed.data.kind === "rhythm_game"
+    ? (await listOfficialRhythmGameLibraryItems(req))
+      .filter((item) => {
+        if (parsed.data.tag && !item.tags.includes(parsed.data.tag)) return false;
+        if (parsed.data.license && item.license !== parsed.data.license) return false;
+        if (parsed.data.playable && !item.files.some((file) => ["audio", "preview"].includes(String(file.role)) && file.publicUrl)) return false;
+        if (parsed.data.artwork && !item.files.some((file) => file.role === "cover" && file.publicUrl)) return false;
+        if (!searchNeedle) return true;
+        return [item.title, item.description, item.kind, item.tags.join(" ")]
+          .join(" ")
+          .toLowerCase()
+          .includes(searchNeedle);
+      })
+      .sort((left, right) => {
+        const comparison = String(left.updatedAt || left.createdAt || "").localeCompare(String(right.updatedAt || right.createdAt || ""));
+        return parsed.data.sort === "oldest" ? comparison : -comparison;
+      })
+    : [];
+
+  // Official rhythm entries are legacy catalog records, so keep them at the
+  // front of the combined list while database results remain bounded.
+  const officialTotal = officialItems.length;
+  const officialPageStart = Math.min(parsed.data.offset, officialTotal);
+  const officialPage = officialItems.slice(officialPageStart, officialPageStart + parsed.data.limit);
+  const databaseLimit = Math.max(0, parsed.data.limit - officialPage.length);
+  const databaseOffset = Math.max(0, parsed.data.offset - officialTotal);
+
+  const result = databaseLimit
+    ? await pool.query(
+      `SELECT li.*,
+              u.display_name AS creator_display_name,
+              u.creator_slug,
+              u.avatar_public_url AS creator_avatar_url,
+              u.banner_public_url AS creator_banner_url,
+              u.public_key AS creator_public_key
+       FROM library_items li
+       LEFT JOIN users u ON u.id = li.owner_user_id
+       WHERE ${filters.join(" AND ")}
+       ORDER BY li.updated_at ${parsed.data.sort === "oldest" ? "ASC" : "DESC"}, li.id ${parsed.data.sort === "oldest" ? "ASC" : "DESC"}
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, databaseLimit, databaseOffset],
+    )
+    : { rows: [] };
 
   const itemIds = result.rows.map((row) => row.id);
   const filesByItem = new Map<string, any[]>();
@@ -201,20 +322,31 @@ router.get("/", async (req, res) => {
     }
   }
 
-  let items = result.rows.map((row) => mapLibraryItem(row, filesByItem.get(row.id) ?? []));
-  if (!parsed.data.kind || parsed.data.kind === "rhythm_game") {
-    const officialItems = await listOfficialRhythmGameLibraryItems(req);
-    items = [...officialItems, ...items];
-  }
-  if (parsed.data.tag) {
-    items = items.filter((item) => Array.isArray(item.tags) && item.tags.includes(parsed.data.tag as string));
-  }
-  if (parsed.data.kind) {
-    items = items.filter((item) => item.kind === parsed.data.kind);
-  }
-  items.sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
-  const sliced = items.slice(parsed.data.offset, parsed.data.offset + parsed.data.limit);
-  return res.json({ items: sliced });
+  const databaseItems = result.rows.map((row) => mapLibraryItem(row, filesByItem.get(row.id) ?? []));
+  const items = [...officialPage, ...databaseItems];
+  const total = officialTotal + databaseTotal;
+  const officialCreators = officialTotal ? 1 : 0;
+  return res.json({
+    items,
+    total,
+    limit: parsed.data.limit,
+    offset: parsed.data.offset,
+    hasMore: parsed.data.offset + items.length < total,
+    summary: {
+      items: total,
+      creators: officialCreators + databaseCreators,
+      playable: officialTotal + databasePlayable,
+      artwork: databaseArtwork,
+    },
+  });
+});
+
+const storageCopySchema = z.object({
+  role: libraryFileRoleSchema,
+  metadata: libraryJsonObjectSchema,
+  sourceObjectPath: z.string().trim().min(1).max(2000),
+  mimeType: z.string().trim().min(1).max(160).optional(),
+  fileName: z.string().trim().max(160).optional(),
 });
 
 router.post("/publish/items", async (req, res) => {
@@ -368,6 +500,90 @@ router.post("/publish/items/:itemId/files", upload.single("file"), async (req, r
   return res.status(201).json({ item: fullItem });
 });
 
+router.post("/publish/items/:itemId/files/from-storage", async (req, res) => {
+  const publisher = await resolvePublishUser(req, res);
+  if (!publisher) return;
+
+  const parsed = storageCopySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid storage copy payload", details: parsed.error.flatten() });
+  }
+
+  const { sourceObjectPath } = parsed.data;
+  if (!isRemoteGenerationObjectPath(sourceObjectPath)) {
+    return res.status(400).json({ error: "Only remote generation artifacts can be copied from storage" });
+  }
+
+  const itemResult = await pool.query<{ id: string; owner_user_id: string }>(
+    `SELECT id, owner_user_id FROM library_items WHERE id = $1 LIMIT 1`,
+    [req.params.itemId],
+  );
+  const item = itemResult.rows[0];
+  if (!item) return res.status(404).json({ error: "Library item not found" });
+  if (item.owner_user_id !== publisher.userId && !publisher.isAdmin) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  let source: { buffer: Buffer; contentType: string };
+  try {
+    source = await downloadFromBunny(sourceObjectPath);
+  } catch (error) {
+    console.error("[library] generated asset storage copy failed", { sourceObjectPath, error });
+    return res.status(502).json({ error: "The generated asset could not be read from storage" });
+  }
+
+  const fileId = createId();
+  const originalName = safeFileName(parsed.data.fileName || path.basename(sourceObjectPath));
+  const ext = path.extname(originalName);
+  const baseName = safeFileName(path.basename(originalName, ext));
+  const objectPath = buildObjectPath([
+    "library",
+    item.owner_user_id,
+    item.id,
+    `${fileId}-${baseName}${ext}`,
+  ]);
+  const mimeType = parsed.data.mimeType || source.contentType || "application/octet-stream";
+  const sha256 = crypto.createHash("sha256").update(source.buffer).digest("hex");
+
+  let uploadResult: { objectPath: string; publicUrl: string };
+  try {
+    uploadResult = await uploadBufferToBunny({
+      buffer: source.buffer,
+      objectPath,
+      contentType: mimeType,
+    });
+  } catch (error) {
+    console.error("[library] generated asset public copy failed", { sourceObjectPath, objectPath, error });
+    return res.status(502).json({ error: "The generated asset could not be stored in the public library" });
+  }
+
+  await pool.query(
+    `INSERT INTO library_files (
+      id, item_id, role, mime_type, size_bytes, storage_provider, path, public_url, sha256, metadata_json
+    )
+    VALUES ($1, $2, $3, $4, $5, 'bunny', $6, $7, $8, $9::jsonb)`,
+    [
+      fileId,
+      item.id,
+      parsed.data.role,
+      mimeType,
+      source.buffer.byteLength,
+      uploadResult.objectPath,
+      uploadResult.publicUrl,
+      sha256,
+      JSON.stringify({
+        ...parsed.data.metadata,
+        originalName,
+        sourceObjectPath,
+      }),
+    ],
+  );
+
+  await pool.query(`UPDATE library_items SET updated_at = now() WHERE id = $1`, [item.id]);
+  const fullItem = await readItemWithFiles(item.id);
+  return res.status(201).json({ item: fullItem });
+});
+
 router.delete("/publish/items/:itemId/files", async (req, res) => {
   const publisher = await resolvePublishUser(req, res);
   if (!publisher) return;
@@ -467,7 +683,8 @@ router.get("/:itemId", async (req, res) => {
             u.display_name AS creator_display_name,
             u.creator_slug,
             u.avatar_public_url AS creator_avatar_url,
-            u.banner_public_url AS creator_banner_url
+            u.banner_public_url AS creator_banner_url,
+            u.public_key AS creator_public_key
      FROM library_items li
      LEFT JOIN users u ON u.id = li.owner_user_id
      WHERE li.id = $1 AND li.visibility = 'public' AND li.status = 'published'

@@ -42,6 +42,45 @@ export interface RemotePricingQuote {
   expiresAt: string;
 }
 
+export interface RemotePricingConfig {
+  network: "devnet" | "mainnet-beta";
+  paymentMode: "mock" | "solana" | "test-solana" | "free-signature";
+  currencies: Record<RemotePaymentCurrency, { tokenMint: string; tokenDecimals: number }>;
+  settings: {
+    facelessBasePriceUsdMicros: number;
+    solBasePriceUsdMicros: number;
+    facelessExtractionBasePriceUsdMicros: number;
+    solExtractionBasePriceUsdMicros: number;
+    facelessGenerationAdditionalStepPriceUsdMicros: number;
+    solGenerationAdditionalStepPriceUsdMicros: number;
+    facelessGenerationAdditionalSecondPriceUsdMicros: number;
+    solGenerationAdditionalSecondPriceUsdMicros: number;
+    facelessExtractionAdditionalStepPriceUsdMicros: number;
+    solExtractionAdditionalStepPriceUsdMicros: number;
+    facelessExtractionSourceSecondPriceUsdMicros: number;
+    solExtractionSourceSecondPriceUsdMicros: number;
+    updatedAt: string;
+  };
+  defaults: {
+    musicDurationSeconds: number;
+    musicInferenceSteps: number;
+    extractionInferenceSteps: number;
+  };
+  slippageBps: number;
+  market: {
+    source: "pump-bonding-curve";
+    rpcUrl: string;
+    tokenMint: string;
+    tokenDecimals: number;
+    pumpProgramId: string;
+    bondingCurveAccount: string;
+    solUsdFeedId: string;
+    solUsdFeedAccount: string;
+    solUsdFeedShard: number;
+    maxAgeSeconds: number;
+  };
+}
+
 export interface RemoteAvailability {
   available: boolean;
   priority: RemoteGenerationRequest["priority"];
@@ -190,6 +229,10 @@ export class LaunchServerClient {
 
   async price(request: RemoteGenerationRequest): Promise<RemotePricingQuote> {
     return this.request<RemotePricingQuote>("/v1/pricing", { method: "POST", body: JSON.stringify({ request }) });
+  }
+
+  async pricingConfig(): Promise<RemotePricingConfig> {
+    return this.request<RemotePricingConfig>("/v1/pricing/config");
   }
 
   async availability(priority: RemoteGenerationRequest["priority"]): Promise<RemoteAvailability> {

@@ -1,5 +1,7 @@
+import { useEffect, useRef, useState } from "preact/hooks";
+import { AudioWaveform, Download, MoreHorizontal } from "lucide-preact";
 import type { LibraryItem } from "../../lib/api";
-import { AudioPlayButton } from "../audio/SiteAudioPlayer";
+import { AudioPlayButton, useSiteAudioPlayer } from "../audio/SiteAudioPlayer";
 
 interface Props {
   item: LibraryItem;
@@ -18,66 +20,108 @@ export function LibraryAssetCard({
   onAction,
   className = "",
 }: Props): JSX.Element {
-  const audioFile = item.files.find((file) => file.role === "audio" || file.role === "preview");
-  const coverFile = item.files.find((file) => file.role === "cover");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const { playTrack } = useSiteAudioPlayer();
+  const audioFile = item.files.find((file) => (file.role === "audio" || file.role === "preview") && file.publicUrl);
+  const coverFile = item.files.find((file) => file.role === "cover" && file.publicUrl);
   const datasetSamples = item.files.filter((file) => file.role === "dataset_sample").length;
   const fileCount = item.files.length;
   const updated = new Date(item.updatedAt);
-  const creatorName = item.creator?.displayName || item.creator?.creatorSlug || "Faceless creator";
+  const creatorName = item.creator?.displayName || item.creator?.creatorSlug || item.creator?.publicKey || "Faceless creator";
   const cardImage = coverFile?.publicUrl || item.creator?.bannerUrl || item.creator?.avatarUrl || "";
-  const rhythmFacts = item.kind === "rhythm_game" ? rhythmGameFacts(item.metadata || {}) : [];
+  const kindClass = item.kind.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   const factTags = [
     ...(item.license ? [item.license] : []),
-    ...rhythmFacts,
+    ...rhythmGameFacts(item.metadata || {}),
   ];
+  const durationSeconds = Number(audioFile?.metadata?.durationSeconds ?? 0);
+  const isNew = Number.isFinite(updated.getTime()) && Date.now() - updated.getTime() < 1000 * 60 * 60 * 24 * 30;
+  const track = audioFile?.publicUrl
+    ? {
+        id: `library-audio-${item.id}`,
+        title: item.title,
+        url: audioFile.publicUrl,
+        mimeType: audioFile.mimeType,
+        artworkUrl: cardImage || undefined,
+        creatorName,
+      }
+    : null;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (!menuRef.current?.contains(event.target)) setMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [item.id, menuOpen]);
 
   return (
-    <article
-      className={`library-card${className ? ` ${className}` : ""}${cardImage ? " library-card--image" : ""}`}
-      style={cardImage ? { backgroundImage: `linear-gradient(180deg, rgba(4, 10, 19, 0.2), rgba(4, 10, 19, 0.9)), url(${cardImage})` } : undefined}
-    >
+    <article className={`library-card library-card--${kindClass}${cardImage ? " library-card--image" : ""}${className ? ` ${className}` : ""}`}>
+      <div className="library-card__art">
+        {cardImage ? <img src={cardImage} alt="" loading="lazy" /> : <FallbackArtwork kind={item.kind} />}
+        <div className="library-card__art-shade" />
+        <div className="library-card__badge-row">
+          <span className="library-card__kind-badge">{formatKind(item.kind)}</span>
+          {isNew ? <span className="library-card__new-badge">New</span> : null}
+        </div>
+        {track ? <AudioPlayButton track={track} /> : null}
+      </div>
+
       <div className="library-card__content">
         <div className="library-card__meta">
-          <span className="home-v2-tag">{formatKind(item.kind)}</span>
-          <span className="home-v2-tag">By {creatorName}</span>
+          <span>By {creatorName}</span>
+          {item.kind === "dataset" && datasetSamples ? <span>{datasetSamples} samples</span> : null}
         </div>
-        <div className="library-card__topline">
-          <span>{Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString()}</span>
-          <span>{fileCount} files</span>
-          {item.kind === "dataset" ? <span>{datasetSamples} samples</span> : null}
-        </div>
-        <h2>{item.title}</h2>
+        <h2 title={item.title}>{item.title}</h2>
         <p>{item.description || fallbackDescription(item.kind)}</p>
         <div className="library-card__facts">
-          {factTags.map((fact) => (
-            <span key={fact}>{fact}</span>
-          ))}
+          {factTags.slice(0, 3).map((fact) => <span key={fact}>{fact}</span>)}
         </div>
         {item.tags.length ? (
           <div className="library-card__tags">
-            {item.tags.slice(0, 6).map((tag) => (
-              <span key={tag}>{tag}</span>
-            ))}
+            {item.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
           </div>
         ) : null}
-        {audioFile?.publicUrl ? (
-          <div className="library-card__audio">
-            <AudioPlayButton track={{ id: `library-audio-${item.id}`, title: item.title, url: audioFile.publicUrl, mimeType: audioFile.mimeType }} />
+        <div className="library-card__footer">
+          <div className="library-card__details">
+            {track ? <span><AudioWaveform aria-hidden="true" size={13} /> {durationSeconds > 0 ? formatDuration(durationSeconds) : "Audio preview"}</span> : null}
+            <span>{Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString()}</span>
+            <span>{fileCount} files</span>
           </div>
-        ) : null}
-        {actionLabel ? (
-          <button
-            type="button"
-            className="home-v2-btn home-v2-btn--primary"
-            disabled={actionDisabled}
-            title={actionTitle}
-            onClick={() => onAction?.()}
-          >
-            {actionLabel}
-          </button>
-        ) : null}
+          <div className="library-card__actions" ref={menuRef}>
+            {actionLabel ? (
+              <button type="button" className="library-card__action-button" disabled={actionDisabled} title={actionTitle} onClick={() => onAction?.()}>
+                {actionLabel}
+              </button>
+            ) : null}
+            <button type="button" className="library-card__options-button" onClick={() => setMenuOpen((value) => !value)} aria-label={`Options for ${item.title}`} aria-expanded={menuOpen} title="Asset options">
+              <MoreHorizontal aria-hidden="true" size={18} />
+            </button>
+            {menuOpen ? (
+              <div className="library-card__options-menu">
+                {track ? <button type="button" onClick={() => { playTrack(track); setMenuOpen(false); }}><AudioWaveform aria-hidden="true" size={14} /> Play preview</button> : null}
+                {audioFile?.publicUrl ? <a href={audioFile.publicUrl} download={audioFile.metadata?.originalName ? String(audioFile.metadata.originalName) : `${item.title}.audio`}><Download aria-hidden="true" size={14} /> Download audio</a> : null}
+                {!track && !audioFile?.publicUrl ? <span>No downloadable file</span> : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
     </article>
+  );
+}
+
+function FallbackArtwork({ kind }: { kind: string }): JSX.Element {
+  return (
+    <div className={`library-card__fallback library-card__fallback--${kind.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`}>
+      <div className="library-card__waveform" aria-hidden="true">
+        {Array.from({ length: 28 }, (_, index) => <span key={index} style={{ height: `${24 + ((index * 37) % 66)}%` }} />)}
+      </div>
+      <AudioWaveform aria-hidden="true" size={42} strokeWidth={1.2} />
+    </div>
   );
 }
 
@@ -85,46 +129,23 @@ function formatKind(kind: string): string {
   return kind.replace(/_/g, " ");
 }
 
+function formatDuration(value: number): string {
+  const totalSeconds = Math.max(0, Math.floor(value));
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
 function rhythmGameFacts(metadata: Record<string, unknown>): string[] {
-  const supported =
-    (metadata.supportedGameModes as Record<string, unknown> | undefined) ??
-    (metadata.supported_game_modes as Record<string, unknown> | undefined) ??
-    {};
+  if (metadata.category !== "rhythm_game" && metadata.officialVolume !== true && metadata.official_volume !== true) return [];
+  const supported = (metadata.supportedGameModes as Record<string, unknown> | undefined) ?? (metadata.supported_game_modes as Record<string, unknown> | undefined) ?? {};
   const facts: string[] = [];
   const volumeLabel = String(metadata.volumeLabel ?? metadata.volume_label ?? "").trim();
-  const gameEnabled =
-    typeof metadata.gameEnabled === "boolean"
-      ? metadata.gameEnabled
-      : typeof metadata.game_enabled === "boolean"
-        ? metadata.game_enabled
-        : false;
-  if (volumeLabel) {
-    facts.push(volumeLabel);
-  }
+  const gameEnabled = typeof metadata.gameEnabled === "boolean" ? metadata.gameEnabled : typeof metadata.game_enabled === "boolean" ? metadata.game_enabled : false;
+  if (volumeLabel) facts.push(volumeLabel);
   facts.push(gameEnabled ? "Game Enabled" : "Game Hidden");
-  const modes: string[] = [];
-  const stepArrows =
-    typeof supported.stepArrows === "boolean"
-      ? supported.stepArrows
-      : typeof supported.step_arrows === "boolean"
-        ? supported.step_arrows
-        : true;
-  const orbBeat =
-    typeof supported.orbBeat === "boolean"
-      ? supported.orbBeat
-      : typeof supported.orb_beat === "boolean"
-        ? supported.orb_beat
-        : false;
-  if (stepArrows) {
-    modes.push("Step Arrows");
-    modes.push("Rhythm Wizards");
-  }
-  if (orbBeat) {
-    modes.push("Orb Beat");
-  }
-  if (modes.length) {
-    facts.push(`Modes: ${modes.join(", ")}`);
-  }
+  const stepArrows = typeof supported.stepArrows === "boolean" ? supported.stepArrows : typeof supported.step_arrows === "boolean" ? supported.step_arrows : true;
+  const orbBeat = typeof supported.orbBeat === "boolean" ? supported.orbBeat : typeof supported.orb_beat === "boolean" ? supported.orb_beat : false;
+  if (stepArrows) facts.push("Step Arrows");
+  if (orbBeat) facts.push("Orb Beat");
   return facts;
 }
 

@@ -12,7 +12,7 @@ const storageFileUrl = (objectPath: string) => {
   return `${env.storageEndpoint}/${env.BUNNY_STORAGE_ZONE}/${encoded}`;
 };
 
-const publicFileUrl = (objectPath: string) => {
+export const buildBunnyPublicUrl = (objectPath: string) => {
   const host = env.BUNNY_PULL_ZONE_HOSTNAME.replace(/^https?:\/\//, "");
   const encoded = objectPath.split("/").map(encodeURIComponent).join("/");
   return `https://${host}/${encoded}`;
@@ -41,7 +41,7 @@ export async function uploadBufferToBunny(params: {
 
   return {
     objectPath: params.objectPath,
-    publicUrl: publicFileUrl(params.objectPath),
+    publicUrl: buildBunnyPublicUrl(params.objectPath),
   };
 }
 

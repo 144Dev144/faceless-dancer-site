@@ -8,3 +8,4 @@ export * from "./schemas/siteSettings.js";
 export * from "./schemas/submission.js";
 export * from "./schemas/library.js";
 export * from "./schemas/rhythmGame.js";
+export * from "./schemas/support.js";

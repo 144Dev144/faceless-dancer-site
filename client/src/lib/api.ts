@@ -43,6 +43,7 @@ export interface LibraryCreator {
   creatorSlug: string | null;
   avatarUrl: string | null;
   bannerUrl: string | null;
+  publicKey: string | null;
 }
 
 export interface LibraryItem {
@@ -62,6 +63,20 @@ export interface LibraryItem {
   updatedAt: string;
   files: LibraryFile[];
   creator: LibraryCreator | null;
+}
+
+export interface PublicLibraryPage {
+  items: LibraryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  summary: {
+    items: number;
+    creators: number;
+    playable: number;
+    artwork: number;
+  };
 }
 
 export interface CreatorProfile {
@@ -130,6 +145,47 @@ export interface RemotePricingQuote {
   expiresAt: string;
 }
 
+export interface RemotePaymentSettings {
+  facelessBasePriceUsdMicros: number;
+  solBasePriceUsdMicros: number;
+  facelessExtractionBasePriceUsdMicros: number;
+  solExtractionBasePriceUsdMicros: number;
+  facelessGenerationAdditionalStepPriceUsdMicros: number;
+  solGenerationAdditionalStepPriceUsdMicros: number;
+  facelessGenerationAdditionalSecondPriceUsdMicros: number;
+  solGenerationAdditionalSecondPriceUsdMicros: number;
+  facelessExtractionAdditionalStepPriceUsdMicros: number;
+  solExtractionAdditionalStepPriceUsdMicros: number;
+  facelessExtractionSourceSecondPriceUsdMicros: number;
+  solExtractionSourceSecondPriceUsdMicros: number;
+  updatedAt: string;
+}
+
+export interface RemotePricingConfig {
+  network: "devnet" | "mainnet-beta";
+  paymentMode: "mock" | "solana" | "test-solana" | "free-signature";
+  currencies: Record<RemotePaymentCurrency, { tokenMint: string; tokenDecimals: number }>;
+  settings: RemotePaymentSettings;
+  defaults: {
+    musicDurationSeconds: number;
+    musicInferenceSteps: number;
+    extractionInferenceSteps: number;
+  };
+  slippageBps: number;
+  market: {
+    source: "pump-bonding-curve";
+    rpcUrl: string;
+    tokenMint: string;
+    tokenDecimals: number;
+    pumpProgramId: string;
+    bondingCurveAccount: string;
+    solUsdFeedId: string;
+    solUsdFeedAccount: string;
+    solUsdFeedShard: number;
+    maxAgeSeconds: number;
+  };
+}
+
 export interface RemoteAvailability {
   available: boolean;
   priority: RemoteGenerationRequest["priority"];
@@ -174,7 +230,7 @@ export interface RemotePaymentIntent {
 export interface RemoteArtifact {
   id: string;
   jobId: string;
-  role: "audio" | "preview" | "metadata";
+  role: "audio" | "preview" | "metadata" | "waveform";
   objectPath: string;
   publicUrl?: string;
   mimeType: string;
@@ -248,6 +304,8 @@ export interface RemoteGenerationHealth {
   };
   error?: string;
 }
+
+export type SupportIssueType = "bug_report" | "refund_request" | "general_support";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -337,14 +395,29 @@ export const api = {
 
   publicSchedule: () => apiFetch<{ slots: PublicScheduleSlot[] }>("/schedule/public"),
 
-  publicLibrary: (params: { kind?: string; tag?: string; limit?: number; offset?: number } = {}) => {
+  publicLibrary: (params: {
+    kind?: string;
+    tag?: string;
+    search?: string;
+    sort?: "newest" | "oldest";
+    playable?: boolean;
+    artwork?: boolean;
+    license?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
     const query = new URLSearchParams();
     if (params.kind) query.set("kind", params.kind);
     if (params.tag) query.set("tag", params.tag);
+    if (params.search) query.set("search", params.search);
+    if (params.sort) query.set("sort", params.sort);
+    if (params.playable) query.set("playable", "true");
+    if (params.artwork) query.set("artwork", "true");
+    if (params.license) query.set("license", params.license);
     if (params.limit) query.set("limit", String(params.limit));
     if (params.offset) query.set("offset", String(params.offset));
     const suffix = query.toString() ? `?${query.toString()}` : "";
-    return apiFetch<{ items: LibraryItem[] }>(`/library${suffix}`);
+    return apiFetch<PublicLibraryPage>(`/library${suffix}`);
   },
 
   publicLibraryItem: (itemId: string) => apiFetch<{ item: LibraryItem }>(`/library/${encodeURIComponent(itemId)}`),
@@ -405,6 +478,18 @@ export const api = {
     return response.json() as Promise<{ item: LibraryItem }>;
   },
 
+  copyDraftLibraryFileFromStorage: (itemId: string, payload: {
+    role: string;
+    metadata?: Record<string, unknown>;
+    sourceObjectPath: string;
+    mimeType?: string;
+    fileName?: string;
+  }) =>
+    apiFetch<{ item: LibraryItem }>(`/library/publish/items/${encodeURIComponent(itemId)}/files/from-storage`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   clearOwnedLibraryItemFiles: (itemId: string) =>
     apiFetch<{ item: LibraryItem }>(`/library/publish/items/${encodeURIComponent(itemId)}/files`, {
       method: "DELETE",
@@ -445,6 +530,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ request }),
     }),
+
+  remoteGenerationPricingConfig: () =>
+    apiFetch<RemotePricingConfig>("/remote-generation/pricing-config"),
 
   remoteGenerationAvailability: (priority: RemoteGenerationRequest["priority"]) =>
     apiFetch<RemoteAvailability>("/remote-generation/availability", {
@@ -491,6 +579,12 @@ export const api = {
     }),
 
   remoteRewardSubmissions: (limit = 50) => apiFetch<RemoteRewardSubmission[]>(`/remote-generation/reward-submissions?limit=${encodeURIComponent(String(limit))}`),
+
+  submitSupportRequest: (payload: { email: string; issueType: SupportIssueType; message: string }) =>
+    apiFetch<{ submitted: boolean }>("/support", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   appealRemoteRewardSubmission: (submissionId: string, postLink: string) =>
     apiFetch<RemoteRewardSubmission>(`/remote-generation/reward-submissions/${encodeURIComponent(submissionId)}/appeal`, {

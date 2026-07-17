@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { createPortal } from "preact/compat";
-import { AudioWaveform, CheckCircle2, CircleAlert, Download, Info, MoreHorizontal, RotateCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-preact";
+import { AudioWaveform, CalendarDays, CheckCircle2, CircleAlert, Clock3, Download, Info, MoreHorizontal, Music2, Play, RefreshCw, RotateCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-preact";
 import {
   api,
   type RemoteGenerationHealth,
@@ -9,16 +9,20 @@ import {
   type RemoteJob,
   type RemotePaymentCurrency,
   type RemotePaymentIntent,
+  type RemotePricingConfig,
   type RemotePricingQuote,
   type RemoteRewardSubmission,
 } from "../../lib/api";
 import { fetchFaceLESSWalletBalance, fetchSolWalletBalance, type FaceLESSWalletBalance } from "../../lib/facelessBalance";
 import { sendRemoteGenerationPayment, sendRemoteGenerationSolPayment, signRemoteGenerationPayment } from "../../lib/remoteGenerationPayment";
-import { createRemoteAudioWorkspaceItem, saveWorkspaceItem } from "../../lib/danceStationWorkspace";
+import { calculateRemotePricing, fetchOnChainMarketPrice, type RemoteMarketPrice } from "../../lib/remoteGenerationPricing";
+import { fallbackGenerationCoverUrl } from "../../lib/remoteGenerationCoverArt";
+import { createRemoteAudioWorkspaceItem, listWorkspaceItems, saveWorkspaceItem } from "../../lib/danceStationWorkspace";
 import type { BrowserWorkspaceItem } from "../../lib/danceStationWorkspace";
 import type { LibraryItem } from "../../lib/api";
 import type { SessionState } from "../../hooks/useSession";
 import { AudioPlayButton } from "../audio/SiteAudioPlayer";
+import { WaveformVisual } from "../audio/WaveformVisual";
 
 interface Props {
   session: SessionState;
@@ -49,6 +53,7 @@ type RemoteSubmissionStage = "payment-request" | "wallet-payment" | "payment-ver
 const MAX_REMOTE_AUDIO_DURATION_SECONDS = 360;
 
 interface RemoteGenerationErrorBody {
+  code?: string;
   refund?: {
     status?: string;
     transactionSignature?: string;
@@ -66,6 +71,7 @@ function remoteGenerationFailureMessage(
   }
   if (refundStatus === "confirmed") return "Payment received and refunded.";
   if (refundStatus === "manual_review") return "Payment received. Refund requires support review.";
+  if (body?.code === "GENERATION_SERVICE_UNAVAILABLE") return "No generation capacity is ready right now. Please try again shortly.";
 
   switch (stage) {
     case "payment-request":
@@ -79,16 +85,45 @@ function remoteGenerationFailureMessage(
   }
 }
 
+function serializeRemoteGenerationErrorValue(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "undefined") return undefined;
+  if (typeof value === "bigint") return `${value.toString()}n`;
+  if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
+  if (depth >= 2) return Object.prototype.toString.call(value);
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => serializeRemoteGenerationErrorValue(item, depth + 1));
+  }
+
+  const record: Record<string, unknown> = {};
+  for (const key of Object.getOwnPropertyNames(value).slice(0, 32)) {
+    if (key === "__proto__") continue;
+    try {
+      record[key] = serializeRemoteGenerationErrorValue((value as Record<string, unknown>)[key], depth + 1);
+    } catch (readError) {
+      record[key] = `[Unable to read: ${readError instanceof Error ? readError.message : String(readError)}]`;
+    }
+  }
+
+  if (Object.keys(record).length) return record;
+  try {
+    const stringValue = String(value);
+    if (stringValue !== "[object Object]") return stringValue;
+  } catch {
+    // Keep the type marker below when even string conversion is unavailable.
+  }
+  return { type: Object.prototype.toString.call(value) };
+}
+
 function remoteGenerationErrorDetails(error: unknown): Record<string, unknown> {
-  if (!(error instanceof Error)) return { error };
-  const errorWithMetadata = error as Error & { status?: number; body?: unknown };
-  return {
-    name: error.name,
-    message: error.message,
-    stack: error.stack,
-    status: errorWithMetadata.status,
-    body: errorWithMetadata.body,
-  };
+  const serialized = serializeRemoteGenerationErrorValue(error);
+  if (serialized && typeof serialized === "object" && !Array.isArray(serialized)) {
+    return serialized as Record<string, unknown>;
+  }
+  return { type: typeof error, value: serialized };
 }
 
 interface RemoteAudioChoice {
@@ -114,12 +149,41 @@ function generationPrompt(job: RemoteJob): string {
   return typeof prompt === "string" ? prompt.trim() : "";
 }
 
-function generationStatus(job: RemoteJob): { label: string; queued: boolean; spinning: boolean } | null {
-  if (["failed", "cancelled", "expired"].includes(job.status)) return { label: "Error Generating", queued: false, spinning: false };
-  if (job.status === "succeeded") return null;
-  if (["created", "awaiting_payment", "queued", "starting"].includes(job.status)) return { label: "Queued", queued: true, spinning: true };
-  if (job.status === "cancel_requested") return { label: "Cancelling", queued: false, spinning: true };
-  return { label: "Generating", queued: false, spinning: true };
+function generationStatus(job: RemoteJob): { label: string; tone: "complete" | "error" | "queued" | "active"; spinning: boolean } {
+  if (["failed", "cancelled", "expired"].includes(job.status)) return { label: "Error Generating", tone: "error", spinning: false };
+  if (job.status === "succeeded") return { label: "Completed", tone: "complete", spinning: false };
+  if (["created", "awaiting_payment", "queued", "starting"].includes(job.status)) return { label: "Queued", tone: "queued", spinning: true };
+  if (job.status === "cancel_requested") return { label: "Cancelling", tone: "active", spinning: true };
+  return { label: "Generating", tone: "active", spinning: true };
+}
+
+function generationParameterNumber(job: RemoteJob, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = job.request.parameters?.[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
+function formatGenerationDuration(seconds?: number): string | null {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return null;
+  const totalSeconds = Math.round(seconds);
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+function generationModelLabel(job: RemoteJob): string {
+  const model = typeof job.request.parameters?.model === "string" ? job.request.parameters.model : job.modelRevision;
+  if (model.includes("turbo")) return "ACE-Step Turbo";
+  if (model.includes("base")) return "ACE-Step Base";
+  return job.modelRevision.replaceAll("-", " ");
+}
+
+function generationTags(job: RemoteJob): string[] {
+  const parameters = job.request.parameters ?? {};
+  const tags: string[] = [];
+  if (parameters.instrumental === true || parameters.lyrics === "[Instrumental]") tags.push("Instrumental");
+  if (typeof parameters.track_name === "string" && parameters.track_name.trim()) tags.push(parameters.track_name.trim().replaceAll("_", " "));
+  return tags.slice(0, 3);
 }
 
 function remoteLokrInputs(files: unknown): RemoteGenerationInput[] {
@@ -240,8 +304,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const [instrumental, setInstrumental] = useState(true);
   const [lyrics, setLyrics] = useState("");
   const [vocalLanguage, setVocalLanguage] = useState("unknown");
-  const [durationSeconds, setDurationSeconds] = useState(30);
-  const [inferenceSteps, setInferenceSteps] = useState(8);
+  const [durationSeconds, setDurationSeconds] = useState(150);
+  const [inferenceSteps, setInferenceSteps] = useState(12);
   const [guidanceScale, setGuidanceScale] = useState(1);
   const [extractionInferenceSteps, setExtractionInferenceSteps] = useState(80);
   const [extractionGuidanceScale, setExtractionGuidanceScale] = useState(1);
@@ -255,10 +319,14 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const [diskSourceError, setDiskSourceError] = useState("");
   const [extractionTrack, setExtractionTrack] = useState<(typeof extractionTracks)[number]>("vocals");
   const [paymentCurrency, setPaymentCurrency] = useState<RemotePaymentCurrency>("FACELESS");
+  const [pricingConfig, setPricingConfig] = useState<RemotePricingConfig | null>(null);
+  const [marketPrice, setMarketPrice] = useState<RemoteMarketPrice | null>(null);
   const [pricing, setPricing] = useState<RemotePricingQuote | null>(null);
+  const [pricingError, setPricingError] = useState("");
   const [walletBalance, setWalletBalance] = useState<FaceLESSWalletBalance | null>(null);
   const [walletBalanceLoading, setWalletBalanceLoading] = useState(false);
-  const [paymentIntent, setPaymentIntent] = useState<RemotePaymentIntent | null>(null);
+  const [walletBalanceRefreshKey, setWalletBalanceRefreshKey] = useState(0);
+  const [, setPaymentIntent] = useState<RemotePaymentIntent | null>(null);
   const [jobs, setJobs] = useState<RemoteJob[]>([]);
   const [historyCursor, setHistoryCursor] = useState<string | undefined>();
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
@@ -560,40 +628,68 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
 
   useEffect(() => {
     let cancelled = false;
-    let timer: number | undefined;
-    let inFlight = false;
-    if (!health?.enabled || (generationMode === "extraction" && (!extractionSourceInput || extractionSourceTooLong))) {
+    if (!health?.enabled) {
+      setPricingConfig(null);
+      setMarketPrice(null);
       setPricing(null);
+      setPricingError("");
       return undefined;
     }
-    const readPrice = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const nextPricing = await api.remoteGenerationPricing(request);
-        if (!cancelled) setPricing(nextPricing);
-      } catch {
-        if (!cancelled) setPricing(null);
-      } finally {
-        inFlight = false;
-        if (!cancelled) timer = window.setTimeout(() => void readPrice(), 15_000);
-      }
-    };
-    void readPrice();
+
+    void api.remoteGenerationPricingConfig()
+      .then((nextConfig) => {
+        if (nextConfig.paymentMode === "free-signature") {
+          const fetchedAt = new Date().toISOString();
+          return {
+            nextConfig,
+            nextMarketPrice: {
+              tokenMint: nextConfig.market.tokenMint,
+              facelessPriceUsd: 1,
+              solPriceUsd: 1,
+              pairAddress: "",
+              fetchedAt,
+              expiresAt: new Date(Date.now() + nextConfig.market.maxAgeSeconds * 1000).toISOString(),
+              source: "free-signature",
+            } satisfies RemoteMarketPrice,
+          };
+        }
+        return fetchOnChainMarketPrice(nextConfig)
+          .then((nextMarketPrice) => ({ nextConfig, nextMarketPrice }));
+      })
+      .then(({ nextConfig, nextMarketPrice }) => {
+        if (cancelled) return;
+        setPricingConfig(nextConfig);
+        setMarketPrice(nextMarketPrice);
+        setPricingError("");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPricingConfig(null);
+        setMarketPrice(null);
+        setPricing(null);
+        setPricingError("Pricing is temporarily unavailable. Please try again shortly.");
+      });
+
     return () => {
       cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [extractionSourceInput, extractionSourceTooLong, generationMode, health?.enabled, request]);
+  }, [health?.enabled]);
 
   useEffect(() => {
-    setPricing(null);
-    setWalletBalance(null);
-  }, [paymentCurrency]);
+    if (!pricingConfig || !marketPrice || (generationMode === "extraction" && (!extractionSourceInput || extractionSourceTooLong))) {
+      setPricing(null);
+      return;
+    }
+    try {
+      setPricing(calculateRemotePricing(pricingConfig, request, marketPrice));
+    } catch {
+      setPricing(null);
+    }
+  }, [extractionSourceInput, extractionSourceTooLong, generationMode, marketPrice, pricingConfig, request]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!session.authenticated || !session.publicKey) {
+    if (!session.authenticated || !session.publicKey || !pricingConfig) {
       setWalletBalance(null);
       setWalletBalanceLoading(false);
       return undefined;
@@ -602,9 +698,13 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
     const readBalance = async () => {
       setWalletBalanceLoading(true);
       try {
+        const balanceNetwork = {
+          network: pricingConfig.network,
+          rpcUrl: pricingConfig.market.rpcUrl,
+        };
         const nextBalance = paymentCurrency === "SOL"
-          ? await fetchSolWalletBalance(session.publicKey)
-          : await fetchFaceLESSWalletBalance(session.publicKey, pricing?.tokenMint, pricing?.tokenDecimals);
+          ? await fetchSolWalletBalance(session.publicKey, balanceNetwork)
+          : await fetchFaceLESSWalletBalance(session.publicKey, pricing?.tokenMint, pricing?.tokenDecimals, balanceNetwork);
         if (!cancelled) setWalletBalance(nextBalance);
       } catch {
         if (!cancelled) setWalletBalance(null);
@@ -614,29 +714,42 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
     };
 
     void readBalance();
-    const timer = window.setInterval(() => void readBalance(), 15000);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
-  }, [paymentCurrency, pricing?.tokenDecimals, pricing?.tokenMint, session.authenticated, session.publicKey]);
+  }, [paymentCurrency, pricing?.tokenDecimals, pricing?.tokenMint, pricingConfig?.market.rpcUrl, pricingConfig?.network, session.authenticated, session.publicKey, walletBalanceRefreshKey]);
 
   useEffect(() => {
     jobs.forEach((job) => {
       const artifact = job.artifacts.find((candidate) => candidate.role === "audio" && candidate.publicUrl);
       if (!artifact?.publicUrl || job.status !== "succeeded" || savedRemoteJobsRef.current.has(job.id) || savingRemoteJobsRef.current.has(job.id)) return;
       savingRemoteJobsRef.current.add(job.id);
-      void saveWorkspaceItem(createRemoteAudioWorkspaceItem({
-        jobId: job.id,
-        title: generationTitle(job),
-        publicUrl: artifact.publicUrl,
-        objectPath: artifact.objectPath,
-        mimeType: artifact.mimeType,
-        sizeBytes: artifact.sizeBytes,
-        sha256: artifact.sha256,
-        createdAt: job.createdAt,
-        updatedAt: job.updatedAt,
-      }))
+      void listWorkspaceItems()
+        .then((workspace) => {
+          const next = createRemoteAudioWorkspaceItem({
+            jobId: job.id,
+            title: generationTitle(job),
+            publicUrl: artifact.publicUrl,
+            objectPath: artifact.objectPath,
+            mimeType: artifact.mimeType,
+            sizeBytes: artifact.sizeBytes,
+            sha256: artifact.sha256,
+            createdAt: job.createdAt,
+            updatedAt: job.updatedAt,
+          });
+          const existing = workspace.find((item) => item.id === next.id);
+          if (!existing) return saveWorkspaceItem(next);
+
+          return saveWorkspaceItem({
+            ...next,
+            ...existing,
+            updatedAt: next.updatedAt,
+            metadata: {
+              ...next.metadata,
+              ...existing.metadata,
+            },
+          });
+        })
         .then(() => {
           savedRemoteJobsRef.current.add(job.id);
           onWorkspaceChanged?.();
@@ -746,6 +859,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
         paymentCurrency,
         paymentIntentId: submittedIntentId,
         error: remoteGenerationErrorDetails(nextError),
+        rawError: nextError,
       });
       if (submittedIntentId) {
         try {
@@ -833,6 +947,16 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
               <div className="dance-station-cost-estimator" aria-live="polite">
                 <span>Total {currencyLabel}</span>
                 <strong>{walletBalanceLabel}</strong>
+                <button
+                  type="button"
+                  className="dance-station-cost-estimator__refresh"
+                  aria-label="Refresh wallet balance"
+                  title="Refresh wallet balance"
+                  disabled={!session.authenticated || !pricingConfig || walletBalanceLoading}
+                  onClick={() => setWalletBalanceRefreshKey((value) => value + 1)}
+                >
+                  <RefreshCw aria-hidden="true" size={14} className={walletBalanceLoading ? "is-spinning" : ""} />
+                </button>
               </div>
             </div>
           </div>
@@ -994,14 +1118,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                     {!busy ? <small>{costLabel}</small> : null}
                   </span>
                 </button>
-                {paymentIntent ? (
-                  <dl className="dance-station-remote-details dance-station-payment-details">
-                    <div><dt>Fee</dt><dd>{formatPaymentToken(paymentIntent.amountAtomic, paymentIntent.tokenDecimals)} {paymentIntent.currency === "FACELESS" ? "$FACELESS" : "SOL"}</dd></div>
-                    <div><dt>Network</dt><dd>{paymentIntent.network}</dd></div>
-                    <div><dt>Method</dt><dd>{paymentIntent.paymentMode === "free-signature" ? "Wallet signature" : `${paymentIntent.currency === "FACELESS" ? "$FACELESS" : "SOL"} transfer`}</dd></div>
-                    <div><dt>Payment</dt><dd>{paymentIntent.status}</dd></div>
-                  </dl>
-                ) : null}
+                {pricingError ? <p className="dance-station-error" role="status">{pricingError}</p> : null}
                 {error ? <p className="dance-station-error" role="alert">{error}</p> : null}
               </div>
             </section>
@@ -1027,8 +1144,10 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
 
         <section className="dance-station-inner-panel dance-station-history-panel">
           <div className="dance-station-history-heading">
-            <h3>Generation History</h3>
-            <span>{jobs.length}</span>
+            <div className="dance-station-history-heading__title">
+              <h3>Generation History</h3>
+              <span>{jobs.length}</span>
+            </div>
           </div>
           <div className="dance-station-history-toolbar">
             <label className="dance-station-history-search">
@@ -1040,9 +1159,9 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
               <SlidersHorizontal aria-hidden="true" size={15} strokeWidth={2} />
               <span className="sr-only">Filter generations</span>
               <select value={historyFilter} onChange={(event) => setHistoryFilter((event.currentTarget as HTMLSelectElement).value as typeof historyFilter)}>
-                <option value="all">All</option>
+                <option value="all">All Status</option>
                 <option value="active">Active</option>
-                <option value="complete">Complete</option>
+                <option value="complete">Completed</option>
                 <option value="error">Errors</option>
               </select>
             </label>
@@ -1096,11 +1215,16 @@ function RemoteGenerationRow({
   const optionsButtonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const audioArtifact = job.artifacts.find((artifact) => artifact.role === "audio" && artifact.publicUrl);
+  const waveformArtifact = job.artifacts.find((artifact) => artifact.role === "waveform" && artifact.publicUrl);
   const failed = ["failed", "cancelled", "expired"].includes(job.status);
   const complete = job.status === "succeeded";
   const status = generationStatus(job);
   const prompt = generationPrompt(job);
   const detailsId = `generation-prompt-${job.id}`;
+  const coverArtifact = job.artifacts.find((artifact) => artifact.role !== "waveform" && artifact.publicUrl && artifact.mimeType.startsWith("image/"));
+  const coverUrl = complete ? coverArtifact?.publicUrl ?? fallbackGenerationCoverUrl(job.id) : coverArtifact?.publicUrl;
+  const duration = formatGenerationDuration(generationParameterNumber(job, ["audio_duration", "duration", "duration_seconds"]));
+  const tags = generationTags(job);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -1155,39 +1279,41 @@ function RemoteGenerationRow({
   };
 
   return (
-    <article className={`dance-station-generation-row${failed ? " dance-station-generation-row--error" : ""}`}>
-      <div className="dance-station-generation-row__head">
-        <strong>{generationTitle(job)}</strong>
-        <div className="dance-station-generation-row__head-actions">
-          {status ? (
-            <span className={`dance-station-generation-state${status.queued ? " dance-station-generation-state--queued" : ""}`}>
+    <article className={`dance-station-generation-row${expanded ? " dance-station-generation-row--expanded" : ""}${failed ? " dance-station-generation-row--error" : ""}`}>
+      <div className={`dance-station-generation-row__artwork${failed ? " dance-station-generation-row__artwork--error" : ""}`} aria-hidden={coverArtifact?.publicUrl ? undefined : "true"}>
+        {coverUrl ? <img src={coverUrl} alt="" loading="lazy" decoding="async" /> : <AudioWaveform size={34} strokeWidth={1.2} />}
+      </div>
+      <div className="dance-station-generation-row__content">
+        <div className="dance-station-generation-row__head">
+          <div className="dance-station-generation-row__title-line">
+            <strong>{generationTitle(job)}</strong>
+            <span className={`dance-station-generation-state dance-station-generation-state--${status.tone}`}>
+              {status.tone === "complete" ? <CheckCircle2 aria-hidden="true" size={14} strokeWidth={2.2} /> : null}
+              {status.tone === "error" ? <CircleAlert aria-hidden="true" size={14} strokeWidth={2.2} /> : null}
               {status.spinning ? <span className="dance-station-generation-spinner" aria-hidden="true" /> : null}
               {status.label}
             </span>
-          ) : null}
+          </div>
+          <div className="dance-station-generation-row__meta">
+            <span><Music2 aria-hidden="true" size={14} strokeWidth={1.8} />{generationModelLabel(job)}</span>
+            <span><CalendarDays aria-hidden="true" size={14} strokeWidth={1.8} />{new Date(job.createdAt).toLocaleString()}</span>
+          </div>
         </div>
-      </div>
-      <span className="dance-station-generation-row__date">{new Date(job.createdAt).toLocaleString()}</span>
-      <div className="dance-station-generation-media">
         {complete && audioArtifact?.publicUrl ? (
-          <AudioPlayButton track={{ id: `remote-generation-${job.id}`, title: generationTitle(job), url: audioArtifact.publicUrl, mimeType: audioArtifact.mimeType }} />
+          <div className="dance-station-generation-row__audio-meta">
+            <WaveformVisual className="dance-station-generation-waveform" seed={job.id} waveformUrl={waveformArtifact?.publicUrl} />
+            {duration ? <span className="dance-station-generation-row__duration"><Clock3 aria-hidden="true" size={14} strokeWidth={1.8} />{duration}</span> : null}
+          </div>
         ) : null}
-        <div className="dance-station-generation-options">
-          <button
-            type="button"
-            className="dance-station-tool-button dance-station-generation-options-button"
-            ref={optionsButtonRef}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label={`Options for ${generationTitle(job)}`}
-            title="Generation options"
-            onClick={() => setMenuOpen((current) => !current)}
-          >
-            <MoreHorizontal aria-hidden="true" size={16} strokeWidth={2.2} />
-          </button>
-        </div>
+        {complete && tags.length ? <div className="dance-station-generation-tags">{tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
+        {!complete && !failed ? (
+          <div className="dance-station-generation-progress" aria-label="Generation in progress">
+            <span className="dance-station-generation-progress__bar" aria-hidden="true" />
+            <span>Processing</span>
+          </div>
+        ) : null}
+        {failed ? <p className="dance-station-generation-row__error-copy">Generation failed. Please try again.</p> : null}
       </div>
-      {complete && !audioArtifact?.publicUrl ? <span className="dance-station-generation-state">Error Generating</span> : null}
       {expanded ? (
         <div id={detailsId} className="dance-station-generation-details">
           <div className="dance-station-generation-details__actions">
@@ -1207,6 +1333,29 @@ function RemoteGenerationRow({
           </div>
         </div>
       ) : null}
+      <div className="dance-station-generation-media">
+        {complete && audioArtifact?.publicUrl ? (
+          <AudioPlayButton track={{ id: `remote-generation-${job.id}`, title: generationTitle(job), url: audioArtifact.publicUrl, mimeType: audioArtifact.mimeType, waveformUrl: waveformArtifact?.publicUrl }} />
+        ) : (
+          <button type="button" className="site-audio-play-button dance-station-generation-play-disabled" disabled aria-label={`${status.label} for ${generationTitle(job)}`}>
+            <Play aria-hidden="true" size={18} strokeWidth={2.1} />
+          </button>
+        )}
+        <div className="dance-station-generation-options">
+          <button
+            type="button"
+            className="dance-station-tool-button dance-station-generation-options-button"
+            ref={optionsButtonRef}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label={`Options for ${generationTitle(job)}`}
+            title="Generation options"
+            onClick={() => setMenuOpen((current) => !current)}
+          >
+            <MoreHorizontal aria-hidden="true" size={19} strokeWidth={2.2} />
+          </button>
+        </div>
+      </div>
       {menuOpen && typeof document !== "undefined" ? createPortal(
         <div
           ref={menuRef}

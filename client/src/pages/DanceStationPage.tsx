@@ -1,11 +1,11 @@
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { AudioWaveform, CircleHelp, LibraryBig, Piano, Settings2, Sparkles, type LucideIcon } from "lucide-preact";
+import { AudioWaveform, Check, CircleHelp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Settings2, Sparkles, X as XIcon, type LucideIcon } from "lucide-preact";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
 import { RemoteGenerationPanel } from "../components/danceStation/RemoteGenerationPanel";
 import { AudioPlayButton } from "../components/audio/SiteAudioPlayer";
-import { api, type LibraryItem } from "../lib/api";
+import { api, type LibraryItem, type SupportIssueType } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
 import {
   createPrivateAssetWorkspaceItem,
@@ -90,6 +90,13 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [assetLabel, setAssetLabel] = useState("");
   const [showStorageHelp, setShowStorageHelp] = useState(false);
+  const [helpModalView, setHelpModalView] = useState<"help" | "support">("help");
+  const [supportEmail, setSupportEmail] = useState("");
+  const [supportIssueType, setSupportIssueType] = useState<SupportIssueType>("bug_report");
+  const [supportMessage, setSupportMessage] = useState("");
+  const [supportSubmitting, setSupportSubmitting] = useState(false);
+  const [supportSubmitted, setSupportSubmitted] = useState(false);
+  const [supportError, setSupportError] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [publicItems, setPublicItems] = useState<LibraryItem[]>([]);
   const [publicLoading, setPublicLoading] = useState(true);
@@ -207,12 +214,25 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     await refreshWorkspace();
   };
 
+  const renameWorkspaceItem = async (item: BrowserWorkspaceItem, nextTitle: string) => {
+    const title = nextTitle.trim();
+    if (!title) throw new Error("Enter a name for this private asset.");
+    if (title === item.title) return;
+    await saveWorkspaceItem({
+      ...item,
+      title,
+      updatedAt: new Date().toISOString(),
+    });
+    setWorkspaceMessage(`${title} renamed.`);
+    await refreshWorkspace();
+  };
+
   const importPublicItem = async (item: LibraryItem) => {
     if (!session.authenticated) {
       throw new Error("Login to import public items.");
     }
     const now = new Date().toISOString();
-    const creatorName = item.creator?.displayName || item.creator?.creatorSlug || "Faceless creator";
+    const creatorName = item.creator?.displayName || item.creator?.creatorSlug || item.creator?.publicKey || "Faceless creator";
     await saveWorkspaceItem({
       id: `public-${item.id}`,
       title: item.title,
@@ -238,11 +258,13 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       throw new Error("Connect a wallet before publishing.");
     }
     if (item.source !== "private") {
-      throw new Error("Only private assets with local files can be published from the site right now.");
+      throw new Error("Only private assets can be published from the site right now.");
     }
-    const blob = item.metadata.blob;
-    if (!(blob instanceof File)) {
-      throw new Error("This private asset is missing its local file data. Re-add it from disk before publishing.");
+    const sourceObjectPath = typeof item.metadata.objectPath === "string" ? item.metadata.objectPath.trim() : "";
+    const localFile = workspaceMetadataFile(item.metadata.blob, item.metadata.fileName, item.metadata.mimeType);
+    const file = localFile || (!sourceObjectPath ? await workspaceItemFile(item) : null);
+    if (!file && !sourceObjectPath) {
+      throw new Error("This private asset is missing its file data. Re-add it from disk or refresh the workspace before publishing.");
     }
 
     const tags = Array.isArray(item.metadata.tags)
@@ -251,13 +273,14 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     const description = typeof item.metadata.description === "string" && item.metadata.description.trim()
       ? item.metadata.description.trim()
       : undefined;
-    const fileRole = blob.type.startsWith("audio/")
+    const mimeType = file?.type || (typeof item.metadata.mimeType === "string" ? item.metadata.mimeType : "application/octet-stream");
+    const fileRole = mimeType.startsWith("audio/")
       ? "audio"
-      : blob.type.startsWith("image/")
+      : mimeType.startsWith("image/")
         ? "cover"
         : "metadata";
 
-    const currentlyPublished = isPublishedLibraryRecord(item.metadata.publicLibrary);
+    const currentlyPublished = isPublishedLibraryMetadata(item.metadata);
     setWorkspaceMessage(`${currentlyPublished ? "Updating" : "Publishing"} ${item.title}...`);
 
     const managed = await api.upsertOwnedLibraryItem({
@@ -279,33 +302,50 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     });
     await api.clearOwnedLibraryItemFiles(managed.item.id);
 
-    await api.uploadDraftLibraryFile(managed.item.id, {
-      role: fileRole,
-      metadata: {
-        originalTitle: item.title,
-      },
-      file: blob,
-    });
+    if (file) {
+      await api.uploadDraftLibraryFile(managed.item.id, {
+        role: fileRole,
+        metadata: {
+          originalTitle: item.title,
+        },
+        file,
+      });
+    } else {
+      const sourceFileName = typeof item.metadata.fileName === "string" && item.metadata.fileName.trim()
+        ? item.metadata.fileName
+        : sourceObjectPath.split("/").pop() || `${item.title}.audio`;
+      await api.copyDraftLibraryFileFromStorage(managed.item.id, {
+        role: fileRole,
+        metadata: {
+          originalTitle: item.title,
+        },
+        sourceObjectPath,
+        mimeType,
+        fileName: sourceFileName,
+      });
+    }
     const coverBlob = item.metadata.cardImageBlob;
-    if (coverBlob instanceof File) {
+    const coverFile = workspaceMetadataFile(coverBlob, item.metadata.cardImageFileName, item.metadata.cardImageMimeType);
+    if (coverFile) {
       await api.uploadDraftLibraryFile(managed.item.id, {
         role: "cover",
         metadata: {
-          originalTitle: coverBlob.name,
+          originalTitle: coverFile.name,
         },
-        file: coverBlob,
+        file: coverFile,
       });
     }
 
     const published = await api.publishDraftLibraryItem(managed.item.id);
     await saveWorkspaceItem({
       ...item,
-      creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || item.creatorName,
+      creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || published.item.creator?.publicKey || item.creatorName,
       updatedAt: new Date().toISOString(),
       metadata: {
         ...item.metadata,
         publicLibrary: published.item,
         libraryItemId: published.item.id,
+        publicLibraryStatus: published.item.status,
       },
     });
     setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
@@ -330,6 +370,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         ...item.metadata,
         publicLibrary: revoked.item,
         libraryItemId: revoked.item.id,
+        publicLibraryStatus: revoked.item.status,
       },
     });
     setWorkspaceMessage(`${item.title} removed from the public library.`);
@@ -349,6 +390,45 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const dismissStorageHelp = async () => {
     await setWorkspaceSetting("storageIntroDismissed", true);
     setShowStorageHelp(false);
+  };
+
+  const openHelpModal = () => {
+    setHelpModalView("help");
+    setSupportSubmitted(false);
+    setSupportError("");
+    setShowStorageHelp(true);
+  };
+
+  const closeHelpModal = () => {
+    setShowStorageHelp(false);
+    setHelpModalView("help");
+    setSupportSubmitted(false);
+    setSupportError("");
+  };
+
+  const openSupportForm = () => {
+    setHelpModalView("support");
+    setSupportSubmitted(false);
+    setSupportError("");
+  };
+
+  const submitSupportRequest = async (event: SubmitEvent) => {
+    event.preventDefault();
+    setSupportError("");
+    setSupportSubmitting(true);
+    try {
+      await api.submitSupportRequest({
+        email: supportEmail.trim(),
+        issueType: supportIssueType,
+        message: supportMessage.trim(),
+      });
+      setSupportSubmitted(true);
+      setSupportMessage("");
+    } catch (error) {
+      setSupportError(error instanceof Error ? error.message : "Support is temporarily unavailable. Please try again shortly.");
+    } finally {
+      setSupportSubmitting(false);
+    }
   };
 
   const activeInstrumentTrack = instrumentTracks.find((track) => track.id === activeInstrumentTrackId) ?? instrumentTracks[0] ?? null;
@@ -855,16 +935,38 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         <HomeTopNav session={session} setSession={setSession} />
 
         {showStorageHelp ? (
-          <section className="dance-station-storage-modal" role="dialog" aria-modal="true" aria-label="Browser storage notice">
+          <section className="dance-station-storage-modal" role="dialog" aria-modal="true" aria-label={helpModalView === "support" ? "Contact support" : "Browser storage help"}>
             <div className="home-v2-card dance-station-storage-modal__card">
-              <p className="home-v2-kicker">First Use</p>
-              <h2>Browser work is saved on this device</h2>
-              <StorageCaveats includeSettingsNote />
-              <div className="dance-station-panel-actions">
-                <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => dismissStorageHelp().catch(() => setShowStorageHelp(false))}>
-                  Got It
-                </button>
-              </div>
+              {helpModalView === "support" ? (
+                <SupportForm
+                  email={supportEmail}
+                  issueType={supportIssueType}
+                  message={supportMessage}
+                  submitting={supportSubmitting}
+                  submitted={supportSubmitted}
+                  error={supportError}
+                  setEmail={setSupportEmail}
+                  setIssueType={setSupportIssueType}
+                  setMessage={setSupportMessage}
+                  onSubmit={submitSupportRequest}
+                  onBack={openHelpModal}
+                  onClose={closeHelpModal}
+                />
+              ) : (
+                <>
+                  <p className="home-v2-kicker">First Use</p>
+                  <h2>Browser work is saved on this device</h2>
+                  <StorageCaveats includeSettingsNote />
+                  <div className="dance-station-panel-actions">
+                    <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={() => dismissStorageHelp().catch(() => closeHelpModal())}>
+                      Got It
+                    </button>
+                    <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={openSupportForm}>
+                      Contact Support
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </section>
         ) : null}
@@ -874,7 +976,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             <p className="home-v2-kicker">Dance Station</p>
           </div>
           <div className="dance-station-header-actions">
-            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => setShowStorageHelp(true)}>
+            <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={openHelpModal}>
               <CircleHelp aria-hidden="true" size={15} strokeWidth={2} />
               <span>Help</span>
             </button>
@@ -900,7 +1002,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           ))}
         </section>
 
-        <section className={`dance-station-main-grid${activePanel === "instrument-lab" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}`}>
+        <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}`}>
           <div className="home-v2-card dance-station-main-panel">
             {showSettings ? (
               <BrowserWorkspaceSettings
@@ -908,7 +1010,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                 workspaceMessage={workspaceMessage}
                 refreshWorkspace={refreshWorkspace}
                 requestPersistence={requestPersistence}
-                setShowStorageHelp={setShowStorageHelp}
+                openStorageHelp={openHelpModal}
               />
             ) : activePanel === "library" ? (
                 <LibraryWorkspacePanel
@@ -925,6 +1027,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                   addPrivateAsset={addPrivateAsset}
                   importPublicItem={importPublicItem}
                   publishWorkspaceItem={publishWorkspaceItem}
+                  renameWorkspaceItem={renameWorkspaceItem}
                   revokeWorkspaceItem={revokeWorkspaceItem}
                   setWorkspaceCardImage={setWorkspaceCardImage}
                   workspaceCardObjectUrlsRef={workspaceCardObjectUrlsRef}
@@ -942,7 +1045,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             )}
           </div>
 
-          {activePanel !== "instrument-lab" && activePanel !== "generation" ? <aside className="home-v2-card dance-station-context-panel">
+          {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "library" ? <aside className="home-v2-card dance-station-context-panel">
             {showSettings ? (
               <SettingsSummaryPanel
                 session={session}
@@ -1007,6 +1110,7 @@ function LibraryWorkspacePanel({
   addPrivateAsset,
   importPublicItem,
   publishWorkspaceItem,
+  renameWorkspaceItem,
   revokeWorkspaceItem,
   setWorkspaceCardImage,
   workspaceCardObjectUrlsRef,
@@ -1026,6 +1130,7 @@ function LibraryWorkspacePanel({
   addPrivateAsset: (fileList: FileList | null) => Promise<void>;
   importPublicItem: (item: LibraryItem) => Promise<void>;
   publishWorkspaceItem: (item: BrowserWorkspaceItem) => Promise<void>;
+  renameWorkspaceItem: (item: BrowserWorkspaceItem, nextTitle: string) => Promise<void>;
   revokeWorkspaceItem: (item: BrowserWorkspaceItem) => Promise<void>;
   setWorkspaceCardImage: (item: BrowserWorkspaceItem, fileList: FileList | null) => Promise<void>;
   workspaceCardObjectUrlsRef: { current: Map<string, string> };
@@ -1068,7 +1173,7 @@ function LibraryWorkspacePanel({
           <input type="file" accept="audio/*,image/*" onChange={(event) => addPrivateAsset((event.currentTarget as HTMLInputElement).files).catch((error) => setWorkspaceMessage(error.message))} />
         </label>
       </div>
-      {workspaceMessage ? <p className="small">{workspaceMessage}</p> : null}
+      {workspaceMessage ? <p className="small dance-station-workspace-message">{workspaceMessage}</p> : null}
 
       <div className="dance-station-library-scroll">
         <div className="dance-station-workspace-list">
@@ -1076,9 +1181,10 @@ function LibraryWorkspacePanel({
             <PrivateAssetRow
               key={item.id}
               item={item}
-              canPublish={session.authenticated && item.source === "private" && item.metadata.blob instanceof File}
+              canPublish={session.authenticated && item.source === "private" && hasWorkspaceFile(item.metadata)}
               isAuthenticated={session.authenticated}
               onPublish={publishWorkspaceItem}
+              onRename={renameWorkspaceItem}
               onRevoke={revokeWorkspaceItem}
               onSetCardImage={setWorkspaceCardImage}
               workspaceCardObjectUrlsRef={workspaceCardObjectUrlsRef}
@@ -1119,7 +1225,8 @@ function LibraryWorkspacePanel({
             <PublicLibraryAssetCard
               key={item.id}
               item={item}
-              canImport={session.authenticated}
+              canImport={session.authenticated && item.creator?.publicKey !== session.publicKey}
+              isOwner={session.authenticated && item.creator?.publicKey === session.publicKey}
               importPublicItem={importPublicItem}
               setWorkspaceMessage={setWorkspaceMessage}
             />
@@ -1135,6 +1242,7 @@ function PrivateAssetRow({
   canPublish,
   isAuthenticated,
   onPublish,
+  onRename,
   onRevoke,
   onSetCardImage,
   workspaceCardObjectUrlsRef,
@@ -1144,104 +1252,226 @@ function PrivateAssetRow({
   canPublish: boolean;
   isAuthenticated: boolean;
   onPublish: (item: BrowserWorkspaceItem) => Promise<void>;
+  onRename: (item: BrowserWorkspaceItem, nextTitle: string) => Promise<void>;
   onRevoke: (item: BrowserWorkspaceItem) => Promise<void>;
   onSetCardImage: (item: BrowserWorkspaceItem, fileList: FileList | null) => Promise<void>;
   workspaceCardObjectUrlsRef: { current: Map<string, string> };
   setWorkspaceMessage: (value: string) => void;
 }): JSX.Element {
   const cardImageInputRef = useRef<HTMLInputElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState(item.title);
+  const [renameSaving, setRenameSaving] = useState(false);
   const metadata = item.metadata;
   const size = typeof metadata.sizeBytes === "number" ? formatBytes(metadata.sizeBytes) : "";
   const mime = typeof metadata.mimeType === "string" ? metadata.mimeType : item.source === "public-library" ? "public library item" : "";
   const updated = new Date(item.updatedAt);
-  const published = isPublishedLibraryRecord(metadata.publicLibrary);
-  const hasLinkedLibraryItem = Boolean(
-    (typeof metadata.libraryItemId === "string" && metadata.libraryItemId)
-    || (metadata.publicLibrary && typeof metadata.publicLibrary === "object" && (metadata.publicLibrary as Record<string, unknown>).id)
-  );
+  const published = isPublishedLibraryMetadata(metadata);
+  const hasLinkedLibraryItem = Boolean(linkedLibraryItemIdFromMetadata(metadata));
   const publishHint = !canPublish
-    ? item.source === "public-library"
+    ? !isAuthenticated
+      ? "Login to publish"
+      : item.source === "public-library"
       ? "Imported assets cannot be republished from the site yet."
-      : "Login to publish"
+      : "This asset file is unavailable. Re-add it or refresh the workspace."
     : "";
   const cardImageUrl = workspaceItemCardImageUrl(item, workspaceCardObjectUrlsRef);
   const audioUrl = workspaceItemAudioUrl(item, workspaceCardObjectUrlsRef);
+  const kindClass = item.kind.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const dateLabel = Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString();
+  const publishLabel = !isAuthenticated
+    ? "Login"
+    : !canPublish && !published
+      ? "Unavailable"
+      : published
+        ? "Update"
+        : hasLinkedLibraryItem
+          ? "Republish"
+            : item.source === "public-library"
+            ? "Imported"
+            : "Publish";
+
+  useEffect(() => {
+    if (renameOpen) renameInputRef.current?.focus();
+  }, [renameOpen]);
+
+  const beginRename = () => {
+    setRenameValue(item.title);
+    setRenameOpen(true);
+    setMenuOpen(false);
+  };
+
+  const cancelRename = () => {
+    if (renameSaving) return;
+    setRenameValue(item.title);
+    setRenameOpen(false);
+  };
+
+  const confirmRename = async () => {
+    const title = renameValue.trim();
+    if (!title) {
+      setWorkspaceMessage("Enter a name for this private asset.");
+      renameInputRef.current?.focus();
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      await onRename(item, title);
+      setRenameOpen(false);
+    } catch (error) {
+      setWorkspaceMessage(error instanceof Error ? error.message : "Could not rename this private asset.");
+    } finally {
+      setRenameSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (!menuRef.current?.contains(event.target)) setMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [item.id, menuOpen]);
+
   return (
-    <article
-      className={`dance-station-workspace-item${cardImageUrl ? " dance-station-workspace-item--image" : ""}`}
-      style={cardImageUrl ? { backgroundImage: `linear-gradient(180deg, rgba(4, 10, 19, 0.24), rgba(4, 10, 19, 0.92)), url(${cardImageUrl})` } : undefined}
-    >
-      <div className="dance-station-workspace-item__body">
-        <div className="dance-station-workspace-item__meta">
-          <span className="home-v2-tag">{formatKind(item.kind)}</span>
-          <span className="home-v2-tag">{item.source === "public-library" ? "Imported" : "Private"}</span>
-          {item.creatorName ? <span className="home-v2-tag">{item.creatorName}</span> : null}
+    <article className={`library-card dance-station-private-card library-card--${kindClass}${cardImageUrl ? " library-card--image" : ""}`}>
+      <div className="library-card__art">
+        {cardImageUrl ? <img src={cardImageUrl} alt="" loading="lazy" /> : <WorkspaceFallbackArtwork kind={item.kind} />}
+        <div className="library-card__art-shade" />
+        <div className="library-card__badge-row">
+          <span className="library-card__kind-badge">{formatKind(item.kind)}</span>
+          <span className="library-card__new-badge">{item.source === "public-library" ? "Imported" : "Private"}</span>
         </div>
-        <strong>{item.title}</strong>
-        <span>{Number.isNaN(updated.getTime()) ? "Recent" : updated.toLocaleDateString()}</span>
-        {mime || size ? <small>{[mime, size].filter(Boolean).join(" · ")}</small> : null}
+        {audioUrl ? <AudioPlayButton track={{ id: `workspace-audio-${item.id}`, title: item.title, url: audioUrl, mimeType: typeof metadata.mimeType === "string" ? metadata.mimeType : undefined, artworkUrl: cardImageUrl || undefined }} /> : null}
       </div>
-      <div className="dance-station-asset-actions">
-        {audioUrl ? <AudioPlayButton track={{ id: `workspace-audio-${item.id}`, title: item.title, url: audioUrl, mimeType: typeof metadata.mimeType === "string" ? metadata.mimeType : undefined }} /> : null}
-        {item.source === "private" ? (
-          <>
+
+      <div className="library-card__content">
+        <div className="library-card__meta">
+          <span>{item.creatorName || "Private workspace"}</span>
+          <span>{dateLabel}</span>
+        </div>
+        {renameOpen ? (
+          <form
+            className="private-asset-rename"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void confirmRename();
+            }}
+          >
             <input
-              ref={cardImageInputRef}
-              type="file"
-              accept="image/*"
-              hidden
-              onChange={(event) => onSetCardImage(item, (event.currentTarget as HTMLInputElement).files).catch((error) => setWorkspaceMessage(error.message))}
+              ref={renameInputRef}
+              type="text"
+              value={renameValue}
+              maxLength={160}
+              aria-label={`Rename ${item.title}`}
+              disabled={renameSaving}
+              onInput={(event) => setRenameValue((event.currentTarget as HTMLInputElement).value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelRename();
+                }
+              }}
             />
+            <span className="private-asset-rename__actions">
+              <button type="submit" aria-label="Confirm rename" title="Confirm rename" disabled={renameSaving}>
+                <Check aria-hidden="true" size={14} />
+              </button>
+              <button type="button" aria-label="Cancel rename" title="Cancel rename" disabled={renameSaving} onClick={cancelRename}>
+                <XIcon aria-hidden="true" size={14} />
+              </button>
+            </span>
+          </form>
+        ) : <h2 title={item.title}>{item.title}</h2>}
+        <p>{mime || fallbackDescription(item.kind)}</p>
+        <div className="library-card__facts">
+          {size ? <span>{size}</span> : null}
+          {audioUrl ? <span>Audio</span> : null}
+        </div>
+        <div className="library-card__footer">
+          <div className="library-card__details">
+            <span>{item.source === "public-library" ? "Imported" : "Private"}</span>
+            {mime ? <span>{mime}</span> : null}
+          </div>
+          <div className="library-card__actions" ref={menuRef}>
             <button
               type="button"
-              className="home-v2-btn home-v2-btn--secondary"
-              onClick={() => cardImageInputRef.current?.click()}
+              className="library-card__action-button"
+              disabled={!canPublish && !published}
+              onClick={() => onPublish(item).catch((error) => setWorkspaceMessage(error.message))}
+              title={published ? "Update the current public library item" : publishHint}
             >
-              Set Card Image
+              {publishLabel}
             </button>
-          </>
-        ) : null}
-        <button
-          type="button"
-          className="home-v2-btn home-v2-btn--secondary"
-          disabled={!canPublish && !published}
-          onClick={() => onPublish(item).catch((error) => setWorkspaceMessage(error.message))}
-          title={published ? "Update the current public library item" : publishHint}
-        >
-          {published ? "Update Published Item" : hasLinkedLibraryItem ? (isAuthenticated ? "Republish" : "Login to Publish") : item.source === "public-library" ? "Imported" : isAuthenticated ? "Publish" : "Login to Publish"}
-        </button>
-        {published ? (
-          <button
-            type="button"
-            className="home-v2-btn home-v2-btn--secondary"
-            onClick={() => onRevoke(item).catch((error) => setWorkspaceMessage(error.message))}
-          >
-            Revoke
-          </button>
-        ) : null}
+            <button type="button" className="library-card__options-button" onClick={() => setMenuOpen((value) => !value)} aria-label={`Options for ${item.title}`} aria-expanded={menuOpen} title="Asset options">
+              <MoreHorizontal aria-hidden="true" size={18} />
+            </button>
+            {menuOpen ? (
+              <div className="library-card__options-menu">
+                {item.source === "private" ? (
+                  <>
+                    <button type="button" onClick={beginRename}><Pencil aria-hidden="true" size={14} /> Rename</button>
+                    <input
+                      ref={cardImageInputRef}
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={(event) => {
+                        setMenuOpen(false);
+                        onSetCardImage(item, (event.currentTarget as HTMLInputElement).files).catch((error) => setWorkspaceMessage(error.message));
+                      }}
+                    />
+                    <button type="button" onClick={() => cardImageInputRef.current?.click()}><ImagePlus aria-hidden="true" size={14} /> Set Card Image</button>
+                  </>
+                ) : null}
+                {published ? <button type="button" onClick={() => { setMenuOpen(false); onRevoke(item).catch((error) => setWorkspaceMessage(error.message)); }}><RotateCcw aria-hidden="true" size={14} /> Revoke</button> : null}
+                {item.source !== "private" && !published ? <span>No additional options</span> : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
     </article>
+  );
+}
+
+function WorkspaceFallbackArtwork({ kind }: { kind: string }): JSX.Element {
+  return (
+    <div className={`library-card__fallback library-card__fallback--${kind.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`}>
+      <div className="library-card__waveform" aria-hidden="true">
+        {Array.from({ length: 28 }, (_, index) => <span key={index} style={{ height: `${24 + ((index * 37) % 66)}%` }} />)}
+      </div>
+      <AudioWaveform aria-hidden="true" size={42} strokeWidth={1.2} />
+    </div>
   );
 }
 
 function PublicLibraryAssetCard({
   item,
   canImport,
+  isOwner,
   importPublicItem,
   setWorkspaceMessage,
 }: {
   item: LibraryItem;
   canImport: boolean;
+  isOwner: boolean;
   importPublicItem: (item: LibraryItem) => Promise<void>;
   setWorkspaceMessage: (value: string) => void;
 }): JSX.Element {
+  const actionLabel = isOwner ? undefined : canImport ? "Add to Private Assets" : "Login to Import";
   return (
     <LibraryAssetCard
       item={item}
       className="dance-station-public-card"
-      actionLabel={canImport ? "Add to Private Assets" : "Login to Import"}
+      actionLabel={actionLabel}
       actionDisabled={!canImport}
-      actionTitle={canImport ? undefined : "Login to import"}
+      actionTitle={isOwner ? undefined : canImport ? undefined : "Login to import"}
       onAction={() => importPublicItem(item).catch((error) => setWorkspaceMessage(error.message))}
     />
   );
@@ -1491,13 +1721,13 @@ function BrowserWorkspaceSettings({
   workspaceMessage,
   refreshWorkspace,
   requestPersistence,
-  setShowStorageHelp,
+  openStorageHelp,
 }: {
   workspaceStatus: BrowserWorkspaceStatus | null;
   workspaceMessage: string;
   refreshWorkspace: () => Promise<void>;
   requestPersistence: () => Promise<void>;
-  setShowStorageHelp: (value: boolean) => void;
+  openStorageHelp: () => void;
 }): JSX.Element {
   return (
     <section className="dance-station-workspace-panel dance-station-settings-panel">
@@ -1506,7 +1736,7 @@ function BrowserWorkspaceSettings({
           <p className="home-v2-kicker">Browser Workspace Settings</p>
           <h2>Local save behavior</h2>
         </div>
-        <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={() => setShowStorageHelp(true)}>
+        <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={openStorageHelp}>
           Storage Help
         </button>
       </div>
@@ -1585,6 +1815,103 @@ function StorageCaveats({ includeSettingsNote = false }: { includeSettingsNote?:
       <li>Important work should be synced to your account or published when those actions are available.</li>
       {includeSettingsNote ? <li>You can reopen this from Help or Settings at any time.</li> : null}
     </ul>
+  );
+}
+
+function SupportForm({
+  email,
+  issueType,
+  message,
+  submitting,
+  submitted,
+  error,
+  setEmail,
+  setIssueType,
+  setMessage,
+  onSubmit,
+  onBack,
+  onClose,
+}: {
+  email: string;
+  issueType: SupportIssueType;
+  message: string;
+  submitting: boolean;
+  submitted: boolean;
+  error: string;
+  setEmail: (value: string) => void;
+  setIssueType: (value: SupportIssueType) => void;
+  setMessage: (value: string) => void;
+  onSubmit: (event: SubmitEvent) => void;
+  onBack: () => void;
+  onClose: () => void;
+}): JSX.Element {
+  if (submitted) {
+    return (
+      <div className="dance-station-support-modal">
+        <p className="home-v2-kicker">Contact Support</p>
+        <h2>Support request sent</h2>
+        <p className="dance-station-support-modal__success" role="status">
+          We received your message. We will reply to the email address you provided.
+        </p>
+        <div className="dance-station-panel-actions">
+          <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={onBack}>
+            Back to Help
+          </button>
+          <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <form className="dance-station-support-modal" onSubmit={onSubmit}>
+      <p className="home-v2-kicker">Contact Support</p>
+      <h2>How can we help?</h2>
+      <p className="dance-station-support-modal__intro">Tell us what happened and where we should reply.</p>
+      <label className="dance-station-support-modal__field">
+        Reply email
+        <input
+          type="email"
+          value={email}
+          onInput={(event) => setEmail((event.currentTarget as HTMLInputElement).value)}
+          placeholder="you@example.com"
+          autoComplete="email"
+          maxLength={320}
+          required
+        />
+      </label>
+      <label className="dance-station-support-modal__field">
+        Issue type
+        <select value={issueType} onChange={(event) => setIssueType((event.currentTarget as HTMLSelectElement).value as SupportIssueType)}>
+          <option value="bug_report">Bug report</option>
+          <option value="refund_request">Refund request</option>
+          <option value="general_support">General support</option>
+        </select>
+      </label>
+      <label className="dance-station-support-modal__field">
+        Message
+        <textarea
+          value={message}
+          onInput={(event) => setMessage((event.currentTarget as HTMLTextAreaElement).value)}
+          placeholder="Describe the issue..."
+          minLength={10}
+          maxLength={5000}
+          rows={6}
+          required
+        />
+      </label>
+      {error ? <p className="dance-station-support-modal__error" role="alert">{error}</p> : null}
+      <div className="dance-station-panel-actions">
+        <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={onBack} disabled={submitting}>
+          Back to Help
+        </button>
+        <button type="submit" className="home-v2-btn home-v2-btn--primary" disabled={submitting}>
+          {submitting ? "Sending..." : "Send Message"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -2028,10 +2355,26 @@ function workspaceItemCardImageUrl(
   return null;
 }
 
-function isPublishedLibraryRecord(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const record = value as { id?: unknown; status?: unknown; visibility?: unknown };
-  return typeof record.id === "string" && record.status === "published" && record.visibility === "public";
+function linkedLibraryItemIdFromMetadata(metadata: Record<string, unknown>): string {
+  if (typeof metadata.libraryItemId === "string" && metadata.libraryItemId.trim()) {
+    return metadata.libraryItemId.trim();
+  }
+  if (metadata.publicLibrary && typeof metadata.publicLibrary === "object") {
+    const id = (metadata.publicLibrary as { id?: unknown }).id;
+    if (typeof id === "string" && id.trim()) return id.trim();
+  }
+  return "";
+}
+
+function isPublishedLibraryMetadata(metadata: Record<string, unknown>): boolean {
+  if (!linkedLibraryItemIdFromMetadata(metadata)) return false;
+  if (typeof metadata.publicLibraryStatus === "string") {
+    return metadata.publicLibraryStatus === "published";
+  }
+  if (!metadata.publicLibrary || typeof metadata.publicLibrary !== "object") return true;
+  const record = metadata.publicLibrary as { status?: unknown; visibility?: unknown };
+  if (record.status === undefined) return true;
+  return record.status === "published" && (record.visibility === undefined || record.visibility === "public");
 }
 
 function midiNoteLabel(pitch: number): string {
@@ -2054,6 +2397,41 @@ function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isWorkspaceBlob(value: unknown): value is Blob {
+  return typeof Blob !== "undefined" && value instanceof Blob;
+}
+
+function hasWorkspaceFile(metadata: Record<string, unknown>): boolean {
+  return isWorkspaceBlob(metadata.blob)
+    || (typeof metadata.publicUrl === "string" && metadata.publicUrl.trim().length > 0);
+}
+
+function workspaceMetadataFile(value: unknown, nameValue: unknown, mimeValue: unknown): File | null {
+  if (!isWorkspaceBlob(value) || typeof File === "undefined") return null;
+  if (value instanceof File) return value;
+  const name = typeof nameValue === "string" && nameValue.trim() ? nameValue : "private-asset";
+  const type = value.type || (typeof mimeValue === "string" ? mimeValue : "application/octet-stream");
+  return new File([value], name, { type });
+}
+
+async function workspaceItemFile(item: BrowserWorkspaceItem): Promise<File | null> {
+  const metadata = item.metadata;
+  const localFile = workspaceMetadataFile(metadata.blob, metadata.fileName, metadata.mimeType);
+  if (localFile) return localFile;
+
+  const publicUrl = typeof metadata.publicUrl === "string" ? metadata.publicUrl.trim() : "";
+  if (!publicUrl || typeof File === "undefined") return null;
+  const response = await fetch(publicUrl);
+  if (!response.ok) throw new Error(`Could not read the private asset file (${response.status}).`);
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("The private asset file is empty.");
+  const name = typeof metadata.fileName === "string" && metadata.fileName.trim()
+    ? metadata.fileName
+    : `${item.title || "private-asset"}.${blob.type === "audio/wav" ? "wav" : "bin"}`;
+  const type = blob.type || (typeof metadata.mimeType === "string" ? metadata.mimeType : "application/octet-stream");
+  return new File([blob], name, { type });
 }
 
 function audioMassFrameUrl(): string {

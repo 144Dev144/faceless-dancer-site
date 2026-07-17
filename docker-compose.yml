@@ -54,6 +54,8 @@ services:
       args:
         VITE_SOLANA_NETWORK: "${VITE_SOLANA_NETWORK:-devnet}"
         VITE_SOLANA_RPC_URL: "${VITE_SOLANA_RPC_URL:-https://api.devnet.solana.com}"
+        VITE_FACELESS_PRICE_RPC_URL: "${VITE_FACELESS_PRICE_RPC_URL:-https://solana-rpc.publicnode.com}"
+        SECONDARY_RPC_NODE: "${SECONDARY_RPC_NODE:-}"
     container_name: faceless-dancer-client
     depends_on:
       - server

@@ -7,6 +7,7 @@ dotenv.config({ path: path.resolve(process.cwd(), "..", ".env") });
 dotenv.config({ path: path.resolve(process.cwd(), "..", ".env.docker") });
 
 const optionalUrlSchema = z.union([z.string().url(), z.literal("")]).default("");
+const optionalEmailSchema = z.union([z.string().email(), z.literal("")]).default("");
 const defaultClientDevPort = process.env.CLIENT_DEV_PORT ?? "5173";
 const defaultWorkerPort = process.env.SEPARATION_WORKER_PORT ?? "8792";
 
@@ -73,6 +74,11 @@ const envSchema = z.object({
   LAUNCH_SERVER_URL: z.string().url().default("http://localhost:4100"),
   LAUNCH_SERVER_INTERNAL_TOKEN: z.string().min(8).default("local-development-token"),
 
+  SUPPORT_EMAIL: z.string().email().default("pwndizzle288@gmail.com"),
+  RESEND_API_KEY: z.string().default(""),
+  SUPPORT_FROM_EMAIL: optionalEmailSchema,
+  SUPPORT_FROM_NAME: z.string().trim().min(1).default("The Faceless Dancer Support"),
+
   DANCEOFF_REDIS_URL: z.string().default(""),
   DANCEOFF_REDIS_USERNAME: z.string().default(""),
   DANCEOFF_REDIS_PASSWORD: z.string().default(""),
@@ -114,6 +120,10 @@ export const env = {
   runMigrationsOnStart: data.RUN_MIGRATIONS_ON_START === "true",
   remoteGenerationEnabled: data.REMOTE_GENERATION_ENABLED === "true",
   launchServerUrl: data.LAUNCH_SERVER_URL.replace(/\/$/, ""),
+  supportEmail: data.SUPPORT_EMAIL,
+  resendApiKey: data.RESEND_API_KEY,
+  supportFromEmail: data.SUPPORT_FROM_EMAIL || "onboarding@resend.dev",
+  supportFromName: data.SUPPORT_FROM_NAME,
   databaseSslRejectUnauthorized: data.DATABASE_SSL_REJECT_UNAUTHORIZED === "true",
   danceOffRedisTls: data.DANCEOFF_REDIS_TLS === "true",
   danceOffRedisEnabled: data.DANCEOFF_REDIS_ENABLED === "true",

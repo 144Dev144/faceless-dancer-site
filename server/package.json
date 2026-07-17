@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "migrate": "tsx src/db/migrate.ts",
+    "migrate:legacy-rhythm-library": "tsx src/scripts/migrateLegacyRhythmLibrary.ts",
     "import:db": "tsx src/scripts/importSqliteToPostgres.ts",
     "import:beat-storage": "tsx src/scripts/importBeatStorageToBunny.ts"
   },

@@ -41,6 +41,7 @@ type PublishedRhythmGameItemRow = {
   creator_slug: string | null;
   creator_avatar_url: string | null;
   creator_banner_url: string | null;
+  creator_public_key: string | null;
 };
 
 export interface PublishedRhythmGameCatalogRow {
@@ -98,6 +99,7 @@ export interface PublishedRhythmGameLibraryItem {
     creatorSlug: string | null;
     avatarUrl: string | null;
     bannerUrl: string | null;
+    publicKey: string | null;
   };
 }
 
@@ -199,6 +201,7 @@ function mapPublishedItem(row: PublishedRhythmGameItemRow, files: LibraryFileRow
       creatorSlug: row.creator_slug,
       avatarUrl: row.creator_avatar_url,
       bannerUrl: row.creator_banner_url,
+      publicKey: row.creator_public_key,
     },
   };
 }
@@ -222,10 +225,13 @@ async function readItemRows(itemId: string): Promise<{ row: PublishedRhythmGameI
             u.display_name AS creator_display_name,
             u.creator_slug,
             u.avatar_public_url AS creator_avatar_url,
-            u.banner_public_url AS creator_banner_url
+            u.banner_public_url AS creator_banner_url,
+            u.public_key AS creator_public_key
      FROM library_items li
      LEFT JOIN users u ON u.id = li.owner_user_id
-     WHERE li.id = $1 AND li.kind = 'rhythm_game'
+     WHERE li.kind = 'rhythm_game'
+       AND (li.id = $1 OR li.source_lineage_json ->> 'legacyBeatEntryId' = $1)
+     ORDER BY CASE WHEN li.id = $1 THEN 0 ELSE 1 END
      LIMIT 1`,
     [itemId]
   );
@@ -254,7 +260,8 @@ export async function listPublishedRhythmGameLibraryItems(): Promise<PublishedRh
             u.display_name AS creator_display_name,
             u.creator_slug,
             u.avatar_public_url AS creator_avatar_url,
-            u.banner_public_url AS creator_banner_url
+            u.banner_public_url AS creator_banner_url,
+            u.public_key AS creator_public_key
      FROM library_items li
      LEFT JOIN users u ON u.id = li.owner_user_id
      WHERE li.kind = 'rhythm_game'
@@ -284,7 +291,7 @@ export async function listPublishedRhythmGameCatalogRows(
   const values: unknown[] = [];
   if (itemIds && itemIds.length > 0) {
     values.push(itemIds);
-    filters.push(`li.id = ANY($${values.length}::text[])`);
+    filters.push(`(li.id = ANY($${values.length}::text[]) OR li.source_lineage_json ->> 'legacyBeatEntryId' = ANY($${values.length}::text[]))`);
   }
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
   const itemResult = await pool.query<PublishedRhythmGameItemRow>(
@@ -292,7 +299,8 @@ export async function listPublishedRhythmGameCatalogRows(
             u.display_name AS creator_display_name,
             u.creator_slug,
             u.avatar_public_url AS creator_avatar_url,
-            u.banner_public_url AS creator_banner_url
+            u.banner_public_url AS creator_banner_url,
+            u.public_key AS creator_public_key
      FROM library_items li
      LEFT JOIN users u ON u.id = li.owner_user_id
      ${whereClause}`,
@@ -403,6 +411,12 @@ export async function syncPublishedRhythmGameCatalogEntry(itemId: string): Promi
   if (!item) {
     return;
   }
+  if (item.sourceLineage.source === "legacy_game_catalog") {
+    // Legacy game_songs already owns these entries. The Library migration only
+    // materializes their public asset references and must not resync them on
+    // every game-catalog freshness check.
+    return;
+  }
   const shouldEnable =
     item.kind === "rhythm_game" &&
     item.visibility === "public" &&
@@ -410,24 +424,28 @@ export async function syncPublishedRhythmGameCatalogEntry(itemId: string): Promi
     item.metadata.gameEnabled;
   const chartFile = item.files.find((file) => file.role === "chart");
   const audioFile = item.files.find((file) => file.role === "audio" || file.role === "preview");
+  const beatEntryId = String(item.sourceLineage.legacyBeatEntryId || item.id);
   if (shouldEnable && chartFile && audioFile) {
     await upsertSongForEntry({
-      beatEntryId: item.id,
+      beatEntryId,
       title: item.title,
       isEnabled: true,
       createdByUserId: item.ownerUserId,
     });
     return;
   }
-  const existing = await findSongByEntryId(item.id);
+  const existing = await findSongByEntryId(beatEntryId);
   if (existing) {
-    await setSongEnabledForEntry(item.id, false, item.title);
+    await setSongEnabledForEntry(beatEntryId, false, item.title);
   }
 }
 
 export async function syncAllPublishedRhythmGameCatalogEntries(): Promise<void> {
   const items = await listPublishedRhythmGameLibraryItems();
   for (const item of items) {
+    if (item.sourceLineage.source === "legacy_game_catalog") {
+      continue;
+    }
     await syncPublishedRhythmGameCatalogEntry(item.id);
   }
 }
@@ -447,8 +465,9 @@ export function buildPublishedSongSummary(item: PublishedRhythmGameLibraryItem, 
     ((entry.modeDifficultyCharts as Record<string, unknown> | undefined)?.step_arrows as Record<string, unknown> | undefined)?.normal as any
   );
   const coverFile = item.files.find((file) => file.role === "cover");
+  const beatEntryId = String(item.sourceLineage.legacyBeatEntryId || item.id);
   return {
-    beatEntryId: item.id,
+    beatEntryId,
     title: item.title,
     majorBeatCount: Array.isArray(entry.majorBeats) ? entry.majorBeats.length : 0,
     gameBeatCount: normalChart || (getDifficultyBeatCounts(entry, "step_arrows").normal ?? 0),

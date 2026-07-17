@@ -10,6 +10,7 @@ import { siteSettingsRouter } from "./modules/siteSettings/routes.js";
 import { gameRouter } from "./modules/game/routes.js";
 import { libraryRouter } from "./modules/library/routes.js";
 import { remoteGenerationRouter } from "./modules/remoteGeneration/routes.js";
+import { supportRouter } from "./modules/support/routes.js";
 
 export const app = express();
 
@@ -29,6 +30,7 @@ app.use("/api/site-settings", siteSettingsRouter);
 app.use("/api/game", gameRouter);
 app.use("/api/library", libraryRouter);
 app.use("/api/remote-generation", remoteGenerationRouter);
+app.use("/api/support", supportRouter);
 
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(err);

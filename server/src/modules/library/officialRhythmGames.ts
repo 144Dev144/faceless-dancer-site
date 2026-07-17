@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import { listAllSongs } from "../game/service.js";
-import { listSavedBeatEntries, readSavedBeatEntry } from "../game/storage.js";
+import { readSavedBeatEntry } from "../game/storage.js";
+import { getMaterializedLegacyRhythmIds } from "./legacyRhythmLibraryMigration.js";
 
 const OFFICIAL_VOLUME_ID = "faceless-volume-1";
 const OFFICIAL_VOLUME_LABEL = "Faceless Volume 1";
@@ -9,6 +10,7 @@ const OFFICIAL_CREATOR = {
   creatorSlug: "the-faceless-dancer",
   avatarUrl: null,
   bannerUrl: null,
+  publicKey: null,
 };
 
 function audioMimeTypeFromFileName(fileName: string): string {
@@ -18,12 +20,6 @@ function audioMimeTypeFromFileName(fileName: string): string {
   if (lower.endsWith(".ogg")) return "audio/ogg";
   if (lower.endsWith(".m4a")) return "audio/mp4";
   return "audio/mpeg";
-}
-
-function buildBaseUrl(req: Request): string {
-  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim() || "https";
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
-  return `${proto}://${host}`;
 }
 
 function syntheticItemId(entryId: string): string {
@@ -73,15 +69,51 @@ type SyntheticLibraryItem = {
   creator: typeof OFFICIAL_CREATOR;
 };
 
+type OfficialSong = Awaited<ReturnType<typeof listAllSongs>>[number];
+type OfficialEntry = Record<string, unknown>;
+type OfficialCatalogRecord = { song: OfficialSong; entry: OfficialEntry };
+
+const OFFICIAL_CATALOG_CACHE_MS = 30_000;
+let officialCatalogCache: { expiresAt: number; records: OfficialCatalogRecord[] } | null = null;
+
+async function loadOfficialCatalog(): Promise<OfficialCatalogRecord[]> {
+  const now = Date.now();
+  if (officialCatalogCache && officialCatalogCache.expiresAt > now) {
+    return officialCatalogCache.records;
+  }
+
+  const songs = await listAllSongs();
+  const records = new Array<OfficialCatalogRecord | null>(songs.length);
+  let nextIndex = 0;
+  const concurrency = Math.min(8, songs.length);
+
+  const readBatch = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= songs.length) return;
+      const song = songs[index];
+      const entry = await readSavedBeatEntry(String(song.beat_entry_id || ""));
+      records[index] = entry ? { song, entry } : null;
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => readBatch()));
+  const loadedRecords = records.filter((record): record is OfficialCatalogRecord => record !== null);
+  officialCatalogCache = {
+    expiresAt: now + OFFICIAL_CATALOG_CACHE_MS,
+    records: loadedRecords,
+  };
+  return loadedRecords;
+}
+
 export async function listOfficialRhythmGameLibraryItems(req: Request): Promise<SyntheticLibraryItem[]> {
-  const baseUrl = buildBaseUrl(req);
-  const [songs, entries] = await Promise.all([listAllSongs(), listSavedBeatEntries()]);
-  const entryMap = new Map(entries.map((entry) => [String(entry.id || ""), entry]));
-  const items: Array<SyntheticLibraryItem | null> = songs.map((song) => {
-      const entry = entryMap.get(String(song.beat_entry_id || ""));
+  const records = await loadOfficialCatalog();
+  const items: Array<SyntheticLibraryItem | null> = records.map(({ song, entry }) => {
       if (!entry) return null;
       const entryId = String(entry.id || "");
-      const songTitle = String(song.title || entry.entryName || entryId);
+      const entryData = entry.entry as { name?: string; fileName?: string; durationSeconds?: number } | undefined;
+      const fileName = String(entryData?.fileName || `${entryId}.mp3`);
+      const songTitle = String(song.title || entryData?.name || entryId);
       const item: SyntheticLibraryItem = {
         id: syntheticItemId(entryId),
         ownerId: null,
@@ -108,8 +140,8 @@ export async function listOfficialRhythmGameLibraryItems(req: Request): Promise<
             mimeType: "application/json",
             sizeBytes: 0,
             storageProvider: "bunny",
-            path: `/api/public/beats/${encodeURIComponent(entryId)}`,
-            publicUrl: `${baseUrl}/api/public/beats/${encodeURIComponent(entryId)}`,
+            path: `/api/game/api/public/beats/${encodeURIComponent(entryId)}`,
+            publicUrl: `/api/game/api/public/beats/${encodeURIComponent(entryId)}`,
             sha256: null,
             metadata: {
               originalName: `${entryId}.json`,
@@ -121,30 +153,54 @@ export async function listOfficialRhythmGameLibraryItems(req: Request): Promise<
             id: `${syntheticItemId(entryId)}-audio`,
             itemId: syntheticItemId(entryId),
             role: "audio",
-            mimeType: audioMimeTypeFromFileName(String((entry as any).fileName || `${entryId}.mp3`)),
+            mimeType: audioMimeTypeFromFileName(fileName),
             sizeBytes: 0,
             storageProvider: "bunny",
-            path: `/api/public/beats/${encodeURIComponent(entryId)}/audio`,
-            publicUrl: `${baseUrl}/api/public/beats/${encodeURIComponent(entryId)}/audio`,
+            path: `/api/game/api/public/beats/${encodeURIComponent(entryId)}/audio`,
+            publicUrl: `/api/game/api/public/beats/${encodeURIComponent(entryId)}/audio`,
             sha256: null,
             metadata: {
-              originalName: String((entry as any).fileName || `${entryId}.mp3`),
-              durationSeconds: Number((entry as any).durationSeconds || 0),
+              originalName: fileName,
+              durationSeconds: Number(entryData?.durationSeconds || 0),
               legacyBeatEntryId: entryId,
             },
             createdAt: song.created_at,
           },
+          ...(song.cover_image_file_name
+            ? [{
+                id: `${syntheticItemId(entryId)}-cover`,
+                itemId: syntheticItemId(entryId),
+                role: "cover",
+                mimeType: String(song.cover_image_file_name).toLowerCase().endsWith(".png")
+                  ? "image/png"
+                  : String(song.cover_image_file_name).toLowerCase().endsWith(".webp")
+                    ? "image/webp"
+                    : "image/jpeg",
+                sizeBytes: 0,
+                storageProvider: "bunny",
+                path: `/api/game/api/public/songs/${encodeURIComponent(entryId)}/cover`,
+                publicUrl: `/api/game/api/public/songs/${encodeURIComponent(entryId)}/cover`,
+                sha256: null,
+                metadata: {
+                  originalName: String(song.cover_image_file_name),
+                  legacyBeatEntryId: entryId,
+                },
+                createdAt: song.created_at,
+              }] : []),
         ],
         creator: OFFICIAL_CREATOR,
       };
       return item;
     });
-  return items.filter((item): item is SyntheticLibraryItem => item !== null);
+  const materializedIds = await getMaterializedLegacyRhythmIds();
+  return items.filter((item): item is SyntheticLibraryItem => item !== null && !materializedIds.has(item.id));
 }
 
 export async function readOfficialRhythmGameLibraryItem(req: Request, itemId: string) {
   const entryId = parseSyntheticItemId(itemId);
   if (!entryId) return null;
+  const materializedIds = await getMaterializedLegacyRhythmIds();
+  if (materializedIds.has(itemId)) return null;
   const [entry, songs] = await Promise.all([readSavedBeatEntry(entryId), listAllSongs()]);
   if (!entry) return null;
   const song = songs.find((row) => String(row.beat_entry_id || "") === entryId);

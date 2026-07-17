@@ -1,12 +1,16 @@
 import { createContext, type ComponentChildren } from "preact";
 import { useContext, useRef, useState } from "preact/hooks";
-import { ChevronDown, ChevronUp, Pause, Play, X } from "lucide-preact";
+import { ChevronDown, ChevronUp, Pause, Play, Volume2, VolumeX, X } from "lucide-preact";
+import { WaveformVisual } from "./WaveformVisual";
 
 export interface SiteAudioTrack {
   id: string;
   title: string;
   url: string;
   mimeType?: string;
+  artworkUrl?: string;
+  creatorName?: string;
+  waveformUrl?: string;
 }
 
 interface SiteAudioPlayerContextValue {
@@ -25,6 +29,8 @@ export function SiteAudioPlayerProvider({ children }: { children: ComponentChild
   const [collapsed, setCollapsed] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(0.85);
+  const [muted, setMuted] = useState(false);
 
   const playTrack = (track: SiteAudioTrack) => {
     const audio = audioRef.current;
@@ -42,6 +48,8 @@ export function SiteAudioPlayerProvider({ children }: { children: ComponentChild
     setCollapsed(false);
     if (audio) {
       audio.src = track.url;
+      audio.volume = volume;
+      audio.muted = muted;
       audio.load();
       void audio.play().catch(() => setIsPlaying(false));
     }
@@ -61,6 +69,22 @@ export function SiteAudioPlayerProvider({ children }: { children: ComponentChild
     audioRef.current?.pause();
     setIsPlaying(false);
     setCurrentTrack(null);
+  };
+
+  const setPlayerVolume = (nextVolume: number) => {
+    const next = Math.min(1, Math.max(0, nextVolume));
+    setVolume(next);
+    setMuted(next === 0);
+    if (audioRef.current) {
+      audioRef.current.volume = next;
+      audioRef.current.muted = next === 0;
+    }
+  };
+
+  const toggleMute = () => {
+    const nextMuted = !muted;
+    setMuted(nextMuted);
+    if (audioRef.current) audioRef.current.muted = nextMuted;
   };
 
   return (
@@ -85,38 +109,46 @@ export function SiteAudioPlayerProvider({ children }: { children: ComponentChild
             {collapsed ? <ChevronUp aria-hidden="true" size={15} strokeWidth={2.2} /> : <ChevronDown aria-hidden="true" size={15} strokeWidth={2.2} />}
           </button>
           <div className="site-audio-player__bar" aria-hidden={collapsed}>
-              <button type="button" className="site-audio-player__control site-audio-player__transport" onClick={togglePlayback} title={isPlaying ? "Pause" : "Play"}>
-                {isPlaying ? <Pause aria-hidden="true" size={17} strokeWidth={2.2} /> : <Play aria-hidden="true" size={17} strokeWidth={2.2} />}
-              </button>
+            <div className="site-audio-player__track">
+              {currentTrack.artworkUrl ? <img className="site-audio-player__artwork" src={currentTrack.artworkUrl} alt="" /> : <div className="site-audio-player__artwork site-audio-player__artwork--fallback"><Play aria-hidden="true" size={17} /></div>}
               <div className="site-audio-player__track-info">
                 <strong title={currentTrack.title}>{currentTrack.title}</strong>
-                <span>Now playing</span>
+                <span>{currentTrack.creatorName || "The Faceless Dancer"}</span>
               </div>
-              <div className="site-audio-player__timeline">
-                <input
-                  type="range"
-                  min="0"
-                  max={duration || 0}
-                  step="0.01"
-                  value={Math.min(currentTime, duration || currentTime)}
-                  onInput={(event) => {
-                    const nextTime = Number((event.currentTarget as HTMLInputElement).value);
-                    if (audioRef.current && Number.isFinite(nextTime)) {
-                      audioRef.current.currentTime = nextTime;
-                      setCurrentTime(nextTime);
-                    }
-                  }}
-                  disabled={!duration}
-                  aria-label="Seek audio"
-                />
-                <div className="site-audio-player__time">
-                  <span>{formatAudioTime(currentTime)}</span>
-                  <span>{formatAudioTime(duration)}</span>
-                </div>
+            </div>
+            <button type="button" className="site-audio-player__control site-audio-player__transport" onClick={togglePlayback} title={isPlaying ? "Pause" : "Play"}>
+              {isPlaying ? <Pause aria-hidden="true" size={18} strokeWidth={2.2} /> : <Play aria-hidden="true" size={18} strokeWidth={2.2} />}
+            </button>
+            <div className="site-audio-player__timeline">
+              <WaveformVisual
+                className="site-audio-player__waveform"
+                seed={currentTrack.id}
+                waveformUrl={currentTrack.waveformUrl}
+                progress={duration ? Math.min(1, currentTime / duration) : 0}
+                interactive={Boolean(duration)}
+                onSeek={(ratio) => {
+                  const nextTime = ratio * duration;
+                  if (audioRef.current && Number.isFinite(nextTime)) {
+                    audioRef.current.currentTime = nextTime;
+                    setCurrentTime(nextTime);
+                  }
+                }}
+                ariaLabel="Seek audio"
+              />
+              <div className="site-audio-player__time">
+                <span>{formatAudioTime(currentTime)}</span>
+                <span>{formatAudioTime(duration)}</span>
               </div>
-              <button type="button" className="site-audio-player__control site-audio-player__control--quiet" onClick={closePlayer} title="Close audio player">
-                <X aria-hidden="true" size={17} strokeWidth={2.2} />
+            </div>
+            <div className="site-audio-player__volume">
+              <button type="button" className="site-audio-player__control site-audio-player__control--quiet" onClick={toggleMute} title={muted ? "Unmute" : "Mute"} aria-label={muted ? "Unmute" : "Mute"}>
+                {muted ? <VolumeX aria-hidden="true" size={17} /> : <Volume2 aria-hidden="true" size={17} />}
               </button>
+              <input type="range" min="0" max="1" step="0.01" value={muted ? 0 : volume} onInput={(event) => setPlayerVolume(Number((event.currentTarget as HTMLInputElement).value))} aria-label="Volume" />
+            </div>
+            <button type="button" className="site-audio-player__control site-audio-player__control--quiet" onClick={closePlayer} title="Close audio player" aria-label="Close audio player">
+              <X aria-hidden="true" size={17} strokeWidth={2.2} />
+            </button>
           </div>
         </footer>
       ) : null}

@@ -31,7 +31,7 @@ jobs:
             APP_DIR="${{ secrets.VPS_APP_DIR }}"
             PERSIST_ROOT="/var/lib/faceless-dancer"
 
-            mkdir -p "$PERSIST_ROOT/data" "$PERSIST_ROOT/beat-storage" "$PERSIST_ROOT/worker-models"
+            mkdir -p "$PERSIST_ROOT/data" "$PERSIST_ROOT/beat-storage"
 
             case "$APP_DIR" in
               "$PERSIST_ROOT"|"$PERSIST_ROOT"/*)
@@ -80,9 +80,9 @@ jobs:
             set -euo pipefail
             cd "${{ secrets.VPS_APP_DIR }}"
 
-            mkdir -p /var/lib/faceless-dancer/data /var/lib/faceless-dancer/beat-storage /var/lib/faceless-dancer/worker-models
+            mkdir -p /var/lib/faceless-dancer/data /var/lib/faceless-dancer/beat-storage
 
-            docker compose down || true
-            docker compose up -d --build
+            docker compose down --remove-orphans || true
+            docker compose up -d --build --remove-orphans
 
             docker inspect faceless-dancer-server --format '{{range .Mounts}}{{println .Source " -> " .Destination}}{{end}}'
