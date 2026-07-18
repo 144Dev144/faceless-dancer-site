@@ -70,13 +70,26 @@ jobs:
             mkdir -p "$APP_DIR"
             printf "%s" "$ENV_FILE" > "$APP_DIR/.env"
 
-            # Remote generations are a production capability for this deployment.
-            # Keep the feature enabled even if an older ENV_FILE secret omitted it.
-            if grep -q '^REMOTE_GENERATION_ENABLED=' "$APP_DIR/.env"; then
-              sed -i 's/^REMOTE_GENERATION_ENABLED=.*/REMOTE_GENERATION_ENABLED=true/' "$APP_DIR/.env"
-            else
-              printf '\nREMOTE_GENERATION_ENABLED=true\n' >> "$APP_DIR/.env"
-            fi
+            set_env_value() {
+              key="$1"
+              value="$2"
+              if grep -q "^${key}=" "$APP_DIR/.env"; then
+                sed -i "s|^${key}=.*|${key}=${value}|" "$APP_DIR/.env"
+              else
+                printf '%s=%s\n' "$key" "$value" >> "$APP_DIR/.env"
+              fi
+            }
+
+            # These are the established production bindings behind the existing proxy.
+            # Do not let local Docker ports from an ENV_FILE secret replace them.
+            set_env_value NODE_ENV production
+            set_env_value PORT 3001
+            set_env_value CLIENT_DEV_PORT 5173
+            set_env_value CLIENT_DOCKER_PORT 8080
+            set_env_value POSTGRES_PORT 5432
+            set_env_value POSTGRES_HOST_PORT 55432
+            set_env_value DATABASE_POOL_MAX 5
+            set_env_value REMOTE_GENERATION_ENABLED true
 
             grep -qE '^LAUNCH_SERVER_URL_DOCKER=https?://[^[:space:]]+' "$APP_DIR/.env" || {
               echo "ENV_FILE must define LAUNCH_SERVER_URL_DOCKER" >&2
