@@ -70,6 +70,25 @@ jobs:
             mkdir -p "$APP_DIR"
             printf "%s" "$ENV_FILE" > "$APP_DIR/.env"
 
+            # Remote generations are a production capability for this deployment.
+            # Keep the feature enabled even if an older ENV_FILE secret omitted it.
+            if grep -q '^REMOTE_GENERATION_ENABLED=' "$APP_DIR/.env"; then
+              sed -i 's/^REMOTE_GENERATION_ENABLED=.*/REMOTE_GENERATION_ENABLED=true/' "$APP_DIR/.env"
+            else
+              printf '\nREMOTE_GENERATION_ENABLED=true\n' >> "$APP_DIR/.env"
+            fi
+
+            grep -qE '^LAUNCH_SERVER_URL_DOCKER=https?://[^[:space:]]+' "$APP_DIR/.env" || {
+              echo "ENV_FILE must define LAUNCH_SERVER_URL_DOCKER" >&2
+              exit 1
+            }
+            grep -qE '^LAUNCH_SERVER_INTERNAL_TOKEN=.{8,}$' "$APP_DIR/.env" || {
+              echo "ENV_FILE must define LAUNCH_SERVER_INTERNAL_TOKEN" >&2
+              exit 1
+            }
+
+            echo "Production remote-generation configuration validated"
+
       - name: Deploy containers
         uses: appleboy/ssh-action@v1.0.3
         with:
