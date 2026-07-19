@@ -1029,7 +1029,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                       </label>
                       <label>
                         LoKr strength
-                        <input type="number" min="0" max="1" step="0.05" value={lokrScale} onInput={(event) => setLokrScale(Number((event.currentTarget as HTMLInputElement).value) || 0)} disabled={!selectedLokr || busy} />
+                        <input type="number" min="0" max="5" step="0.05" value={lokrScale} onInput={(event) => setLokrScale(Number((event.currentTarget as HTMLInputElement).value) || 0)} disabled={!selectedLokr || busy} />
                       </label>
                     </div>
                     {!lokrChoices.length ? <p className="dance-station-availability-line">Import a published LoKr adapter into the library to use it remotely.</p> : null}
