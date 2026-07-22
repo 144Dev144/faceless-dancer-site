@@ -13,6 +13,8 @@ function ensureBrowserBuffer(): void {
   if (!browserGlobal.Buffer) browserGlobal.Buffer = Buffer;
 }
 
+ensureBrowserBuffer();
+
 function withTimeout<T>(task: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);

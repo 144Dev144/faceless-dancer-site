@@ -5,7 +5,7 @@ import { Router, type Response } from "express";
 import { requireAuth } from "../../middleware/auth.js";
 import { env } from "../../config/env.js";
 import { createId } from "../../utils/crypto.js";
-import { buildObjectPath, uploadBufferToBunny } from "../storage/bunnyStorage.js";
+import { buildObjectPath, downloadFromBunny, uploadBufferToBunny } from "../storage/bunnyStorage.js";
 import { LaunchServerRequestError, launchServerClient } from "./client.js";
 import { appealRewardSubmissionRequestSchema, createJobRequestSchema, createRewardSubmissionRequestSchema, remoteGenerationPrioritySchema, remoteGenerationRequestSchema, verifyPaymentRequestSchema } from "./schemas.js";
 
@@ -50,6 +50,12 @@ function safeSourceFileName(name: string): string {
   return clean.slice(0, 120) || "source-audio";
 }
 
+function isRemoteGenerationObjectPath(objectPath: string): boolean {
+  return /^remote-generation(?:-[A-Za-z0-9-]+)?\/jobs\/[A-Za-z0-9-]+\/[^/]+(?:\/[^/]+)*$/.test(objectPath)
+    && !objectPath.includes("..")
+    && !objectPath.includes("\\");
+}
+
 function requireEnabled(res: Response): boolean {
   if (env.remoteGenerationEnabled) return true;
   res.status(404).json({ error: "Remote generation is not enabled" });
@@ -73,6 +79,23 @@ function respondRemoteGenerationError(error: unknown, res: Response, fallback: s
   console.error("[remote-generation] request failed", error);
   res.status(503).json({ error: fallback, code: "REMOTE_GENERATION_UNAVAILABLE" });
 }
+
+router.get("/assets/audio", async (req, res) => {
+  const objectPath = typeof req.query.path === "string" ? req.query.path.trim() : "";
+  if (!isRemoteGenerationObjectPath(objectPath)) {
+    return res.status(400).json({ error: "Invalid remote audio asset path" });
+  }
+
+  try {
+    const asset = await downloadFromBunny(objectPath);
+    res.setHeader("Content-Type", asset.contentType || "application/octet-stream");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    return res.send(asset.buffer);
+  } catch (error) {
+    console.error("[remote-generation] audio asset proxy failed", { objectPath, error });
+    return res.status(404).json({ error: "Remote audio asset not found" });
+  }
+});
 
 router.get("/health", async (_req, res) => {
   if (!env.remoteGenerationEnabled) return res.json({ ok: true, enabled: false });

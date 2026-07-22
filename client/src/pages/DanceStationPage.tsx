@@ -1,9 +1,10 @@
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { AudioWaveform, Check, CircleHelp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Settings2, Sparkles, X as XIcon, type LucideIcon } from "lucide-preact";
+import { AudioWaveform, Check, CircleHelp, FileUp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Search, Settings2, SlidersHorizontal, Sparkles, Upload, X as XIcon, type LucideIcon } from "lucide-preact";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
 import { RemoteGenerationPanel } from "../components/danceStation/RemoteGenerationPanel";
+import { AudioMassInlineEditor, audioMassInlineController, type AudioMassEvent } from "../components/danceStation/AudioMassInlineEditor";
 import { AudioPlayButton } from "../components/audio/SiteAudioPlayer";
 import { api, type LibraryItem, type SupportIssueType } from "../lib/api";
 import type { SessionState } from "../hooks/useSession";
@@ -114,7 +115,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [instrumentRecording, setInstrumentRecording] = useState(false);
   const [instrumentCountIn, setInstrumentCountIn] = useState(0);
   const [instrumentCursorBeat, setInstrumentCursorBeat] = useState(0);
-  const [audioEditPickerOpen, setAudioEditPickerOpen] = useState(false);
+  const [audioEditAssetQuery, setAudioEditAssetQuery] = useState("");
+  const [audioEditRailTab, setAudioEditRailTab] = useState<"assets" | "export">("assets");
   const [audioEditLabel, setAudioEditLabel] = useState("");
   const [audioEditSaveStatus, setAudioEditSaveStatus] = useState("");
   const instrumentObjectUrlRef = useRef("");
@@ -123,10 +125,14 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const instrumentHeldNotesRef = useRef<Map<string, { pitch: number; start: number }>>(new Map());
   const instrumentRecordingStartedAtRef = useRef(0);
   const instrumentTimerRefs = useRef<number[]>([]);
-  const audioMassFrameRef = useRef<HTMLIFrameElement | null>(null);
   const instrumentLabFrameRef = useRef<HTMLIFrameElement | null>(null);
   const workspaceItemsRef = useRef<BrowserWorkspaceItem[]>([]);
   const audioMassObjectUrlsRef = useRef<Map<string, string>>(new Map());
+  const audioMassExportRequestsRef = useRef<Map<string, {
+    resolve: (payload: AudioMassExportPayload) => void;
+    reject: (error: Error) => void;
+    timeout: number;
+  }>>(new Map());
   const instrumentAssetObjectUrlsRef = useRef<Map<string, string>>(new Map());
   const workspaceCardObjectUrlsRef = useRef<Map<string, string>>(new Map());
 
@@ -148,6 +154,11 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     return () => {
       if (instrumentObjectUrlRef.current) URL.revokeObjectURL(instrumentObjectUrlRef.current);
       audioMassObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      audioMassExportRequestsRef.current.forEach((request) => {
+        window.clearTimeout(request.timeout);
+        request.reject(new Error("Audio Edit was closed before export completed."));
+      });
+      audioMassExportRequestsRef.current.clear();
       instrumentAssetObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       workspaceCardObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       void liveAudioContextRef.current?.close();
@@ -163,6 +174,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
 
   useEffect(() => {
     workspaceItemsRef.current = workspaceItems;
+    postAudioMassAssetCatalog(workspaceItems, audioMassObjectUrlsRef);
   }, [workspaceItems]);
 
   useEffect(() => {
@@ -440,6 +452,77 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     kind: formatKind(item.kind),
     creatorName: item.creatorName,
   }));
+  const audioMassAssets = buildAudioMassWorkspaceAssets(workspaceItems, audioMassObjectUrlsRef);
+
+  const sendAudioMassAssets = () => {
+    postAudioMassAssetCatalog(workspaceItemsRef.current, audioMassObjectUrlsRef);
+  };
+
+  const handleAudioMassEvent = (event: AudioMassEvent) => {
+    if (event.type === "dance-station:request-assets") {
+      setAudioEditRailTab("assets");
+      setWorkspaceMessage("Choose an audio asset from My Assets.");
+      sendAudioMassAssets();
+      return;
+    }
+    if (event.type === "dance-station:audiomass-ready") {
+      sendAudioMassAssets();
+      return;
+    }
+    if (event.type === "dance-station:audiomass-loaded") {
+      const sourceName = typeof event.payload.sourceName === "string" ? event.payload.sourceName : "";
+      const suggested = sourceName.replace(/\.[^.]+$/, "").trim();
+      if (suggested) setAudioEditLabel(suggested);
+      setAudioEditSaveStatus("");
+      return;
+    }
+    if (event.type === "dance-station:audiomass-drop") {
+      const dropped = event.payload.asset;
+      if (!dropped || typeof dropped !== "object") {
+        setWorkspaceMessage("Audio Edit could not read that asset.");
+        return;
+      }
+      const candidate = dropped as Partial<AudioMassWorkspaceAsset>;
+      if (typeof candidate.url !== "string" || typeof candidate.title !== "string") {
+        setWorkspaceMessage("Audio Edit could not read that asset.");
+        return;
+      }
+      void addAudioMassAsset({
+        id: typeof candidate.id === "string" ? candidate.id : `drag-${crypto.randomUUID()}`,
+        title: candidate.title,
+        kind: typeof candidate.kind === "string" ? candidate.kind : "Audio file",
+        creatorName: typeof candidate.creatorName === "string" ? candidate.creatorName : undefined,
+        url: candidate.url,
+        mimeType: typeof candidate.mimeType === "string" ? candidate.mimeType : undefined,
+        duration: typeof candidate.duration === "number" ? candidate.duration : undefined,
+      }, {
+        trackId: typeof event.payload.trackId === "string" ? event.payload.trackId : undefined,
+        start: typeof event.payload.start === "number" ? event.payload.start : undefined,
+      });
+      return;
+    }
+    if (event.type === "dance-station:native-download") {
+      downloadAudioMassFile(event.payload);
+      return;
+    }
+    if (event.type === "dance-station-export-audio-result") {
+      const requestId = typeof event.payload.requestId === "string" ? event.payload.requestId : "";
+      const request = requestId ? audioMassExportRequestsRef.current.get(requestId) : undefined;
+      if (!request) return;
+      audioMassExportRequestsRef.current.delete(requestId);
+      window.clearTimeout(request.timeout);
+      if (event.payload.ok !== true || !(event.payload.audio instanceof ArrayBuffer)) {
+        request.reject(new Error(typeof event.payload.error === "string" ? event.payload.error : "Audio Edit did not return the rendered audio."));
+        return;
+      }
+      request.resolve(event.payload as AudioMassExportPayload);
+      return;
+    }
+    if (event.type === "dance-station:audiomass-error") {
+      setAudioEditSaveStatus("Save failed");
+      setWorkspaceMessage(typeof event.payload.message === "string" ? event.payload.message : "AudioMass reported an error.");
+    }
+  };
 
   const setWorkspaceCardImage = async (item: BrowserWorkspaceItem, fileList: FileList | null) => {
     const file = fileList?.[0];
@@ -469,32 +552,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const message = event.data || {};
-      if (event.source === audioMassFrameRef.current?.contentWindow) {
-        if (message.source !== "dance-station-audiomass") return;
-        if (message.type === "dance-station:request-assets") {
-          setAudioEditPickerOpen(true);
-          return;
-        }
-        if (message.type === "dance-station:audiomass-loaded") {
-          const sourceName = typeof message.payload?.sourceName === "string" ? message.payload.sourceName : "";
-          const suggested = sourceName.replace(/\.[^.]+$/, "").trim();
-          if (suggested) {
-            setAudioEditLabel(suggested);
-          }
-          setAudioEditSaveStatus("");
-          return;
-        }
-        if (message.type === "dance-station:native-download") {
-          downloadAudioMassFile(message.payload);
-          return;
-        }
-        if (message.type === "dance-station:audiomass-error") {
-          setAudioEditSaveStatus("Save failed");
-          setWorkspaceMessage(message.payload?.message || "AudioMass reported an error.");
-        }
-        return;
-      }
-
       if (event.source === instrumentLabFrameRef.current?.contentWindow) {
         if (message.source !== "dance-station-instrument-lab") return;
         if (message.type === "instrument-lab:ready" || message.type === "instrument-lab:request-assets") {
@@ -801,80 +858,50 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     }, window.location.origin);
   };
 
-  const loadAudioMassAsset = async (asset: AudioMassWorkspaceAsset) => {
+  const addAudioMassAsset = async (asset: AudioMassWorkspaceAsset, placement?: { trackId?: string; start?: number }) => {
     setWorkspaceMessage(`Loading ${asset.title} into Audio Edit...`);
     setAudioEditLabel(asset.title.replace(/\.[^.]+$/, ""));
     setAudioEditSaveStatus("");
+    if (!audioMassInlineController.isReady()) {
+      setWorkspaceMessage("Audio Edit is not ready yet.");
+      return;
+    }
     try {
       const response = await fetch(asset.url);
-      if (!response.ok) throw new Error(`Could not read audio asset (${response.status}).`);
+      if (!response.ok) throw new Error(`Audio asset request failed (${response.status}).`);
       const buffer = await response.arrayBuffer();
-      audioMassFrameRef.current?.contentWindow?.postMessage({
-        type: "dance-station:load-audio-buffer",
-        payload: {
-          buffer,
-          name: asset.title,
-          mimeType: response.headers.get("content-type") || "audio/wav",
-        },
-      }, window.location.origin, [buffer]);
+      audioMassInlineController.addAudioBuffer({
+        id: asset.id,
+        buffer,
+        name: asset.title,
+        mimeType: asset.mimeType || response.headers.get("content-type") || "audio/wav",
+        trackId: placement?.trackId,
+        start: placement?.start,
+      });
+      setWorkspaceMessage(`${asset.title} added to Audio Edit.`);
     } catch {
-      audioMassFrameRef.current?.contentWindow?.postMessage({
-        type: "dance-station:load-audio",
-        payload: {
-          url: asset.url,
-          name: asset.title,
-        },
-      }, window.location.origin);
+      audioMassInlineController.addAudioClip({
+        id: asset.id,
+        url: asset.url,
+        name: asset.title,
+        mimeType: asset.mimeType,
+      });
+      setWorkspaceMessage(`${asset.title} sent to Audio Edit.`);
     }
-    setAudioEditPickerOpen(false);
-    setWorkspaceMessage(`${asset.title} loaded into Audio Edit.`);
   };
 
   const requestAudioMassEditorAudio = (label: string) => {
-    const frameWindow = audioMassFrameRef.current?.contentWindow;
-    if (!frameWindow) {
+    if (!audioMassInlineController.isReady()) {
       return Promise.reject(new Error("Audio Edit is not ready."));
     }
     const requestId = crypto.randomUUID();
-    return new Promise<{
-      audio: ArrayBuffer;
-      name?: string;
-      mimeType?: string;
-      duration?: number;
-      sampleRate?: number;
-      channels?: number;
-    }>((resolve, reject) => {
+    return new Promise<AudioMassExportPayload>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
-        window.removeEventListener("message", onMessage);
+        audioMassExportRequestsRef.current.delete(requestId);
         reject(new Error("Audio Edit did not return the rendered audio."));
-      }, 15000);
-
-      function onMessage(event: MessageEvent) {
-        if (event.source !== frameWindow) return;
-        const message = event.data || {};
-        if (message.type !== "dance-station-export-audio-result" || message.requestId !== requestId) return;
-        window.clearTimeout(timeout);
-        window.removeEventListener("message", onMessage);
-        if (!message.ok) {
-          reject(new Error(message.error || "Audio Edit export failed."));
-          return;
-        }
-        resolve({
-          audio: message.audio,
-          name: message.name,
-          mimeType: message.mimeType,
-          duration: message.duration,
-          sampleRate: message.sampleRate,
-          channels: message.channels,
-        });
-      }
-
-      window.addEventListener("message", onMessage);
-      frameWindow.postMessage({
-        type: "dance-station-export-audio",
-        requestId,
-        name: `${label}.wav`,
-      }, window.location.origin);
+      }, 60000);
+      audioMassExportRequestsRef.current.set(requestId, { resolve, reject, timeout });
+      audioMassInlineController.exportAudio(`${label}.wav`, requestId);
     });
   };
 
@@ -1002,7 +1029,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           ))}
         </section>
 
-        <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}`}>
+        <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" || activePanel === "audio-edit" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}`}>
           <div className="home-v2-card dance-station-main-panel">
             {showSettings ? (
               <BrowserWorkspaceSettings
@@ -1035,7 +1062,20 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                   setWorkspaceMessage={setWorkspaceMessage}
                 />
             ) : activePanel === "audio-edit" ? (
-              <AudioEditPanel frameRef={audioMassFrameRef} />
+              <AudioEditWorkspace
+                onAudioMassEvent={handleAudioMassEvent}
+                assets={audioMassAssets}
+                query={audioEditAssetQuery}
+                setQuery={setAudioEditAssetQuery}
+                railTab={audioEditRailTab}
+                setRailTab={setAudioEditRailTab}
+                label={audioEditLabel}
+                setLabel={setAudioEditLabel}
+                saveStatus={audioEditSaveStatus}
+                workspaceMessage={workspaceMessage}
+                addAsset={addAudioMassAsset}
+                saveCurrentEdit={requestAudioMassWorkspaceSave}
+              />
             ) : activePanel === "instrument-lab" ? (
               <InstrumentLabPanel frameRef={instrumentLabFrameRef} />
             ) : activePanel === "generation" ? (
@@ -1045,7 +1085,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             )}
           </div>
 
-          {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "library" ? <aside className="home-v2-card dance-station-context-panel">
+          {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "library" && activePanel !== "audio-edit" ? <aside className="home-v2-card dance-station-context-panel">
             {showSettings ? (
               <SettingsSummaryPanel
                 session={session}
@@ -1053,16 +1093,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
               />
             ) : (
               <>
-                {activePanel === "audio-edit" ? (
-                  <AudioEditWorkspaceControls
-                    audioAssetCount={countAudioWorkspaceItems(workspaceItems)}
-                    label={audioEditLabel}
-                    setLabel={setAudioEditLabel}
-                    saveStatus={audioEditSaveStatus}
-                    openPrivateAssets={() => setAudioEditPickerOpen(true)}
-                    saveCurrentEdit={requestAudioMassWorkspaceSave}
-                  />
-                ) : null}
                 <p className="home-v2-kicker">Session</p>
                 <h2>{session.authenticated ? "Connected" : "Not connected"}</h2>
                 <p>
@@ -1084,13 +1114,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           </footer>
         ) : null}
 
-        {audioEditPickerOpen ? (
-          <AudioMassAssetPicker
-            assets={buildAudioMassWorkspaceAssets(workspaceItems, audioMassObjectUrlsRef)}
-            onLoad={loadAudioMassAsset}
-            onClose={() => setAudioEditPickerOpen(false)}
-          />
-        ) : null}
       </div>
     </main>
   );
@@ -1477,15 +1500,147 @@ function PublicLibraryAssetCard({
   );
 }
 
-function AudioEditPanel({ frameRef }: { frameRef: RefObject<HTMLIFrameElement> }): JSX.Element {
+function AudioEditWorkspace({
+  onAudioMassEvent,
+  assets,
+  query,
+  setQuery,
+  railTab,
+  setRailTab,
+  label,
+  setLabel,
+  saveStatus,
+  workspaceMessage,
+  addAsset,
+  saveCurrentEdit,
+}: {
+  onAudioMassEvent: (event: AudioMassEvent) => void;
+  assets: AudioMassWorkspaceAsset[];
+  query: string;
+  setQuery: (value: string) => void;
+  railTab: "assets" | "export";
+  setRailTab: (value: "assets" | "export") => void;
+  label: string;
+  setLabel: (value: string) => void;
+  saveStatus: string;
+  workspaceMessage: string;
+  addAsset: (asset: AudioMassWorkspaceAsset) => Promise<void>;
+  saveCurrentEdit: () => void;
+}): JSX.Element {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const diskObjectUrlsRef = useRef<string[]>([]);
+  useEffect(() => () => {
+    diskObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+  }, []);
+
+  const filteredAssets = assets.filter((asset) => {
+    const term = query.trim().toLowerCase();
+    return !term || `${asset.title} ${asset.kind} ${asset.creatorName || ""}`.toLowerCase().includes(term);
+  });
+
+  const importFromDisk = (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("audio/")) return;
+    const url = URL.createObjectURL(file);
+    diskObjectUrlsRef.current.push(url);
+    void addAsset({
+      id: `disk-${crypto.randomUUID()}`,
+      title: file.name,
+      kind: "Audio file",
+      url,
+      mimeType: file.type,
+    });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const beginAssetDrag = (event: DragEvent, asset: AudioMassWorkspaceAsset) => {
+    if (!event.dataTransfer) return;
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData("application/x-dance-station-audio-asset", JSON.stringify({
+      id: asset.id,
+      name: asset.title,
+      title: asset.title,
+      kind: asset.kind,
+      creatorName: asset.creatorName,
+      url: asset.url,
+      mimeType: asset.mimeType,
+      duration: asset.duration,
+    }));
+    event.dataTransfer.setData("text/plain", asset.title);
+  };
+
   return (
-    <iframe
-      ref={frameRef}
-      className="dance-station-audiomass-frame"
-      title="Dance Station AudioMass editor"
-      src={audioMassFrameUrl()}
-      allow="autoplay; clipboard-read; clipboard-write; microphone; downloads"
-    ></iframe>
+    <div className="dance-station-audio-workspace">
+      <div className="dance-station-audio-workspace__editor">
+        <AudioEditPanel onAudioMassEvent={onAudioMassEvent} />
+      </div>
+      <aside className="dance-station-audio-rail" aria-label="Audio Edit workspace tools">
+        <div className="dance-station-audio-rail__tabs" role="tablist" aria-label="Audio Edit tools">
+          <button type="button" role="tab" aria-selected={railTab === "assets"} className={railTab === "assets" ? "active" : ""} onClick={() => setRailTab("assets")}>
+            My Assets
+          </button>
+          <button type="button" role="tab" aria-selected={railTab === "export"} className={railTab === "export" ? "active" : ""} onClick={() => setRailTab("export")}>
+            Export
+          </button>
+        </div>
+
+        {railTab === "assets" ? (
+          <div className="dance-station-audio-rail__content">
+            <input ref={fileInputRef} className="dance-station-visually-hidden" type="file" accept="audio/*" onChange={(event) => importFromDisk(event.currentTarget.files)} />
+            <button type="button" className="dance-station-audio-import" onClick={() => fileInputRef.current?.click()}>
+              <Upload aria-hidden="true" size={17} strokeWidth={2} />
+              <span>Import Audio</span>
+            </button>
+            <div className="dance-station-audio-search">
+              <Search aria-hidden="true" size={15} />
+              <input type="search" value={query} onInput={(event) => setQuery(event.currentTarget.value)} placeholder="Search assets..." aria-label="Search audio assets" />
+              <button type="button" title="Filter audio assets" aria-label="Filter audio assets"><SlidersHorizontal aria-hidden="true" size={15} /></button>
+            </div>
+            <div className="dance-station-audio-rail__count">{assets.length} audio assets available</div>
+            <div className="dance-station-audio-asset-list">
+              {filteredAssets.length ? filteredAssets.map((asset) => (
+                <div key={asset.id} className="dance-station-audio-asset-row" draggable onDragStart={(event) => beginAssetDrag(event, asset)}>
+                  <AudioPlayButton track={{ id: `audio-edit-${asset.id}`, title: asset.title, url: asset.url, mimeType: asset.mimeType }} />
+                  <button type="button" className="dance-station-audio-asset-row__select" onClick={() => { void addAsset(asset); }}>
+                    <strong title={asset.title}>{asset.title}</strong>
+                    <span>{asset.kind}</span>
+                  </button>
+                  <span className="dance-station-audio-asset-row__duration">{formatAudioAssetDuration(asset.duration)}</span>
+                  <button type="button" className="dance-station-audio-asset-row__options" title="Audio asset options" aria-label={`Options for ${asset.title}`} onClick={(event) => event.stopPropagation()}>
+                    <MoreHorizontal aria-hidden="true" size={16} />
+                  </button>
+                </div>
+              )) : <div className="library-empty">No matching audio assets.</div>}
+            </div>
+          </div>
+        ) : (
+          <div className="dance-station-audio-rail__content dance-station-audio-rail__export">
+            <p className="home-v2-kicker">Export</p>
+            <h2>Save your edit</h2>
+            <p className="small">Mix the current tracks into one audio asset and keep it in your Private Assets.</p>
+            <label className="dance-station-audio-export-label">
+              <span>Asset name</span>
+              <input type="text" value={label} onInput={(event) => setLabel(event.currentTarget.value)} placeholder="Audio edit" />
+            </label>
+            <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={saveCurrentEdit}>
+              <FileUp aria-hidden="true" size={15} />
+              <span>Save Mixdown As Asset</span>
+            </button>
+            {saveStatus ? <span className="dance-station-status-pill">{saveStatus}</span> : null}
+          </div>
+        )}
+        {workspaceMessage ? <p className="small dance-station-workspace-message">{workspaceMessage}</p> : null}
+      </aside>
+    </div>
+  );
+}
+
+function AudioEditPanel({ onAudioMassEvent }: { onAudioMassEvent: (event: AudioMassEvent) => void }): JSX.Element {
+  return (
+    <div className="dance-station-audiomass-frame dance-station-audiomass-direct" aria-label="Dance Station AudioMass editor">
+      <AudioMassInlineEditor onEvent={onAudioMassEvent} />
+    </div>
   );
 }
 
@@ -1512,81 +1667,6 @@ function InstrumentLabWorkspaceControls({ audioAssetCount }: { audioAssetCount: 
       <div className="dance-station-storage-grid dance-station-storage-grid--compact">
         <StatusChip label="Audio Assets" value={String(audioAssetCount)} good={audioAssetCount > 0} />
       </div>
-    </section>
-  );
-}
-
-function AudioMassAssetPicker({
-  assets,
-  onLoad,
-  onClose,
-}: {
-  assets: AudioMassWorkspaceAsset[];
-  onLoad: (asset: AudioMassWorkspaceAsset) => void | Promise<void>;
-  onClose: () => void;
-}): JSX.Element {
-  return (
-    <section className="dance-station-storage-modal" role="dialog" aria-modal="true" aria-label="Choose audio for Audio Edit">
-      <div className="home-v2-card dance-station-storage-modal__card dance-station-asset-picker">
-        <div className="dance-station-panel-head">
-          <div>
-            <p className="home-v2-kicker">Audio Edit</p>
-            <h2>Open from Private Assets</h2>
-          </div>
-          <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={onClose}>
-            Close
-          </button>
-        </div>
-        <div className="dance-station-picker-list">
-          {assets.length ? assets.map((asset) => (
-            <button key={asset.id} type="button" onClick={() => { void onLoad(asset); }}>
-              <strong>{asset.title}</strong>
-              <span>{asset.kind}{asset.creatorName ? ` - ${asset.creatorName}` : ""}</span>
-            </button>
-          )) : <div className="library-empty">No audio assets are saved yet.</div>}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function AudioEditWorkspaceControls({
-  audioAssetCount,
-  label,
-  setLabel,
-  saveStatus,
-  openPrivateAssets,
-  saveCurrentEdit,
-}: {
-  audioAssetCount: number;
-  label: string;
-  setLabel: (value: string) => void;
-  saveStatus: string;
-  openPrivateAssets: () => void;
-  saveCurrentEdit: () => void;
-}): JSX.Element {
-  return (
-    <section className="dance-station-side-tool">
-      <p className="home-v2-kicker">Audio Edit</p>
-      <h2>Workspace</h2>
-      <div className="dance-station-side-actions">
-        <button type="button" className="home-v2-btn home-v2-btn--primary" onClick={openPrivateAssets}>
-          Open Private Asset
-        </button>
-      </div>
-      <label className="dance-station-audio-edit-label">
-        <input
-          type="text"
-          value={label}
-          onInput={(event) => setLabel((event.currentTarget as HTMLInputElement).value)}
-          placeholder="Asset Name"
-        />
-      </label>
-      <button type="button" className="home-v2-btn home-v2-btn--secondary" onClick={saveCurrentEdit}>
-        Save Edit As Asset
-      </button>
-      {saveStatus ? <span className="dance-station-status-pill">{saveStatus}</span> : null}
-      <p className="small">{audioAssetCount} audio assets available. Disk open and download stay in AudioMass File.</p>
     </section>
   );
 }
@@ -1977,6 +2057,17 @@ interface AudioMassWorkspaceAsset {
   kind: string;
   creatorName?: string;
   url: string;
+  mimeType?: string;
+  duration?: number;
+}
+
+interface AudioMassExportPayload {
+  audio: ArrayBuffer;
+  name?: string;
+  mimeType?: string;
+  duration?: number;
+  sampleRate?: number;
+  channels?: number;
 }
 
 interface InstrumentAssetOption {
@@ -2268,7 +2359,8 @@ function buildAudioMassWorkspaceAssets(
     }
   });
   return items.flatMap((item) => {
-    const url = workspaceItemAudioUrl(item, objectUrlsRef);
+    const directUrl = workspaceItemAudioUrl(item, objectUrlsRef);
+    const url = directUrl ? audioMassAssetUrl(item, directUrl) : null;
     if (!url) return [];
     return [{
       id: item.id,
@@ -2276,12 +2368,33 @@ function buildAudioMassWorkspaceAssets(
       kind: formatKind(item.kind),
       creatorName: item.creatorName,
       url,
+      mimeType: typeof item.metadata?.mimeType === "string" ? item.metadata.mimeType : undefined,
+      duration: typeof item.metadata?.duration === "number" ? item.metadata.duration : undefined,
     }];
   });
 }
 
-function countAudioWorkspaceItems(items: BrowserWorkspaceItem[]): number {
-  return items.reduce((total, item) => total + (workspaceItemHasAudio(item) ? 1 : 0), 0);
+function audioMassAssetUrl(item: BrowserWorkspaceItem, directUrl: string): string {
+  const objectPath = typeof item.metadata?.objectPath === "string" ? item.metadata.objectPath.trim() : "";
+  if (/^remote-generation(?:-[A-Za-z0-9-]+)?\/jobs\/[A-Za-z0-9-]+\/[^/]+(?:\/[^/]+)*$/.test(objectPath)) {
+    return `/api/remote-generation/assets/audio?path=${encodeURIComponent(objectPath)}`;
+  }
+  return directUrl;
+}
+
+function postAudioMassAssetCatalog(
+  items: BrowserWorkspaceItem[],
+  objectUrlsRef: { current: Map<string, string> }
+): void {
+  audioMassInlineController.setAssetCatalog(buildAudioMassWorkspaceAssets(items, objectUrlsRef).map((asset) => ({
+    id: asset.id,
+    title: asset.title,
+    kind: asset.kind,
+    creatorName: asset.creatorName,
+    url: asset.url,
+    mimeType: asset.mimeType,
+    duration: asset.duration,
+  })));
 }
 
 function workspaceItemHasAudio(item: BrowserWorkspaceItem): boolean {
@@ -2434,7 +2547,8 @@ async function workspaceItemFile(item: BrowserWorkspaceItem): Promise<File | nul
   return new File([blob], name, { type });
 }
 
-function audioMassFrameUrl(): string {
-  const params = new URLSearchParams({ ds_mode: "site" });
-  return `/dance-station/audiomass/index.html?${params.toString()}`;
+function formatAudioAssetDuration(value?: number): string {
+  if (!Number.isFinite(value) || !value || value < 0) return "--:--";
+  const totalSeconds = Math.floor(value);
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
 }

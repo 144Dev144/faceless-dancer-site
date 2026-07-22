@@ -5376,11 +5376,313 @@ label {
 }
 
 .dance-station-audiomass-frame {
+  display: block;
   width: 100%;
+  height: 760px;
   min-height: 760px;
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid rgba(117, 162, 212, 0.2);
   border-radius: 14px;
   background: #050d1a;
+}
+
+.dance-station-audiomass-direct {
+  padding: 0;
+}
+
+.dance-station-audiomass-inline-mount,
+.dance-station-audiomass-inline-host {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dance-station-audio-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 348px);
+  gap: 8px;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.dance-station-audio-workspace__editor {
+  min-width: 0;
+}
+
+.dance-station-audio-rail {
+  display: flex;
+  min-width: 0;
+  min-height: 760px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(117, 162, 212, 0.2);
+  border-radius: 14px;
+  background: #080f1d;
+}
+
+.dance-station-audio-rail__tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-bottom: 1px solid rgba(117, 162, 212, 0.18);
+}
+
+.dance-station-audio-rail__tabs button {
+  min-height: 44px;
+  border: 0;
+  border-right: 1px solid rgba(117, 162, 212, 0.12);
+  background: transparent;
+  color: #9eb1cc;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.dance-station-audio-rail__tabs button:last-child {
+  border-right: 0;
+}
+
+.dance-station-audio-rail__tabs button.active {
+  background: rgba(117, 162, 212, 0.12);
+  color: #f0f7ff;
+}
+
+.dance-station-audio-rail__content {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+}
+
+.dance-station-audio-import {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 42px;
+  border: 1px solid rgba(198, 86, 255, 0.72);
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(105, 31, 170, 0.64), rgba(197, 44, 169, 0.58));
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.dance-station-audio-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 9px;
+  border: 1px solid rgba(117, 162, 212, 0.24);
+  border-radius: 7px;
+  background: #0b1424;
+  color: #9eb1cc;
+}
+
+.dance-station-audio-search input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #eaf4ff;
+  font: inherit;
+  font-size: 0.76rem;
+}
+
+.dance-station-audio-search input::placeholder {
+  color: #7185a4;
+}
+
+.dance-station-audio-search button,
+.dance-station-audio-asset-row__options {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #9eb1cc;
+}
+
+.dance-station-audio-rail__count {
+  color: #8aa0bf;
+  font-size: 0.72rem;
+}
+
+.dance-station-audio-asset-list {
+  display: grid;
+  gap: 7px;
+  min-height: 0;
+  max-height: 560px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.dance-station-audio-asset-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto 28px;
+  align-items: center;
+  column-gap: 9px;
+  row-gap: 7px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 6px 7px;
+  border: 1px solid rgba(117, 162, 212, 0.18);
+  border-radius: 8px;
+  background: rgba(6, 15, 29, 0.76);
+}
+
+.dance-station-audio-asset-row:hover,
+.dance-station-audio-asset-row:focus-within {
+  border-color: rgba(98, 247, 216, 0.48);
+  background: rgba(13, 28, 45, 0.9);
+}
+
+.dance-station-audio-asset-row__select {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #eaf4ff;
+  text-align: left;
+}
+
+.dance-station-audio-asset-row__select strong,
+.dance-station-audio-asset-row__select span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dance-station-audio-asset-row__select strong {
+  font-size: 0.75rem;
+}
+
+.dance-station-audio-asset-row__select span,
+.dance-station-audio-asset-row__duration {
+  color: #7f95b5;
+  font-size: 0.66rem;
+}
+
+.dance-station-audio-asset-row__duration {
+  white-space: nowrap;
+}
+
+.dance-station-audio-rail__export {
+  align-content: start;
+  gap: 8px;
+  padding: 16px;
+}
+
+.dance-station-audio-rail__export .home-v2-kicker {
+  margin: 0;
+  color: #8da4c2;
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+}
+
+.dance-station-audio-rail__export h2 {
+  margin: 0;
+  color: #edf6ff;
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+
+.dance-station-audio-rail__export p.small {
+  max-width: 30ch;
+  margin: 0 0 5px;
+  color: #8ea4c0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.dance-station-audio-export-label {
+  display: grid;
+  gap: 5px;
+  margin-top: 2px;
+  color: #9eb1cc;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.dance-station-audio-export-label input {
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  border: 1px solid rgba(117, 162, 212, 0.28);
+  border-radius: 6px;
+  background: #0b1424;
+  color: #eaf4ff;
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  line-height: 1.2;
+  padding: 8px 10px;
+  text-transform: none;
+}
+
+.dance-station-audio-rail__export .home-v2-btn {
+  display: inline-flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 12px;
+  border: 1px solid rgba(210, 101, 255, 0.72);
+  border-radius: 7px;
+  background: #6c229d;
+  box-shadow: none;
+  color: #ffffff;
+  font-size: 0.74rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.dance-station-audio-rail__export .home-v2-btn:hover:not(:disabled),
+.dance-station-audio-rail__export .home-v2-btn:focus-visible {
+  border-color: #f0a0ff;
+  background: #812eb5;
+}
+
+.dance-station-audio-rail__export .home-v2-btn:disabled {
+  opacity: 0.56;
+}
+
+.dance-station-audio-rail__export .dance-station-status-pill {
+  justify-self: start;
+  min-height: 26px;
+  padding: 5px 8px;
+  border: 1px solid rgba(98, 247, 216, 0.36);
+  border-radius: 6px;
+  background: rgba(98, 247, 216, 0.08);
+  color: #62f7d8;
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+.dance-station-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .dance-station-instrument-frame {
@@ -6105,6 +6407,18 @@ label {
 @media (max-width: 960px) {
   .dance-station-main-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dance-station-audio-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dance-station-audio-rail {
+    min-height: 0;
+  }
+
+  .dance-station-audio-asset-list {
+    max-height: 360px;
   }
 
   .dance-station-context-panel {
