@@ -19,6 +19,7 @@ import { buildObjectPath, downloadFromBunny, uploadBufferToBunny } from "../stor
 import { verifyAccessToken } from "../auth/tokens.js";
 import { listOfficialRhythmGameLibraryItems, readOfficialRhythmGameLibraryItem } from "./officialRhythmGames.js";
 import { normalizeLibraryItemMetadata, syncPublishedRhythmGameCatalogEntry } from "./rhythmGameLibrary.js";
+import { parseSfzInstrument } from "./sfz.js";
 
 const router = Router();
 
@@ -341,12 +342,274 @@ router.get("/", async (req, res) => {
   });
 });
 
+const instrumentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: env.libraryMaxUploadSizeBytes,
+    files: 513,
+    fields: 8,
+  },
+});
+
 const storageCopySchema = z.object({
   role: libraryFileRoleSchema,
   metadata: libraryJsonObjectSchema,
   sourceObjectPath: z.string().trim().min(1).max(2000),
   mimeType: z.string().trim().min(1).max(160).optional(),
   fileName: z.string().trim().max(160).optional(),
+});
+
+const instrumentImportFieldsSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  itemId: z.string().trim().max(200).optional(),
+  license: z.string().trim().max(160).optional(),
+  attribution: z.string().trim().max(1000).optional(),
+});
+
+function instrumentUploadFiles(req: any): { sfz: Express.Multer.File | null; samples: Express.Multer.File[] } {
+  const files = (req.files ?? {}) as Record<string, Express.Multer.File[]>;
+  return {
+    sfz: files.sfz?.[0] ?? null,
+    samples: Array.isArray(files.samples) ? files.samples : [],
+  };
+}
+
+router.post("/publish/instruments/import", instrumentUpload.fields([
+  { name: "sfz", maxCount: 1 },
+  { name: "samples", maxCount: 512 },
+]), async (req, res) => {
+  const publisher = await resolvePublishUser(req, res);
+  if (!publisher) return;
+
+  const parsedFields = instrumentImportFieldsSchema.safeParse(req.body);
+  if (!parsedFields.success) {
+    return res.status(400).json({ error: "Enter an instrument name and upload an SFZ file." });
+  }
+  const { sfz, samples } = instrumentUploadFiles(req);
+  if (!sfz || !sfz.originalname.toLowerCase().endsWith(".sfz")) {
+    return res.status(400).json({ error: "Upload one .sfz definition file." });
+  }
+  if (!samples.length) {
+    return res.status(400).json({ error: "Upload the audio samples referenced by the SFZ file." });
+  }
+
+  let definition;
+  try {
+    definition = parseSfzInstrument({
+      buffer: sfz.buffer,
+      sourceName: sfz.originalname,
+      sampleNames: samples.map((file) => file.originalname),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The SFZ package could not be validated.";
+    return res.status(400).json({ error: message });
+  }
+
+  const fields = parsedFields.data;
+  const localId = fields.itemId ?? "";
+  let itemId = localId;
+  let existing: any = null;
+  if (itemId) {
+    const existingResult = await pool.query(
+      `SELECT id, owner_user_id, visibility, status, source_lineage_json
+       FROM library_items
+       WHERE id = $1
+       LIMIT 1`,
+      [itemId],
+    );
+    existing = existingResult.rows[0] ?? null;
+    if (!existing) return res.status(404).json({ error: "Instrument library item not found" });
+    if (existing.owner_user_id !== publisher.userId && !publisher.isAdmin) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+  } else {
+    itemId = createId();
+  }
+
+  const metadata = {
+    sourceTool: "instrument-lab",
+    format: "sfz",
+    sourceFileName: sfz.originalname,
+    instrumentDefinition: definition,
+    regionCount: definition.regions.length,
+    sampleCount: samples.length,
+    validation: {
+      state: "ready",
+      validatedAt: new Date().toISOString(),
+      missingSamples: 0,
+      warnings: definition.warnings,
+    },
+  };
+  const sourceLineage = {
+    ...(existing?.source_lineage_json ?? {}),
+    source: "instrument-lab-site",
+    ...(localId ? { localId } : {}),
+  };
+
+  if (!existing) {
+    await pool.query(
+      `INSERT INTO library_items (
+        id, owner_user_id, visibility, status, kind, title, description, tags_json,
+        metadata_json, source_lineage_json, license, attribution
+      )
+      VALUES ($1, $2, 'private', 'draft', 'instrument', $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9)`,
+      [
+        itemId,
+        publisher.userId,
+        fields.title,
+        "Validated SFZ instrument package for Instrument Lab.",
+        JSON.stringify(["sfz", "instrument"]),
+        JSON.stringify(metadata),
+        JSON.stringify(sourceLineage),
+        fields.license ?? null,
+        fields.attribution ?? null,
+      ],
+    );
+  }
+
+  const previousFiles = await pool.query<{ id: string }>(
+    `SELECT id FROM library_files WHERE item_id = $1`,
+    [itemId],
+  );
+  const filesToStore: Array<{
+    file: Express.Multer.File;
+    role: string;
+    metadata: Record<string, unknown>;
+  }> = [
+    {
+      file: sfz,
+      role: "instrument_definition",
+      metadata: {
+        originalName: sfz.originalname,
+        sourceName: sfz.originalname,
+        format: "sfz",
+      },
+    },
+    ...samples.map((file) => ({
+      file,
+      role: "instrument_sample",
+      metadata: {
+        originalName: file.originalname,
+        sourcePaths: definition.regions.filter((region) => region.fileName === file.originalname).map((region) => region.sample),
+      },
+    })),
+  ];
+  const manifest = Buffer.from(JSON.stringify({
+    format: "sfz",
+    definition,
+    files: filesToStore.map(({ file, role, metadata: fileMetadata }) => ({
+      role,
+      name: file.originalname,
+      ...fileMetadata,
+    })),
+  }, null, 2));
+
+  const insertedFileIds: string[] = [];
+  try {
+    const stored = [
+      ...filesToStore,
+      {
+        file: {
+          originalname: "instrument-manifest.json",
+          mimetype: "application/json",
+          size: manifest.byteLength,
+          buffer: manifest,
+        } as Express.Multer.File,
+        role: "instrument_manifest",
+        metadata: {
+          originalName: "instrument-manifest.json",
+          regionCount: definition.regions.length,
+          sampleCount: samples.length,
+        },
+      },
+    ];
+    for (const entry of stored) {
+      const fileId = createId();
+      insertedFileIds.push(fileId);
+      const originalName = safeFileName(entry.file.originalname || entry.role);
+      const ext = path.extname(originalName);
+      const baseName = safeFileName(path.basename(originalName, ext));
+      const objectPath = buildObjectPath([
+        "library",
+        publisher.userId,
+        itemId,
+        `${fileId}-${baseName}${ext}`,
+      ]);
+      const sha256 = crypto.createHash("sha256").update(entry.file.buffer).digest("hex");
+      const uploadResult = await uploadBufferToBunny({
+        buffer: entry.file.buffer,
+        objectPath,
+        contentType: entry.file.mimetype || "application/octet-stream",
+      });
+      await pool.query(
+        `INSERT INTO library_files (
+          id, item_id, role, mime_type, size_bytes, storage_provider, path, public_url, sha256, metadata_json
+        )
+        VALUES ($1, $2, $3, $4, $5, 'bunny', $6, $7, $8, $9::jsonb)`,
+        [
+          fileId,
+          itemId,
+          entry.role,
+          entry.file.mimetype || "application/octet-stream",
+          entry.file.size,
+          uploadResult.objectPath,
+          uploadResult.publicUrl,
+          sha256,
+          JSON.stringify(entry.metadata),
+        ],
+      );
+    }
+    if (previousFiles.rows.length) {
+      await pool.query(`DELETE FROM library_files WHERE id = ANY($1::text[])`, [previousFiles.rows.map((file) => file.id)]);
+    }
+  } catch (error) {
+    if (insertedFileIds.length) {
+      await pool.query(`DELETE FROM library_files WHERE id = ANY($1::text[])`, [insertedFileIds]).catch(() => undefined);
+    }
+    if (!existing) {
+      await pool.query(`DELETE FROM library_items WHERE id = $1`, [itemId]).catch(() => undefined);
+    }
+    console.error("[library] SFZ instrument package storage failed", {
+      itemId,
+      userId: publisher.userId,
+      error,
+    });
+    return res.status(502).json({ error: "The instrument package could not be stored" });
+  }
+
+  if (existing) {
+    await pool.query(
+      `UPDATE library_items
+       SET title = $1,
+           kind = 'instrument',
+           metadata_json = $2::jsonb,
+           source_lineage_json = $3::jsonb,
+           license = COALESCE($4, license),
+           attribution = COALESCE($5, attribution),
+           updated_at = now()
+       WHERE id = $6 AND owner_user_id = $7`,
+      [
+        fields.title,
+        JSON.stringify(metadata),
+        JSON.stringify(sourceLineage),
+        fields.license ?? null,
+        fields.attribution ?? null,
+        itemId,
+        publisher.userId,
+      ],
+    );
+  }
+  await pool.query(`UPDATE library_items SET updated_at = now() WHERE id = $1`, [itemId]);
+  const item = await readItemWithFiles(itemId);
+  return res.status(201).json({
+    item,
+    validation: {
+      state: "ready",
+      regionCount: definition.regions.length,
+      sampleCount: samples.length,
+      warnings: definition.warnings,
+    },
+  });
 });
 
 router.post("/publish/items", async (req, res) => {
@@ -671,6 +934,60 @@ router.post("/publish/items/:itemId/revoke", async (req, res) => {
   }
   const fullItem = await readItemWithFiles(item.id);
   return res.json({ item: fullItem });
+});
+
+router.get("/:itemId/files/:fileId", async (req, res) => {
+  const fileResult = await pool.query<{
+    item_id: string;
+    owner_user_id: string | null;
+    visibility: string;
+    status: string;
+    storage_provider: string;
+    path: string;
+    public_url: string | null;
+    mime_type: string;
+    size_bytes: string;
+  }>(
+    `SELECT lf.item_id, lf.storage_provider, lf.path, lf.public_url, lf.mime_type, lf.size_bytes,
+            li.owner_user_id, li.visibility, li.status
+     FROM library_files lf
+     JOIN library_items li ON li.id = lf.item_id
+     WHERE lf.item_id = $1 AND lf.id = $2
+     LIMIT 1`,
+    [req.params.itemId, req.params.fileId],
+  );
+  const file = fileResult.rows[0];
+  if (!file) return res.status(404).json({ error: "Library file not found" });
+
+  const publiclyReadable = file.visibility === "public" && file.status === "published";
+  if (!publiclyReadable) {
+    const accessToken = req.cookies?.accessToken;
+    if (!accessToken) return res.status(401).json({ error: "Authentication required" });
+    let session;
+    try {
+      session = verifyAccessToken(accessToken);
+    } catch {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    if (file.owner_user_id !== session.userId && !session.isAdmin) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+  }
+
+  if (file.storage_provider !== "bunny" || !file.path) {
+    return res.status(404).json({ error: "Library file is not available" });
+  }
+
+  try {
+    const asset = await downloadFromBunny(file.path);
+    res.setHeader("Content-Type", file.mime_type || asset.contentType || "application/octet-stream");
+    res.setHeader("Content-Length", String(asset.buffer.byteLength || Number(file.size_bytes) || 0));
+    res.setHeader("Cache-Control", publiclyReadable ? "public, max-age=300" : "private, max-age=300");
+    return res.send(asset.buffer);
+  } catch (error) {
+    console.error("[library] file proxy failed", { itemId: req.params.itemId, fileId: req.params.fileId, error });
+    return res.status(404).json({ error: "Library file not found" });
+  }
 });
 
 router.get("/:itemId", async (req, res) => {

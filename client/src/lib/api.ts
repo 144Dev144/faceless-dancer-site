@@ -478,6 +478,34 @@ export const api = {
     return response.json() as Promise<{ item: LibraryItem }>;
   },
 
+  importInstrumentPackage: async (payload: {
+    title: string;
+    sfz: File;
+    samples: File[];
+    itemId?: string;
+    license?: string;
+    attribution?: string;
+  }) => {
+    const formData = new FormData();
+    formData.set("title", payload.title);
+    if (payload.itemId) formData.set("itemId", payload.itemId);
+    if (payload.license) formData.set("license", payload.license);
+    if (payload.attribution) formData.set("attribution", payload.attribution);
+    formData.set("sfz", payload.sfz);
+    payload.samples.forEach((sample) => formData.append("samples", sample));
+
+    const response = await fetch(`${API_BASE}/library/publish/instruments/import`, {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error ?? `Instrument import failed (${response.status})`);
+    }
+    return response.json() as Promise<{ item: LibraryItem; validation: Record<string, unknown> }>;
+  },
+
   copyDraftLibraryFileFromStorage: (itemId: string, payload: {
     role: string;
     metadata?: Record<string, unknown>;

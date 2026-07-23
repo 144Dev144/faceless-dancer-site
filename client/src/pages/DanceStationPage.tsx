@@ -126,6 +126,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const instrumentRecordingStartedAtRef = useRef(0);
   const instrumentTimerRefs = useRef<number[]>([]);
   const instrumentLabFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const sessionRef = useRef(session);
   const workspaceItemsRef = useRef<BrowserWorkspaceItem[]>([]);
   const audioMassObjectUrlsRef = useRef<Map<string, string>>(new Map());
   const audioMassExportRequestsRef = useRef<Map<string, {
@@ -135,6 +136,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   }>>(new Map());
   const instrumentAssetObjectUrlsRef = useRef<Map<string, string>>(new Map());
   const workspaceCardObjectUrlsRef = useRef<Map<string, string>>(new Map());
+
+  sessionRef.current = session;
 
   useEffect(() => {
     document.body.classList.add("home-page-body");
@@ -255,10 +258,14 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       updatedAt: now,
       metadata: {
         libraryItemId: item.id,
+        publicLibrary: item,
         creatorName,
         description: item.description,
         tags: item.tags,
         files: item.files,
+        ...(item.kind === "instrument" && item.metadata.instrumentDefinition
+          ? { instrumentDefinition: item.metadata.instrumentDefinition }
+          : {}),
       },
     });
     setWorkspaceMessage(`${item.title} added to Private Assets.`);
@@ -271,6 +278,36 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     }
     if (item.source !== "private") {
       throw new Error("Only private assets can be published from the site right now.");
+    }
+    const linkedLibraryId = linkedLibraryItemIdFromMetadata(item.metadata);
+    const currentlyPublished = isPublishedLibraryMetadata(item.metadata);
+    if (item.kind === "instrument" && linkedLibraryId) {
+      setWorkspaceMessage(`${currentlyPublished ? "Updating" : "Publishing"} ${item.title}...`);
+      if (currentlyPublished) {
+        const packageFiles = await workspaceInstrumentPackageFiles(item);
+        await api.importInstrumentPackage({
+          itemId: linkedLibraryId,
+          title: item.title,
+          sfz: packageFiles.sfz,
+          samples: packageFiles.samples,
+        });
+      }
+      const published = await api.publishDraftLibraryItem(linkedLibraryId);
+      await saveWorkspaceItem({
+        ...item,
+        creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || published.item.creator?.publicKey || item.creatorName,
+        updatedAt: new Date().toISOString(),
+        metadata: {
+          ...item.metadata,
+          publicLibrary: published.item,
+          libraryItemId: published.item.id,
+          publicLibraryStatus: published.item.status,
+          files: published.item.files,
+        },
+      });
+      setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
+      await refreshWorkspace();
+      return;
     }
     const sourceObjectPath = typeof item.metadata.objectPath === "string" ? item.metadata.objectPath.trim() : "";
     const localFile = workspaceMetadataFile(item.metadata.blob, item.metadata.fileName, item.metadata.mimeType);
@@ -292,7 +329,6 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         ? "cover"
         : "metadata";
 
-    const currentlyPublished = isPublishedLibraryMetadata(item.metadata);
     setWorkspaceMessage(`${currentlyPublished ? "Updating" : "Publishing"} ${item.title}...`);
 
     const managed = await api.upsertOwnedLibraryItem({
@@ -567,6 +603,17 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
             }, window.location.origin);
             setWorkspaceMessage(error.message);
           });
+          return;
+        }
+        if (message.type === "instrument-lab:save-instrument") {
+          void saveInstrumentLabPackage(message.payload).catch((error: Error) => {
+            instrumentLabFrameRef.current?.contentWindow?.postMessage({
+              source: "dance-station-host",
+              type: "instrument-lab:error",
+              payload: { message: error.message },
+            }, window.location.origin);
+            setWorkspaceMessage(error.message);
+          });
         }
       }
     };
@@ -796,7 +843,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   };
 
   const sendInstrumentLabAssets = () => {
-    const assets = buildAudioMassWorkspaceAssets(workspaceItemsRef.current, instrumentAssetObjectUrlsRef).map((asset) => {
+    const audioAssets = buildAudioMassWorkspaceAssets(workspaceItemsRef.current, instrumentAssetObjectUrlsRef).map((asset) => {
       const item = workspaceItemsRef.current.find((candidate) => candidate.id === asset.id);
       return {
         id: asset.id,
@@ -812,6 +859,23 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         },
       };
     });
+    const instrumentAssets = workspaceItemsRef.current
+      .filter((item) => item.kind === "instrument")
+      .map((item) => {
+        const definition = workspaceInstrumentDefinition(item);
+        if (!definition) return null;
+        return {
+          id: item.id,
+          title: item.title,
+          kind: "instrument",
+          creatorName: item.creatorName,
+          metadata: {
+            instrumentDefinition: definition,
+          },
+        };
+      })
+      .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset));
+    const assets = [...audioAssets, ...instrumentAssets];
     instrumentLabFrameRef.current?.contentWindow?.postMessage({
       source: "dance-station-host",
       type: "instrument-lab:assets",
@@ -854,6 +918,61 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           title: item.title,
           kind: item.kind,
         },
+      },
+    }, window.location.origin);
+  };
+
+  const saveInstrumentLabPackage = async (payload: {
+    title?: string;
+    sfz?: File;
+    samples?: File[];
+  }) => {
+    if (!sessionRef.current.authenticated) throw new Error("Connect a wallet before saving an instrument.");
+    if (!(payload.sfz instanceof File) || !Array.isArray(payload.samples) || !payload.samples.every((file) => file instanceof File)) {
+      throw new Error("Instrument Lab did not return a complete SFZ package.");
+    }
+    const imported = await api.importInstrumentPackage({
+      title: payload.title?.trim() || payload.sfz.name.replace(/\.sfz$/i, ""),
+      sfz: payload.sfz,
+      samples: payload.samples,
+    });
+    const libraryItem = imported.item;
+    const now = new Date().toISOString();
+    const item: BrowserWorkspaceItem = {
+      id: `instrument-${libraryItem.id}`,
+      title: libraryItem.title,
+      kind: "instrument",
+      source: "private",
+      creatorName: libraryItem.creator?.displayName || libraryItem.creator?.creatorSlug || libraryItem.creator?.publicKey || "",
+      createdAt: libraryItem.createdAt || now,
+      updatedAt: libraryItem.updatedAt || now,
+      metadata: {
+        storage: "remote-library",
+        sourceTool: "instrument-lab",
+        libraryItemId: libraryItem.id,
+        publicLibrary: libraryItem,
+        publicLibraryStatus: libraryItem.status,
+        instrumentDefinition: libraryItem.metadata.instrumentDefinition,
+        files: libraryItem.files,
+        validation: imported.validation,
+      },
+    };
+    await saveWorkspaceItem(item);
+    setWorkspaceMessage(`${item.title} saved to Private Assets.`);
+    await refreshWorkspace();
+    const definition = workspaceInstrumentDefinition(item);
+    instrumentLabFrameRef.current?.contentWindow?.postMessage({
+      source: "dance-station-host",
+      type: "instrument-lab:instrument-saved",
+      payload: {
+        item: { id: item.id, title: item.title, kind: item.kind },
+        instrument: definition ? {
+          id: `library:${item.id}`,
+          name: item.title,
+          category: "Saved SFZ",
+          type: "sample",
+          samples: definition.regions,
+        } : null,
       },
     }, window.location.origin);
   };
@@ -2518,6 +2637,7 @@ function isWorkspaceBlob(value: unknown): value is Blob {
 
 function hasWorkspaceFile(metadata: Record<string, unknown>): boolean {
   return isWorkspaceBlob(metadata.blob)
+    || typeof metadata.libraryItemId === "string"
     || (typeof metadata.publicUrl === "string" && metadata.publicUrl.trim().length > 0);
 }
 
@@ -2545,6 +2665,87 @@ async function workspaceItemFile(item: BrowserWorkspaceItem): Promise<File | nul
     : `${item.title || "private-asset"}.${blob.type === "audio/wav" ? "wav" : "bin"}`;
   const type = blob.type || (typeof metadata.mimeType === "string" ? metadata.mimeType : "application/octet-stream");
   return new File([blob], name, { type });
+}
+
+function workspaceInstrumentDefinition(item: BrowserWorkspaceItem): {
+  format: string;
+  sourceName?: string;
+  regions: Array<Record<string, unknown>>;
+  warnings?: string[];
+} | null {
+  const direct = item.metadata.instrumentDefinition;
+  const library = item.metadata.publicLibrary;
+  const libraryMetadata = library && typeof library === "object"
+    ? (library as { metadata?: Record<string, unknown> }).metadata
+    : undefined;
+  const candidate = direct && typeof direct === "object"
+    ? direct
+    : libraryMetadata?.instrumentDefinition;
+  if (!candidate || typeof candidate !== "object") return null;
+  const rawRegions = (candidate as { regions?: unknown }).regions;
+  if (!Array.isArray(rawRegions)) return null;
+  const libraryFiles = library && typeof library === "object" && Array.isArray((library as { files?: unknown }).files)
+    ? (library as { files: Array<Record<string, unknown>> }).files
+    : Array.isArray(item.metadata.files)
+      ? item.metadata.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+      : [];
+  const sampleFiles = libraryFiles.filter((file) => file.role === "instrument_sample");
+  const libraryItemId = library && typeof library === "object" && typeof (library as { id?: unknown }).id === "string"
+    ? (library as { id: string }).id
+    : typeof item.metadata.libraryItemId === "string"
+      ? item.metadata.libraryItemId
+      : "";
+  const regions = rawRegions.map((raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    const region = { ...(raw as Record<string, unknown>) };
+    const fileName = typeof region.fileName === "string" ? region.fileName : "";
+    const sampleFile = sampleFiles.find((file) => {
+      const metadata = file.metadata && typeof file.metadata === "object" ? file.metadata as Record<string, unknown> : {};
+      const originalName = typeof metadata.originalName === "string" ? metadata.originalName : file.originalName;
+      return typeof originalName === "string" && originalName.toLowerCase() === fileName.toLowerCase();
+    });
+    const publicUrl = sampleFile && typeof sampleFile.publicUrl === "string" ? sampleFile.publicUrl : "";
+    if (sampleFile && libraryItemId && typeof sampleFile.id === "string") {
+      region.path = `/api/library/${encodeURIComponent(libraryItemId)}/files/${encodeURIComponent(sampleFile.id)}`;
+    } else if (publicUrl) {
+      region.path = publicUrl;
+    }
+    return region;
+  }).filter((region): region is Record<string, unknown> => Boolean(region));
+  return {
+    format: typeof (candidate as { format?: unknown }).format === "string" ? (candidate as { format: string }).format : "sfz",
+    sourceName: typeof (candidate as { sourceName?: unknown }).sourceName === "string" ? (candidate as { sourceName: string }).sourceName : undefined,
+    regions,
+    warnings: Array.isArray((candidate as { warnings?: unknown }).warnings)
+      ? (candidate as { warnings: string[] }).warnings
+      : [],
+  };
+}
+
+async function workspaceInstrumentPackageFiles(item: BrowserWorkspaceItem): Promise<{ sfz: File; samples: File[] }> {
+  const library = item.metadata.publicLibrary;
+  const files = library && typeof library === "object" && Array.isArray((library as { files?: unknown }).files)
+    ? (library as { files: Array<Record<string, unknown>> }).files
+    : Array.isArray(item.metadata.files)
+      ? item.metadata.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+      : [];
+  const readFile = async (record: Record<string, unknown>, fallbackName: string): Promise<File> => {
+    const url = typeof record.publicUrl === "string" ? record.publicUrl : "";
+    if (!url) throw new Error(`The saved instrument is missing its ${fallbackName} file URL.`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Could not read the saved instrument ${fallbackName} file.`);
+    const blob = await response.blob();
+    const metadata = record.metadata && typeof record.metadata === "object" ? record.metadata as Record<string, unknown> : {};
+    const name = typeof metadata.originalName === "string" && metadata.originalName.trim() ? metadata.originalName : fallbackName;
+    return new File([blob], name, { type: blob.type || String(record.mimeType || "application/octet-stream") });
+  };
+  const definitionFile = files.find((file) => file.role === "instrument_definition");
+  const sampleFiles = files.filter((file) => file.role === "instrument_sample");
+  if (!definitionFile || !sampleFiles.length) throw new Error("The saved instrument package is incomplete.");
+  return {
+    sfz: await readFile(definitionFile, "instrument.sfz"),
+    samples: await Promise.all(sampleFiles.map((file, index) => readFile(file, `sample-${index + 1}.wav`))),
+  };
 }
 
 function formatAudioAssetDuration(value?: number): string {

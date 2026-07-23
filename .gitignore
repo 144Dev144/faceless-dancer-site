@@ -134,3 +134,4 @@ data/
 /docs/plans/*.md
 /expanded-prompt-check.png
 /pump_hourly.csv
+/tmp/instrument-lab-fixtures/
