@@ -18,7 +18,7 @@ export const remoteGenerationPrioritySchema = z.enum(["low", "standard", "high"]
 export const remotePaymentCurrencySchema = z.enum(["FACELESS", "SOL"]);
 
 export const remoteGenerationRequestSchema = z.object({
-  runtime: z.literal("ace-step").default("ace-step"),
+  runtime: z.enum(["ace-step", "voice-change"]).default("ace-step"),
   modelRevision: z.string().trim().min(1).max(200).default("ace-step-1.5"),
   inputs: z.array(inputSchema).max(16).default([]),
   priority: remoteGenerationPrioritySchema.default("standard"),
@@ -28,7 +28,13 @@ export const remoteGenerationRequestSchema = z.object({
 }).superRefine((value, context) => {
   const taskType = typeof value.parameters.task_type === "string" ? value.parameters.task_type : "text2music";
   if (taskType === "extract" && value.inputs.length === 0) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "This ACE-Step task requires a source input." });
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "This extraction task requires a source input." });
+  }
+  if (value.runtime === "voice-change") {
+    const roles = new Set(value.inputs.map((input) => input.role));
+    if (!roles.has("song") || !roles.has("reference")) context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "Voice Change requires song and reference audio inputs." });
+    if (taskType !== "voice_change") context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "task_type"], message: "Voice Change requests must use task_type=voice_change." });
+    if ("loudness_optimization" in value.parameters && typeof value.parameters.loudness_optimization !== "boolean") context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "loudness_optimization"], message: "loudness_optimization must be a boolean when provided." });
   }
 });
 

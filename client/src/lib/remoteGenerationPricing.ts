@@ -131,25 +131,32 @@ function atomicAmount(priceUsd: number, tokenPriceUsd: number, decimals: number,
 
 export function calculateRemotePricing(config: RemotePricingConfig, request: RemoteGenerationRequest, market: RemoteMarketPrice): RemotePricingQuote {
   const parameters = request.parameters;
-  const taskType = parameters.task_type === "extract" ? "extract" : "text2music";
+  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : "text2music";
   const duration = positiveNumber(parameters.audio_duration, config.defaults.musicDurationSeconds);
-  const defaultSteps = taskType === "extract" ? config.defaults.extractionInferenceSteps : config.defaults.musicInferenceSteps;
-  const steps = Math.max(1, Math.round(positiveNumber(parameters.inference_steps, defaultSteps)));
+  const defaultSteps = taskType === "extract" ? config.defaults.extractionInferenceSteps : taskType === "voice_change" ? config.defaults.voiceChangeInferenceSteps : config.defaults.musicInferenceSteps;
+  const configuredSteps = taskType === "voice_change" ? parameters.diffusion_steps : parameters.inference_steps;
+  const steps = Math.max(1, Math.round(positiveNumber(configuredSteps, defaultSteps)));
   const currency = request.paymentCurrency ?? "FACELESS";
   const isSol = currency === "SOL";
   const settings = config.settings;
   const basePriceMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionBasePriceUsdMicros : settings.facelessExtractionBasePriceUsdMicros)
-    : (isSol ? settings.solBasePriceUsdMicros : settings.facelessBasePriceUsdMicros);
+    : taskType === "voice_change"
+      ? (isSol ? settings.solVoiceChangeBasePriceUsdMicros : settings.facelessVoiceChangeBasePriceUsdMicros)
+      : (isSol ? settings.solBasePriceUsdMicros : settings.facelessBasePriceUsdMicros);
   const stepRateMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionAdditionalStepPriceUsdMicros : settings.facelessExtractionAdditionalStepPriceUsdMicros)
-    : (isSol ? settings.solGenerationAdditionalStepPriceUsdMicros : settings.facelessGenerationAdditionalStepPriceUsdMicros);
+    : taskType === "voice_change"
+      ? (isSol ? settings.solVoiceChangeAdditionalStepPriceUsdMicros : settings.facelessVoiceChangeAdditionalStepPriceUsdMicros)
+      : (isSol ? settings.solGenerationAdditionalStepPriceUsdMicros : settings.facelessGenerationAdditionalStepPriceUsdMicros);
   const durationRateMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionSourceSecondPriceUsdMicros : settings.facelessExtractionSourceSecondPriceUsdMicros)
-    : (isSol ? settings.solGenerationAdditionalSecondPriceUsdMicros : settings.facelessGenerationAdditionalSecondPriceUsdMicros);
-  const sourceDurationSeconds = taskType === "extract" ? nonNegativeNumber(request.inputs[0]?.durationSeconds ?? parameters.source_duration_seconds) : 0;
-  if (taskType === "extract" && durationRateMicros > 0 && sourceDurationSeconds <= 0) throw new Error("Extraction source duration is required for the configured per-second price");
-  const additionalDurationSeconds = taskType === "extract" ? sourceDurationSeconds : Math.max(0, duration - config.defaults.musicDurationSeconds);
+    : taskType === "voice_change"
+      ? (isSol ? settings.solVoiceChangeSourceSecondPriceUsdMicros : settings.facelessVoiceChangeSourceSecondPriceUsdMicros)
+      : (isSol ? settings.solGenerationAdditionalSecondPriceUsdMicros : settings.facelessGenerationAdditionalSecondPriceUsdMicros);
+  const sourceDurationSeconds = taskType === "extract" || taskType === "voice_change" ? nonNegativeNumber(request.inputs.find((input) => input.role === (taskType === "voice_change" ? "song" : input.role))?.durationSeconds ?? parameters.source_duration_seconds) : 0;
+  if ((taskType === "extract" || taskType === "voice_change") && durationRateMicros > 0 && sourceDurationSeconds <= 0) throw new Error(`${taskType === "voice_change" ? "Voice Change song" : "Extraction source"} duration is required for the configured per-second price`);
+  const additionalDurationSeconds = taskType === "extract" || taskType === "voice_change" ? sourceDurationSeconds : Math.max(0, duration - config.defaults.musicDurationSeconds);
   const calculatedPriceMicros = basePriceMicros
     + Math.max(0, steps - defaultSteps) * stepRateMicros
     + Math.round(additionalDurationSeconds * durationRateMicros);

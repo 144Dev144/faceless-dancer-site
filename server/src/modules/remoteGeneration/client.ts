@@ -17,7 +17,7 @@ export interface RemoteGenerationMetadata {
 }
 
 export interface RemoteGenerationRequest {
-  runtime: "ace-step";
+  runtime: "ace-step" | "voice-change";
   modelRevision: string;
   inputs: RemoteGenerationInput[];
   priority: "low" | "standard" | "high";
@@ -59,12 +59,19 @@ export interface RemotePricingConfig {
     solExtractionAdditionalStepPriceUsdMicros: number;
     facelessExtractionSourceSecondPriceUsdMicros: number;
     solExtractionSourceSecondPriceUsdMicros: number;
+    facelessVoiceChangeBasePriceUsdMicros: number;
+    solVoiceChangeBasePriceUsdMicros: number;
+    facelessVoiceChangeAdditionalStepPriceUsdMicros: number;
+    solVoiceChangeAdditionalStepPriceUsdMicros: number;
+    facelessVoiceChangeSourceSecondPriceUsdMicros: number;
+    solVoiceChangeSourceSecondPriceUsdMicros: number;
     updatedAt: string;
   };
   defaults: {
     musicDurationSeconds: number;
     musicInferenceSteps: number;
     extractionInferenceSteps: number;
+    voiceChangeInferenceSteps: number;
   };
   slippageBps: number;
   market: {
@@ -93,7 +100,7 @@ export interface PaymentIntent {
   id: string;
   userId: string;
   walletAddress: string;
-  runtime: "ace-step";
+  runtime: "ace-step" | "voice-change";
   requestHash: string;
   currency: RemotePaymentCurrency;
   tokenMint: string;
@@ -132,6 +139,7 @@ export interface RemoteArtifact {
   id: string;
   jobId: string;
   role: "audio" | "preview" | "metadata";
+  variant?: "merged" | "converted-vocal" | "instrumental";
   objectPath: string;
   publicUrl?: string;
   mimeType: string;
@@ -155,7 +163,7 @@ export interface RemoteJob {
   id: string;
   userId: string;
   paymentIntentId: string;
-  runtime: "ace-step";
+  runtime: "ace-step" | "voice-change";
   modelRevision: string;
   requestHash: string;
   request: RemoteGenerationRequest;
@@ -235,8 +243,8 @@ export class LaunchServerClient {
     return this.request<RemotePricingConfig>("/v1/pricing/config");
   }
 
-  async availability(priority: RemoteGenerationRequest["priority"]): Promise<RemoteAvailability> {
-    return this.request<RemoteAvailability>("/v1/availability", { method: "POST", body: JSON.stringify({ priority }) });
+  async availability(request: Pick<RemoteGenerationRequest, "priority" | "runtime">): Promise<RemoteAvailability> {
+    return this.request<RemoteAvailability>("/v1/availability", { method: "POST", body: JSON.stringify(request) });
   }
 
   async verifyPayment(input: { paymentIntentId: string; userId: string; transactionSignature: string }): Promise<PaymentIntent> {

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import multer from "multer";
 import { Router, type Response } from "express";
+import { z } from "zod";
 import { requireAuth } from "../../middleware/auth.js";
 import { env } from "../../config/env.js";
 import { createId } from "../../utils/crypto.js";
@@ -130,8 +131,14 @@ router.get("/pricing-config", async (req, res) => {
 router.post("/availability", async (req, res, next) => {
   if (!requireEnabled(res)) return;
   try {
-    const priority = remoteGenerationPrioritySchema.parse(req.body?.priority ?? "standard");
-    return res.json(await launchServerClient.availability(priority));
+    const request = z.object({
+      priority: remoteGenerationPrioritySchema,
+      runtime: z.enum(["ace-step", "voice-change"]),
+    }).parse({
+      priority: req.body?.priority ?? "standard",
+      runtime: req.body?.runtime ?? "ace-step",
+    });
+    return res.json(await launchServerClient.availability(request));
   } catch (error) {
     return respondRemoteGenerationError(error, res, "The generation service is temporarily unavailable. Please try again shortly.");
   }

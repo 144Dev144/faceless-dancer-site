@@ -47,7 +47,7 @@ const extractionTracks = [
   "woodwinds",
 ] as const;
 
-type GenerationMode = "music" | "extraction";
+type GenerationMode = "music" | "extraction" | "voice-change";
 type ExtractionSourceMode = "private" | "disk";
 type RemoteSubmissionStage = "payment-request" | "wallet-payment" | "payment-verification" | "queue-submission";
 const MAX_REMOTE_AUDIO_DURATION_SECONDS = 360;
@@ -81,7 +81,7 @@ function remoteGenerationFailureMessage(
     case "payment-verification":
       return "We could not verify the payment. Check your wallet activity before trying again.";
     case "queue-submission":
-      return `Payment was accepted, but the ${generationMode === "music" ? "music generation" : "music extraction"} could not be queued. Please try again.`;
+      return `Payment was accepted, but the ${generationMode === "music" ? "music generation" : generationMode === "extraction" ? "music extraction" : "voice change"} could not be queued. Please try again.`;
   }
 }
 
@@ -138,6 +138,7 @@ function generationTitle(job: RemoteJob): string {
   const parameters = job.request.parameters;
   const taskType = parameters && typeof parameters.task_type === "string" ? parameters.task_type : "text2music";
   const trackName = parameters && typeof parameters.track_name === "string" ? parameters.track_name.trim().replaceAll("_", " ") : "";
+  if (taskType === "voice_change") return title || "Voice change";
   if (title) return taskType === "extract" && trackName ? `${title} · ${trackName}` : title;
   const prompt = parameters && typeof parameters.prompt === "string" ? parameters.prompt.trim() : "";
   if (taskType === "extract" && trackName) return `Extracted ${trackName}`;
@@ -172,6 +173,7 @@ function formatGenerationDuration(seconds?: number): string | null {
 }
 
 function generationModelLabel(job: RemoteJob): string {
+  if (job.runtime === "voice-change") return "UVR + Seed-VC";
   const model = typeof job.request.parameters?.model === "string" ? job.request.parameters.model : job.modelRevision;
   if (model.includes("turbo")) return "ACE-Step Turbo";
   if (model.includes("base")) return "ACE-Step Base";
@@ -317,6 +319,26 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const [diskSourceFileName, setDiskSourceFileName] = useState("");
   const [diskSourceBusy, setDiskSourceBusy] = useState(false);
   const [diskSourceError, setDiskSourceError] = useState("");
+  const [voiceSongSourceMode, setVoiceSongSourceMode] = useState<ExtractionSourceMode>("private");
+  const [voiceReferenceSourceMode, setVoiceReferenceSourceMode] = useState<ExtractionSourceMode>("private");
+  const [voiceSongSourceId, setVoiceSongSourceId] = useState("");
+  const [voiceReferenceSourceId, setVoiceReferenceSourceId] = useState("");
+  const [voiceSongDiskInput, setVoiceSongDiskInput] = useState<RemoteGenerationInput | null>(null);
+  const [voiceReferenceDiskInput, setVoiceReferenceDiskInput] = useState<RemoteGenerationInput | null>(null);
+  const [voiceSongFileName, setVoiceSongFileName] = useState("");
+  const [voiceReferenceFileName, setVoiceReferenceFileName] = useState("");
+  const [voiceUploadBusy, setVoiceUploadBusy] = useState(false);
+  const [voiceDiffusionSteps, setVoiceDiffusionSteps] = useState(25);
+  const [voiceLengthAdjust, setVoiceLengthAdjust] = useState(1);
+  const [voiceCfgRate, setVoiceCfgRate] = useState(0.7);
+  const [voiceF0Condition, setVoiceF0Condition] = useState(true);
+  const [voiceAutoF0Adjust, setVoiceAutoF0Adjust] = useState(false);
+  const [voicePitchShift, setVoicePitchShift] = useState(0);
+  const [voiceUvrModel, setVoiceUvrModel] = useState("UVR-MDX-NET-Inst_HQ_3.onnx");
+  const [voiceUvrSegmentSize, setVoiceUvrSegmentSize] = useState(256);
+  const [voiceUvrOverlap, setVoiceUvrOverlap] = useState(0.25);
+  const [voiceUvrDenoise, setVoiceUvrDenoise] = useState(false);
+  const [voiceLoudnessOptimization, setVoiceLoudnessOptimization] = useState(false);
   const [extractionTrack, setExtractionTrack] = useState<(typeof extractionTracks)[number]>("vocals");
   const [paymentCurrency, setPaymentCurrency] = useState<RemotePaymentCurrency>("FACELESS");
   const [pricingConfig, setPricingConfig] = useState<RemotePricingConfig | null>(null);
@@ -392,7 +414,11 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   }, [publicItems, workspaceItems]);
 
   const selectedExtractionSource = audioChoices.find((choice) => choice.id === selectedExtractionSourceId);
+  const selectedVoiceSongSource = audioChoices.find((choice) => choice.id === voiceSongSourceId);
+  const selectedVoiceReferenceSource = audioChoices.find((choice) => choice.id === voiceReferenceSourceId);
   const extractionSourceInput = extractionSourceMode === "private" ? selectedExtractionSource?.input : diskSourceInput;
+  const voiceSongInput = voiceSongSourceMode === "private" ? selectedVoiceSongSource?.input : voiceSongDiskInput;
+  const voiceReferenceInput = voiceReferenceSourceMode === "private" ? selectedVoiceReferenceSource?.input : voiceReferenceDiskInput;
   const extractionSourceTooLong = typeof extractionSourceInput?.durationSeconds === "number"
     && extractionSourceInput.durationSeconds > MAX_REMOTE_AUDIO_DURATION_SECONDS;
 
@@ -429,7 +455,57 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
     }
   };
 
+  const uploadVoiceSource = async (kind: "song" | "reference", file?: File) => {
+    if (!file) return;
+    if (!session.authenticated) {
+      setError("Connect your wallet before uploading audio.");
+      return;
+    }
+    setVoiceUploadBusy(true);
+    try {
+      const duration = await readAudioDuration(file);
+      if (typeof duration === "number" && duration > MAX_REMOTE_AUDIO_DURATION_SECONDS) throw new Error(`Audio sources must be ${MAX_REMOTE_AUDIO_DURATION_SECONDS} seconds or shorter.`);
+      const response = await api.uploadRemoteGenerationSource(file);
+      const input = { ...response.input, durationSeconds: duration };
+      if (kind === "song") { setVoiceSongFileName(file.name); setVoiceSongDiskInput(input); }
+      else { setVoiceReferenceFileName(file.name); setVoiceReferenceDiskInput(input); }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Could not upload the voice-change audio");
+    } finally {
+      setVoiceUploadBusy(false);
+    }
+  };
+
   const request = useMemo<RemoteGenerationRequest>(() => {
+    if (generationMode === "voice-change") {
+      return {
+        runtime: "voice-change",
+        modelRevision: "uvr-mdx-seed-vc-singing",
+        inputs: [
+          ...(voiceSongInput ? [{ ...voiceSongInput, role: "song" }] : []),
+          ...(voiceReferenceInput ? [{ ...voiceReferenceInput, role: "reference" }] : []),
+        ],
+        priority: "standard",
+        paymentCurrency,
+        metadata: { title: resolvedTitle },
+        parameters: {
+          task_type: "voice_change",
+          mode: "singing",
+          diffusion_steps: voiceDiffusionSteps,
+          length_adjust: voiceLengthAdjust,
+          inference_cfg_rate: voiceCfgRate,
+          f0_condition: voiceF0Condition,
+          auto_f0_adjust: voiceAutoF0Adjust,
+          pitch_shift: voicePitchShift,
+          uvr_model: voiceUvrModel,
+          uvr_segment_size: voiceUvrSegmentSize,
+          uvr_overlap: voiceUvrOverlap,
+          uvr_enable_denoise: voiceUvrDenoise,
+          loudness_optimization: voiceLoudnessOptimization,
+          audio_format: "flac",
+        },
+      };
+    }
     if (generationMode === "extraction") {
       return {
         runtime: "ace-step",
@@ -496,7 +572,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
         ...(selectedLokr ? { lokr_scale: lokrScale } : {}),
       },
     };
-  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, vocalLanguage]);
+  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
 
   const hasActiveJobs = jobs.some((candidate) => activeStatuses.has(candidate.status));
   busyRef.current = busy;
@@ -676,7 +752,15 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   }, [health?.enabled]);
 
   useEffect(() => {
-    if (!pricingConfig || !marketPrice || (generationMode === "extraction" && (!extractionSourceInput || extractionSourceTooLong))) {
+    const voiceChangeSourceRateMicros = paymentCurrency === "SOL"
+      ? pricingConfig?.settings.solVoiceChangeSourceSecondPriceUsdMicros ?? 0
+      : pricingConfig?.settings.facelessVoiceChangeSourceSecondPriceUsdMicros ?? 0;
+    const voiceChangeNeedsSongDuration = generationMode === "voice-change"
+      && voiceChangeSourceRateMicros > 0
+      && !voiceSongInput;
+    if (!pricingConfig || !marketPrice
+      || (generationMode === "extraction" && (!extractionSourceInput || extractionSourceTooLong))
+      || voiceChangeNeedsSongDuration) {
       setPricing(null);
       return;
     }
@@ -685,7 +769,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
     } catch {
       setPricing(null);
     }
-  }, [extractionSourceInput, extractionSourceTooLong, generationMode, marketPrice, pricingConfig, request]);
+  }, [extractionSourceInput, extractionSourceTooLong, generationMode, marketPrice, pricingConfig, request, voiceReferenceInput, voiceSongInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -721,7 +805,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
 
   useEffect(() => {
     jobs.forEach((job) => {
-      const artifact = job.artifacts.find((candidate) => candidate.role === "audio" && candidate.publicUrl);
+      const audioArtifacts = job.artifacts.filter((candidate) => candidate.role === "audio" && candidate.publicUrl);
+      const artifact = audioArtifacts.find((candidate) => candidate.variant === "merged") ?? audioArtifacts[0];
       if (!artifact?.publicUrl || job.status !== "succeeded" || savedRemoteJobsRef.current.has(job.id) || savingRemoteJobsRef.current.has(job.id)) return;
       savingRemoteJobsRef.current.add(job.id);
       void listWorkspaceItems()
@@ -781,13 +866,22 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
         setError("Enter lyrics or enable Instrumental.");
         return;
       }
-    } else {
+    } else if (generationMode === "extraction") {
       if (!extractionSourceInput) {
         setError(extractionSourceMode === "private" ? "Choose a Private Asset before extracting." : "Upload a source audio file before extracting.");
         return;
       }
       if (extractionSourceTooLong) {
         setError(`Source audio must be ${MAX_REMOTE_AUDIO_DURATION_SECONDS} seconds or shorter for extraction.`);
+        return;
+      }
+    } else {
+      if (!voiceSongInput) {
+        setError("Choose or upload the song you want to change.");
+        return;
+      }
+      if (!voiceReferenceInput) {
+        setError("Choose or upload a reference voice.");
         return;
       }
     }
@@ -937,6 +1031,16 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                 >
                   Music Extraction
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={generationMode === "voice-change"}
+                  className={`dance-station-generation-mode-tab${generationMode === "voice-change" ? " is-active" : ""}`}
+                  onClick={() => setGenerationMode("voice-change")}
+                  disabled={busy}
+                >
+                  Voice Change
+                </button>
               </div>
             </div>
             <div className="dance-station-generation-heading__summary">
@@ -1034,7 +1138,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                     </div>
                     {!lokrChoices.length ? <p className="dance-station-availability-line">Import a published LoKr adapter into the library to use it remotely.</p> : null}
                   </>
-                ) : (
+                ) : generationMode === "extraction" ? (
                   <>
                     <div className="dance-station-source-mode" role="radiogroup" aria-label="Source audio">
                       <label className={`dance-station-source-mode__option${extractionSourceMode === "private" ? " is-active" : ""}`}>
@@ -1100,6 +1204,52 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                       </label>
                     </div>
                   </>
+                ) : (
+                  <>
+                    <VoiceChangeSourceField
+                      label="Song audio"
+                      mode={voiceSongSourceMode}
+                      onModeChange={setVoiceSongSourceMode}
+                      privateValue={voiceSongSourceId}
+                      onPrivateChange={setVoiceSongSourceId}
+                      privateChoices={audioChoices}
+                      diskInput={voiceSongDiskInput}
+                      fileName={voiceSongFileName}
+                      inputId="dance-station-voice-song-file"
+                      onUpload={(file) => void uploadVoiceSource("song", file)}
+                      disabled={busy || voiceUploadBusy}
+                    />
+                    <VoiceChangeSourceField
+                      label="Reference voice"
+                      mode={voiceReferenceSourceMode}
+                      onModeChange={setVoiceReferenceSourceMode}
+                      privateValue={voiceReferenceSourceId}
+                      onPrivateChange={setVoiceReferenceSourceId}
+                      privateChoices={audioChoices}
+                      diskInput={voiceReferenceDiskInput}
+                      fileName={voiceReferenceFileName}
+                      inputId="dance-station-voice-reference-file"
+                      onUpload={(file) => void uploadVoiceSource("reference", file)}
+                      disabled={busy || voiceUploadBusy}
+                    />
+                    <div className="dance-station-control-row">
+                      <label>Diffusion steps<input type="number" min="1" max="100" value={voiceDiffusionSteps} onInput={(event) => setVoiceDiffusionSteps(Number((event.currentTarget as HTMLInputElement).value) || 1)} disabled={busy} /></label>
+                      <label>Length adjust<input type="number" min="0.25" max="4" step="0.05" value={voiceLengthAdjust} onInput={(event) => setVoiceLengthAdjust(Number((event.currentTarget as HTMLInputElement).value) || 1)} disabled={busy} /></label>
+                      <label>CFG rate<input type="number" min="0" max="2" step="0.05" value={voiceCfgRate} onInput={(event) => setVoiceCfgRate(Number((event.currentTarget as HTMLInputElement).value) || 0)} disabled={busy} /></label>
+                    </div>
+                    <div className="dance-station-control-row">
+                      <label>Pitch shift<input type="number" min="-24" max="24" step="1" value={voicePitchShift} onInput={(event) => setVoicePitchShift(Number((event.currentTarget as HTMLInputElement).value) || 0)} disabled={busy} /></label>
+                      <label>UVR model<select value={voiceUvrModel} onChange={(event) => setVoiceUvrModel((event.currentTarget as HTMLSelectElement).value)} disabled={busy}><option value="UVR-MDX-NET-Inst_HQ_3.onnx">MDX Inst HQ 3</option></select></label>
+                    </div>
+                    <div className="dance-station-control-row">
+                      <label>UVR segment<input type="number" min="32" max="512" step="32" value={voiceUvrSegmentSize} onInput={(event) => setVoiceUvrSegmentSize(Number((event.currentTarget as HTMLInputElement).value) || 256)} disabled={busy} /></label>
+                      <label>UVR overlap<input type="number" min="0" max="0.99" step="0.05" value={voiceUvrOverlap} onInput={(event) => setVoiceUvrOverlap(Number((event.currentTarget as HTMLInputElement).value) || 0)} disabled={busy} /></label>
+                    </div>
+                    <label className="dance-station-switch-row"><input type="checkbox" checked={voiceF0Condition} onChange={(event) => setVoiceF0Condition((event.currentTarget as HTMLInputElement).checked)} disabled={busy} /><span className="dance-station-switch" aria-hidden="true"></span><span>F0 conditioning</span></label>
+                    <label className="dance-station-switch-row"><input type="checkbox" checked={voiceAutoF0Adjust} onChange={(event) => setVoiceAutoF0Adjust((event.currentTarget as HTMLInputElement).checked)} disabled={busy || !voiceF0Condition} /><span className="dance-station-switch" aria-hidden="true"></span><span>Auto F0 adjust</span></label>
+                    <label className="dance-station-switch-row"><input type="checkbox" checked={voiceUvrDenoise} onChange={(event) => setVoiceUvrDenoise((event.currentTarget as HTMLInputElement).checked)} disabled={busy} /><span className="dance-station-switch" aria-hidden="true"></span><span>UVR denoise</span></label>
+                    <label className="dance-station-switch-row"><input type="checkbox" checked={voiceLoudnessOptimization} onChange={(event) => setVoiceLoudnessOptimization((event.currentTarget as HTMLInputElement).checked)} disabled={busy} /><span className="dance-station-switch" aria-hidden="true"></span><span>Loudness optimization</span></label>
+                  </>
                 )}
               </div>
               <div className="dance-station-payment-currency" role="radiogroup" aria-label="Payment currency">
@@ -1111,10 +1261,10 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                 ))}
               </div>
               <div className="dance-station-create-panel__footer">
-                <button type="button" className="dance-station-generate-button" onClick={() => void submitGeneration()} disabled={busy || diskSourceBusy || !health?.enabled || !session.authenticated || !currentPricing}>
+                <button type="button" className="dance-station-generate-button" onClick={() => void submitGeneration()} disabled={busy || diskSourceBusy || voiceUploadBusy || !health?.enabled || !session.authenticated || !currentPricing}>
                   {busy ? <span className="dance-station-generation-spinner" aria-hidden="true" /> : <Sparkles aria-hidden="true" size={17} strokeWidth={2.1} />}
                   <span className="dance-station-generate-button__copy">
-                    <strong>{busy ? "Submitting" : generationMode === "music" ? "Create" : "Extract"}</strong>
+                    <strong>{busy ? "Submitting" : generationMode === "music" ? "Create" : generationMode === "extraction" ? "Extract" : "Change voice"}</strong>
                     {!busy ? <small>{costLabel}</small> : null}
                   </span>
                 </button>
@@ -1131,10 +1281,14 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                     <li>Be specific with genre, mood, instruments, and energy</li>
                     <li>Use references like “in the style of...” for better results</li>
                     <li>Instrumental mode works best with descriptive prompts</li>
-                  </> : <>
+                  </> : generationMode === "extraction" ? <>
                     <li>Choose the source audio asset you want to analyze</li>
                     <li>Select a track layer to isolate from the source</li>
                     <li>Extracted tracks are saved with the shared generation history</li>
+                  </> : <>
+                    <li>Choose the song and reference voice to transform</li>
+                    <li>F0 conditioning is recommended for singing</li>
+                    <li>All three returned audio layers remain downloadable</li>
                   </>}
                 </ul>
               </div>
@@ -1191,6 +1345,50 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   );
 }
 
+function VoiceChangeSourceField({
+  label,
+  mode,
+  onModeChange,
+  privateValue,
+  onPrivateChange,
+  privateChoices,
+  diskInput,
+  fileName,
+  inputId,
+  onUpload,
+  disabled,
+}: {
+  label: string;
+  mode: ExtractionSourceMode;
+  onModeChange: (mode: ExtractionSourceMode) => void;
+  privateValue: string;
+  onPrivateChange: (value: string) => void;
+  privateChoices: RemoteAudioChoice[];
+  diskInput: RemoteGenerationInput | null;
+  fileName: string;
+  inputId: string;
+  onUpload: (file?: File) => void;
+  disabled: boolean;
+}): JSX.Element {
+  return <div className="dance-station-voice-source">
+    <span className="dance-station-field-label-row">{label}</span>
+    <div className="dance-station-source-mode" role="radiogroup" aria-label={`${label} source`}>
+      {(["private", "disk"] as const).map((sourceMode) => <label key={sourceMode} className={`dance-station-source-mode__option${mode === sourceMode ? " is-active" : ""}`}>
+        <input type="radio" name={`${inputId}-mode`} checked={mode === sourceMode} onChange={() => onModeChange(sourceMode)} disabled={disabled} />
+        <span>{sourceMode === "private" ? "Private Asset" : "From Disk"}</span>
+      </label>)}
+    </div>
+    {mode === "private" ? <select value={privateValue} onChange={(event) => onPrivateChange((event.currentTarget as HTMLSelectElement).value)} disabled={disabled || !privateChoices.length}>
+      <option value="">Choose an audio asset</option>
+      {privateChoices.map((choice) => <option key={choice.id} value={choice.id}>{choice.title}{choice.creatorName ? ` · ${choice.creatorName}` : ""}</option>)}
+    </select> : <div className="dance-station-source-upload">
+      <input id={inputId} className="dance-station-source-file-input" type="file" accept="audio/*" onChange={(event) => { const input = event.currentTarget as HTMLInputElement; const file = input.files?.[0]; input.value = ""; onUpload(file); }} disabled={disabled} />
+      <label className="dance-station-source-upload-button" htmlFor={inputId}><Upload aria-hidden="true" size={14} strokeWidth={2} /><span>Upload audio</span></label>
+      <span className={`dance-station-source-file-name${diskInput ? " is-ready" : ""}`}>{fileName || "Choose an audio file from disk"}</span>
+    </div>}
+  </div>;
+}
+
 function RemoteGenerationRow({
   job,
   rewardSubmission,
@@ -1214,7 +1412,10 @@ function RemoteGenerationRow({
   const [rewardError, setRewardError] = useState("");
   const optionsButtonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const audioArtifact = job.artifacts.find((artifact) => artifact.role === "audio" && artifact.publicUrl);
+  const audioArtifacts = job.artifacts.filter((artifact) => artifact.role === "audio" && artifact.publicUrl);
+  const audioArtifact = audioArtifacts.find((artifact) => artifact.variant === "merged") ?? audioArtifacts[0];
+  const convertedVocalArtifact = audioArtifacts.find((artifact) => artifact.variant === "converted-vocal");
+  const instrumentalArtifact = audioArtifacts.find((artifact) => artifact.variant === "instrumental");
   const waveformArtifact = job.artifacts.find((artifact) => artifact.role === "waveform" && artifact.publicUrl);
   const failed = ["failed", "cancelled", "expired"].includes(job.status);
   const complete = job.status === "succeeded";
@@ -1372,6 +1573,10 @@ function RemoteGenerationRow({
                 <Download aria-hidden="true" size={14} strokeWidth={2} />
                 Download
               </a>
+              {job.runtime === "voice-change" ? <>
+                {convertedVocalArtifact?.publicUrl ? <a role="menuitem" href={convertedVocalArtifact.publicUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download converted vocal</a> : null}
+                {instrumentalArtifact?.publicUrl ? <a role="menuitem" href={instrumentalArtifact.publicUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download instrumental</a> : null}
+              </> : null}
               {rewardSubmission ? (
                 <span className="dance-station-generation-reward-status" role="menuitem">Reward: {rewardSubmission.status}</span>
               ) : (

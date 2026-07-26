@@ -120,7 +120,7 @@ export interface RemoteGenerationMetadata {
 }
 
 export interface RemoteGenerationRequest {
-  runtime: "ace-step";
+  runtime: "ace-step" | "voice-change";
   modelRevision: string;
   inputs: RemoteGenerationInput[];
   priority: "low" | "standard" | "high";
@@ -158,6 +158,12 @@ export interface RemotePaymentSettings {
   solExtractionAdditionalStepPriceUsdMicros: number;
   facelessExtractionSourceSecondPriceUsdMicros: number;
   solExtractionSourceSecondPriceUsdMicros: number;
+  facelessVoiceChangeBasePriceUsdMicros: number;
+  solVoiceChangeBasePriceUsdMicros: number;
+  facelessVoiceChangeAdditionalStepPriceUsdMicros: number;
+  solVoiceChangeAdditionalStepPriceUsdMicros: number;
+  facelessVoiceChangeSourceSecondPriceUsdMicros: number;
+  solVoiceChangeSourceSecondPriceUsdMicros: number;
   updatedAt: string;
 }
 
@@ -170,6 +176,7 @@ export interface RemotePricingConfig {
     musicDurationSeconds: number;
     musicInferenceSteps: number;
     extractionInferenceSteps: number;
+    voiceChangeInferenceSteps: number;
   };
   slippageBps: number;
   market: {
@@ -198,7 +205,7 @@ export interface RemotePaymentIntent {
   id: string;
   userId: string;
   walletAddress: string;
-  runtime: "ace-step";
+  runtime: "ace-step" | "voice-change";
   requestHash: string;
   currency: RemotePaymentCurrency;
   tokenMint: string;
@@ -231,6 +238,7 @@ export interface RemoteArtifact {
   id: string;
   jobId: string;
   role: "audio" | "preview" | "metadata" | "waveform";
+  variant?: "merged" | "converted-vocal" | "instrumental";
   objectPath: string;
   publicUrl?: string;
   mimeType: string;
@@ -254,7 +262,7 @@ export interface RemoteJob {
   id: string;
   userId: string;
   paymentIntentId: string;
-  runtime: "ace-step";
+  runtime: "ace-step" | "voice-change";
   modelRevision: string;
   requestHash: string;
   request: RemoteGenerationRequest;
@@ -562,10 +570,10 @@ export const api = {
   remoteGenerationPricingConfig: () =>
     apiFetch<RemotePricingConfig>("/remote-generation/pricing-config"),
 
-  remoteGenerationAvailability: (priority: RemoteGenerationRequest["priority"]) =>
+  remoteGenerationAvailability: (priority: RemoteGenerationRequest["priority"], runtime: RemoteGenerationRequest["runtime"] = "ace-step") =>
     apiFetch<RemoteAvailability>("/remote-generation/availability", {
       method: "POST",
-      body: JSON.stringify({ priority }),
+      body: JSON.stringify({ priority, runtime }),
     }),
 
   createRemotePaymentIntent: (request: RemoteGenerationRequest) =>
