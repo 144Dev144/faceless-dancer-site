@@ -42,18 +42,59 @@ jobs:
 
             mkdir -p "$APP_DIR"
 
-      - name: Copy repo to VPS
+      - name: Prepare deployment bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf deploy-bundle deploy-bundle.tar.gz
+          mkdir -p deploy-bundle
+          tar \
+            --exclude='./.git' \
+            --exclude='*/.git' \
+            --exclude='./docs' \
+            --exclude='./faceless-game-test' \
+            --exclude='./beat-storage' \
+            --exclude='*/beat-storage' \
+            --exclude='./data' \
+            --exclude='*/data' \
+            --exclude='./tmp' \
+            --exclude='*/tmp' \
+            --exclude='node_modules' \
+            --exclude='*/node_modules' \
+            --exclude='dist' \
+            --exclude='*/dist' \
+            --exclude='*.log' \
+            --exclude='./deploy-bundle' \
+            --exclude='./deploy-bundle.tar.gz' \
+            -cf - . | tar -xf - -C deploy-bundle
+          tar -czf deploy-bundle.tar.gz -C deploy-bundle .
+          du -h deploy-bundle.tar.gz
+
+      - name: Copy deployment bundle to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
           host: 65.108.242.227
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          source: "."
+          source: "deploy-bundle.tar.gz"
           target: ${{ secrets.VPS_APP_DIR }}
           rm: true
           strip_components: 0
           timeout: 30m
           command_timeout: 30m
+
+      - name: Unpack deployment bundle on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 65.108.242.227
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.VPS_APP_DIR }}"
+            test -f "$APP_DIR/deploy-bundle.tar.gz"
+            tar -xzf "$APP_DIR/deploy-bundle.tar.gz" -C "$APP_DIR"
+            rm -f "$APP_DIR/deploy-bundle.tar.gz"
 
       - name: Write .env on VPS
         uses: appleboy/ssh-action@v1.0.3

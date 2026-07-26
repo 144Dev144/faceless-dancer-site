@@ -130,6 +130,13 @@ dist
 # Local persistent sqlite bind mount
 data/
 
+# Generated audio/runtime data and deployment-only artifacts
+beat-storage/
+faceless-game-test/beat-storage/
+docs/prod-backups/
+deploy-bundle/
+deploy-bundle.tar.gz
+
 # Local planning notes and generated diagnostics
 /docs/plans/*.md
 /expanded-prompt-check.png

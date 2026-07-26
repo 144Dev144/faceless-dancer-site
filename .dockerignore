@@ -4,3 +4,14 @@ node_modules
 .env
 **/dist
 **/node_modules
+docs
+faceless-game-test
+beat-storage
+**/beat-storage
+data
+**/data
+tmp
+**/tmp
+*.log
+deploy-bundle
+deploy-bundle.tar.gz
