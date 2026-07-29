@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const inputSchema = z.object({
+  id: z.string().trim().min(1).max(80).optional(),
   role: z.string().trim().min(1).max(80),
   sourceUrl: z.string().url(),
   mimeType: z.string().trim().min(1).max(160),

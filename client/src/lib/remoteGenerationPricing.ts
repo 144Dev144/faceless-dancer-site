@@ -131,9 +131,12 @@ function atomicAmount(priceUsd: number, tokenPriceUsd: number, decimals: number,
 
 export function calculateRemotePricing(config: RemotePricingConfig, request: RemoteGenerationRequest, market: RemoteMarketPrice): RemotePricingQuote {
   const parameters = request.parameters;
-  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : "text2music";
-  const duration = positiveNumber(parameters.audio_duration, config.defaults.musicDurationSeconds);
-  const defaultSteps = taskType === "extract" ? config.defaults.extractionInferenceSteps : taskType === "voice_change" ? config.defaults.voiceChangeInferenceSteps : config.defaults.musicInferenceSteps;
+  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : "text2music";
+  const transitionPlan = taskType === "transition_chain" && parameters.transition_plan && typeof parameters.transition_plan === "object" ? parameters.transition_plan as { transitionClips?: Array<{ startSeconds: number; endSeconds: number }> } : undefined;
+  const transitionStageCount = transitionPlan?.transitionClips?.length ?? 1;
+  const transitionSeconds = transitionPlan?.transitionClips?.reduce((sum, clip) => sum + Math.max(0, clip.endSeconds - clip.startSeconds), 0) ?? 0;
+  const duration = taskType === "transition_chain" ? transitionSeconds : positiveNumber(parameters.audio_duration, config.defaults.musicDurationSeconds);
+  const defaultSteps = taskType === "extract" ? config.defaults.extractionInferenceSteps : taskType === "voice_change" ? config.defaults.voiceChangeInferenceSteps : taskType === "transition_chain" ? config.defaults.transitionInferenceSteps : config.defaults.musicInferenceSteps;
   const configuredSteps = taskType === "voice_change" ? parameters.diffusion_steps : parameters.inference_steps;
   const steps = Math.max(1, Math.round(positiveNumber(configuredSteps, defaultSteps)));
   const currency = request.paymentCurrency ?? "FACELESS";
@@ -143,22 +146,28 @@ export function calculateRemotePricing(config: RemotePricingConfig, request: Rem
     ? (isSol ? settings.solExtractionBasePriceUsdMicros : settings.facelessExtractionBasePriceUsdMicros)
     : taskType === "voice_change"
       ? (isSol ? settings.solVoiceChangeBasePriceUsdMicros : settings.facelessVoiceChangeBasePriceUsdMicros)
-      : (isSol ? settings.solBasePriceUsdMicros : settings.facelessBasePriceUsdMicros);
+      : taskType === "transition_chain"
+        ? (isSol ? settings.solTransitionBasePriceUsdMicros : settings.facelessTransitionBasePriceUsdMicros)
+        : (isSol ? settings.solBasePriceUsdMicros : settings.facelessBasePriceUsdMicros);
   const stepRateMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionAdditionalStepPriceUsdMicros : settings.facelessExtractionAdditionalStepPriceUsdMicros)
     : taskType === "voice_change"
       ? (isSol ? settings.solVoiceChangeAdditionalStepPriceUsdMicros : settings.facelessVoiceChangeAdditionalStepPriceUsdMicros)
-      : (isSol ? settings.solGenerationAdditionalStepPriceUsdMicros : settings.facelessGenerationAdditionalStepPriceUsdMicros);
+      : taskType === "transition_chain"
+        ? (isSol ? settings.solTransitionAdditionalStepPriceUsdMicros : settings.facelessTransitionAdditionalStepPriceUsdMicros)
+        : (isSol ? settings.solGenerationAdditionalStepPriceUsdMicros : settings.facelessGenerationAdditionalStepPriceUsdMicros);
   const durationRateMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionSourceSecondPriceUsdMicros : settings.facelessExtractionSourceSecondPriceUsdMicros)
     : taskType === "voice_change"
       ? (isSol ? settings.solVoiceChangeSourceSecondPriceUsdMicros : settings.facelessVoiceChangeSourceSecondPriceUsdMicros)
-      : (isSol ? settings.solGenerationAdditionalSecondPriceUsdMicros : settings.facelessGenerationAdditionalSecondPriceUsdMicros);
+      : taskType === "transition_chain"
+        ? (isSol ? settings.solTransitionSecondPriceUsdMicros : settings.facelessTransitionSecondPriceUsdMicros)
+        : (isSol ? settings.solGenerationAdditionalSecondPriceUsdMicros : settings.facelessGenerationAdditionalSecondPriceUsdMicros);
   const sourceDurationSeconds = taskType === "extract" || taskType === "voice_change" ? nonNegativeNumber(request.inputs.find((input) => input.role === (taskType === "voice_change" ? "song" : input.role))?.durationSeconds ?? parameters.source_duration_seconds) : 0;
   if ((taskType === "extract" || taskType === "voice_change") && durationRateMicros > 0 && sourceDurationSeconds <= 0) throw new Error(`${taskType === "voice_change" ? "Voice Change song" : "Extraction source"} duration is required for the configured per-second price`);
-  const additionalDurationSeconds = taskType === "extract" || taskType === "voice_change" ? sourceDurationSeconds : Math.max(0, duration - config.defaults.musicDurationSeconds);
-  const calculatedPriceMicros = basePriceMicros
-    + Math.max(0, steps - defaultSteps) * stepRateMicros
+  const additionalDurationSeconds = taskType === "transition_chain" ? transitionSeconds * transitionStageCount : taskType === "extract" || taskType === "voice_change" ? sourceDurationSeconds : Math.max(0, duration - config.defaults.musicDurationSeconds);
+  const calculatedPriceMicros = basePriceMicros * (taskType === "transition_chain" ? transitionStageCount : 1)
+    + Math.max(0, steps - defaultSteps) * stepRateMicros * (taskType === "transition_chain" ? transitionStageCount : 1)
     + Math.round(additionalDurationSeconds * durationRateMicros);
   const freeSignature = config.paymentMode === "free-signature";
   const priceUsd = freeSignature ? 0 : calculatedPriceMicros / 1_000_000;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { AudioWaveform, CalendarDays, CheckCircle2, CircleAlert, Clock3, Download, Info, MoreHorizontal, Music2, Play, RefreshCw, RotateCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-preact";
 import {
@@ -23,6 +23,7 @@ import type { LibraryItem } from "../../lib/api";
 import type { SessionState } from "../../hooks/useSession";
 import { AudioPlayButton } from "../audio/SiteAudioPlayer";
 import { WaveformVisual } from "../audio/WaveformVisual";
+import { TransitionWorkspace, type TransitionAudioChoice, type TransitionWorkspaceValue } from "./TransitionWorkspace";
 
 interface Props {
   session: SessionState;
@@ -47,7 +48,7 @@ const extractionTracks = [
   "woodwinds",
 ] as const;
 
-type GenerationMode = "music" | "extraction" | "voice-change";
+type GenerationMode = "music" | "extraction" | "voice-change" | "transition";
 type ExtractionSourceMode = "private" | "disk";
 type RemoteSubmissionStage = "payment-request" | "wallet-payment" | "payment-verification" | "queue-submission";
 const MAX_REMOTE_AUDIO_DURATION_SECONDS = 360;
@@ -81,7 +82,7 @@ function remoteGenerationFailureMessage(
     case "payment-verification":
       return "We could not verify the payment. Check your wallet activity before trying again.";
     case "queue-submission":
-      return `Payment was accepted, but the ${generationMode === "music" ? "music generation" : generationMode === "extraction" ? "music extraction" : "voice change"} could not be queued. Please try again.`;
+      return `Payment was accepted, but the ${generationMode === "music" ? "music generation" : generationMode === "extraction" ? "music extraction" : generationMode === "transition" ? "music transition" : "voice change"} could not be queued. Please try again.`;
   }
 }
 
@@ -139,6 +140,7 @@ function generationTitle(job: RemoteJob): string {
   const taskType = parameters && typeof parameters.task_type === "string" ? parameters.task_type : "text2music";
   const trackName = parameters && typeof parameters.track_name === "string" ? parameters.track_name.trim().replaceAll("_", " ") : "";
   if (taskType === "voice_change") return title || "Voice change";
+  if (taskType === "transition_chain") return title || "Music transition";
   if (title) return taskType === "extract" && trackName ? `${title} · ${trackName}` : title;
   const prompt = parameters && typeof parameters.prompt === "string" ? parameters.prompt.trim() : "";
   if (taskType === "extract" && trackName) return `Extracted ${trackName}`;
@@ -174,6 +176,7 @@ function formatGenerationDuration(seconds?: number): string | null {
 
 function generationModelLabel(job: RemoteJob): string {
   if (job.runtime === "voice-change") return "UVR + Seed-VC";
+  if (job.request.parameters?.task_type === "transition_chain") return "ACE-Step Transition";
   const model = typeof job.request.parameters?.model === "string" ? job.request.parameters.model : job.modelRevision;
   if (model.includes("turbo")) return "ACE-Step Turbo";
   if (model.includes("base")) return "ACE-Step Base";
@@ -311,6 +314,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const [guidanceScale, setGuidanceScale] = useState(1);
   const [extractionInferenceSteps, setExtractionInferenceSteps] = useState(80);
   const [extractionGuidanceScale, setExtractionGuidanceScale] = useState(1);
+  const [transitionInferenceSteps, setTransitionInferenceSteps] = useState(12);
+  const [transitionGuidanceScale, setTransitionGuidanceScale] = useState(1);
   const [selectedLokrId, setSelectedLokrId] = useState("");
   const [lokrScale, setLokrScale] = useState(1);
   const [extractionSourceMode, setExtractionSourceMode] = useState<ExtractionSourceMode>("private");
@@ -358,6 +363,10 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const [phase, setPhase] = useState("Ready");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [transitionWorkspace, setTransitionWorkspace] = useState<TransitionWorkspaceValue | null>(null);
+  const [transitionDiskChoice, setTransitionDiskChoice] = useState<TransitionAudioChoice | null>(null);
+  const [transitionUploadBusy, setTransitionUploadBusy] = useState(false);
+  const [transitionUploadError, setTransitionUploadError] = useState("");
   const busyRef = useRef(false);
   const [expandedJobIds, setExpandedJobIds] = useState<Set<string>>(new Set());
   const savedRemoteJobsRef = useRef<Set<string>>(new Set());
@@ -419,6 +428,39 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const extractionSourceInput = extractionSourceMode === "private" ? selectedExtractionSource?.input : diskSourceInput;
   const voiceSongInput = voiceSongSourceMode === "private" ? selectedVoiceSongSource?.input : voiceSongDiskInput;
   const voiceReferenceInput = voiceReferenceSourceMode === "private" ? selectedVoiceReferenceSource?.input : voiceReferenceDiskInput;
+  const transitionChoices = useMemo<TransitionAudioChoice[]>(() => transitionDiskChoice ? [...audioChoices, transitionDiskChoice] : audioChoices, [audioChoices, transitionDiskChoice]);
+  const onTransitionWorkspaceChange = useCallback((value: TransitionWorkspaceValue) => {
+    setTransitionWorkspace(value);
+    setTransitionInferenceSteps(value.plan.inferenceSteps);
+    setTransitionGuidanceScale(value.plan.guidanceScale);
+  }, []);
+  const uploadTransitionSource = useCallback(async (file: File) => {
+    if (!session.authenticated) {
+      setTransitionUploadError("Connect your wallet before uploading a source.");
+      return undefined;
+    }
+    setTransitionUploadBusy(true);
+    setTransitionUploadError("");
+    try {
+      const durationSeconds = await readAudioDuration(file);
+      if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+        throw new Error("Could not read the duration of that audio file.");
+      }
+      const response = await api.uploadRemoteGenerationSource(file);
+      const choice: TransitionAudioChoice = {
+        id: `disk-${Date.now().toString(36)}`,
+        title: file.name,
+        input: { ...response.input, durationSeconds },
+      };
+      setTransitionDiskChoice(choice);
+      return choice;
+    } catch (nextError) {
+      setTransitionUploadError(nextError instanceof Error ? nextError.message : "Could not upload the transition source audio");
+      return undefined;
+    } finally {
+      setTransitionUploadBusy(false);
+    }
+  }, [session.authenticated]);
   const extractionSourceTooLong = typeof extractionSourceInput?.durationSeconds === "number"
     && extractionSourceInput.durationSeconds > MAX_REMOTE_AUDIO_DURATION_SECONDS;
 
@@ -477,6 +519,31 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   };
 
   const request = useMemo<RemoteGenerationRequest>(() => {
+    if (generationMode === "transition") {
+      const workspace = transitionWorkspace;
+      return {
+        runtime: "ace-step",
+        modelRevision: "ace-step-1.5",
+        inputs: workspace?.inputs ?? [],
+        priority: "standard",
+        paymentCurrency,
+        metadata: { title: resolvedTitle },
+        parameters: {
+          task_type: "transition_chain",
+          model: "acestep-v15-turbo",
+          audio_format: "flac",
+          batch_size: 1,
+          inference_steps: transitionInferenceSteps,
+          guidance_scale: transitionGuidanceScale,
+          thinking: false,
+          use_tiled_decode: true,
+          dcw_enabled: false,
+          infer_method: "ode",
+          sampler_mode: "euler",
+          transition_plan: workspace?.plan ?? { schemaVersion: 1, sourceClips: [], transitionClips: [], inferenceSteps: 12, guidanceScale: 1 },
+        },
+      };
+    }
     if (generationMode === "voice-change") {
       return {
         runtime: "voice-change",
@@ -572,7 +639,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
         ...(selectedLokr ? { lokr_scale: lokrScale } : {}),
       },
     };
-  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
+  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, transitionGuidanceScale, transitionInferenceSteps, transitionWorkspace, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
 
   const hasActiveJobs = jobs.some((candidate) => activeStatuses.has(candidate.status));
   busyRef.current = busy;
@@ -760,6 +827,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
       && !voiceSongInput;
     if (!pricingConfig || !marketPrice
       || (generationMode === "extraction" && (!extractionSourceInput || extractionSourceTooLong))
+      || (generationMode === "transition" && !transitionWorkspace?.valid)
       || voiceChangeNeedsSongDuration) {
       setPricing(null);
       return;
@@ -769,7 +837,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
     } catch {
       setPricing(null);
     }
-  }, [extractionSourceInput, extractionSourceTooLong, generationMode, marketPrice, pricingConfig, request, voiceReferenceInput, voiceSongInput]);
+  }, [extractionSourceInput, extractionSourceTooLong, generationMode, marketPrice, pricingConfig, request, transitionWorkspace, voiceReferenceInput, voiceSongInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -873,6 +941,11 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
       }
       if (extractionSourceTooLong) {
         setError(`Source audio must be ${MAX_REMOTE_AUDIO_DURATION_SECONDS} seconds or shorter for extraction.`);
+        return;
+      }
+    } else if (generationMode === "transition") {
+      if (!transitionWorkspace?.valid) {
+        setError(transitionWorkspace?.errors[0] ?? "Build a valid transition arrangement before generating.");
         return;
       }
     } else {
@@ -1006,7 +1079,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   return (
     <section className="dance-station-tool-panel dance-station-remote-generation">
       <div className="dance-station-generation-workspace">
-        <section className="dance-station-generation-builder">
+        <section className={`dance-station-generation-builder${generationMode === "transition" ? " is-transition" : ""}`}>
           <div className="dance-station-generation-heading">
             <div className="dance-station-generation-heading__title">
               <span className="dance-station-generation-heading__icon"><Sparkles aria-hidden="true" size={22} strokeWidth={1.8} /></span>
@@ -1020,6 +1093,16 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                   disabled={busy}
                 >
                   Create Music
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={generationMode === "transition"}
+                  className={`dance-station-generation-mode-tab${generationMode === "transition" ? " is-active" : ""}`}
+                  onClick={() => setGenerationMode("transition")}
+                  disabled={busy}
+                >
+                  Transition
                 </button>
                 <button
                   type="button"
@@ -1204,6 +1287,14 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                       </label>
                     </div>
                   </>
+                ) : generationMode === "transition" ? (
+                  <div className="dance-station-transition-settings">
+                    <p className="dance-station-availability-line">Build a clip chain and define each transition.</p>
+                    <div className="dance-station-control-row">
+                      <label>Inference steps<input type="number" min="1" max="200" value={transitionInferenceSteps} onInput={(event) => setTransitionInferenceSteps(Number((event.currentTarget as HTMLInputElement).value) || 1)} disabled={busy} /></label>
+                      <label>Guidance scale<input type="number" min="0" max="30" step="0.1" value={transitionGuidanceScale} onInput={(event) => setTransitionGuidanceScale(Number((event.currentTarget as HTMLInputElement).value) || 0)} disabled={busy} /></label>
+                    </div>
+                  </div>
                 ) : (
                   <>
                     <VoiceChangeSourceField
@@ -1264,7 +1355,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                 <button type="button" className="dance-station-generate-button" onClick={() => void submitGeneration()} disabled={busy || diskSourceBusy || voiceUploadBusy || !health?.enabled || !session.authenticated || !currentPricing}>
                   {busy ? <span className="dance-station-generation-spinner" aria-hidden="true" /> : <Sparkles aria-hidden="true" size={17} strokeWidth={2.1} />}
                   <span className="dance-station-generate-button__copy">
-                    <strong>{busy ? "Submitting" : generationMode === "music" ? "Create" : generationMode === "extraction" ? "Extract" : "Change voice"}</strong>
+                    <strong>{busy ? "Submitting" : generationMode === "music" ? "Create" : generationMode === "extraction" ? "Extract" : generationMode === "transition" ? "Create transition" : "Change voice"}</strong>
                     {!busy ? <small>{costLabel}</small> : null}
                   </span>
                 </button>
@@ -1274,7 +1365,10 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
             </section>
 
             <section className="dance-station-generation-preview" aria-label="Generation preview">
-              <div className="dance-station-generation-tips">
+              <div className={`dance-station-transition-workspace-shell${generationMode === "transition" ? "" : " is-hidden"}`} aria-hidden={generationMode !== "transition"}>
+                <TransitionWorkspace choices={transitionChoices} inferenceSteps={transitionInferenceSteps} guidanceScale={transitionGuidanceScale} busy={busy} uploadBusy={transitionUploadBusy} uploadError={transitionUploadError} onUpload={uploadTransitionSource} onChange={onTransitionWorkspaceChange} />
+              </div>
+              {generationMode !== "transition" ? <div className="dance-station-generation-tips">
                 <p>Tips</p>
                 <ul>
                   {generationMode === "music" ? <>
@@ -1291,7 +1385,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                     <li>All three returned audio layers remain downloadable</li>
                   </>}
                 </ul>
-              </div>
+              </div> : null}
             </section>
           </div>
         </section>

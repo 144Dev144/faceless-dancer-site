@@ -104,6 +104,7 @@ export interface CreatorPublishTokenRecord {
 }
 
 export interface RemoteGenerationInput {
+  id?: string;
   role: string;
   sourceUrl: string;
   mimeType: string;
@@ -164,6 +165,12 @@ export interface RemotePaymentSettings {
   solVoiceChangeAdditionalStepPriceUsdMicros: number;
   facelessVoiceChangeSourceSecondPriceUsdMicros: number;
   solVoiceChangeSourceSecondPriceUsdMicros: number;
+  facelessTransitionBasePriceUsdMicros: number;
+  solTransitionBasePriceUsdMicros: number;
+  facelessTransitionAdditionalStepPriceUsdMicros: number;
+  solTransitionAdditionalStepPriceUsdMicros: number;
+  facelessTransitionSecondPriceUsdMicros: number;
+  solTransitionSecondPriceUsdMicros: number;
   updatedAt: string;
 }
 
@@ -177,6 +184,7 @@ export interface RemotePricingConfig {
     musicInferenceSteps: number;
     extractionInferenceSteps: number;
     voiceChangeInferenceSteps: number;
+    transitionInferenceSteps: number;
   };
   slippageBps: number;
   market: {
