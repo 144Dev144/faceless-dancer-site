@@ -10929,6 +10929,8 @@ input.dance-station-source-file-input {
   flex: 1 1 auto;
   flex-direction: column;
   gap: 10px;
+  overflow-x: hidden;
+  overflow-y: auto;
   color: #c7d7ee;
 }
 
@@ -11318,7 +11320,7 @@ input.dance-station-source-file-input {
 
 .dance-station-transition-details {
   display: grid;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
   min-height: 0;
