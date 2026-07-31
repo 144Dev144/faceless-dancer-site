@@ -142,3 +142,6 @@ deploy-bundle.tar.gz
 /expanded-prompt-check.png
 /pump_hourly.csv
 /tmp/
+
+# Empty local artifact from rhythm catalog inspection
+/server/legacyBeatEntryId
