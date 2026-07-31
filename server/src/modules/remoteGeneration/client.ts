@@ -14,10 +14,11 @@ export type RemotePaymentCurrency = "FACELESS" | "SOL";
 
 export interface RemoteGenerationMetadata {
   title: string;
+  reanalysisOfJobId?: string;
 }
 
 export interface RemoteGenerationRequest {
-  runtime: "ace-step" | "voice-change";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats";
   modelRevision: string;
   inputs: RemoteGenerationInput[];
   priority: "low" | "standard" | "high";
@@ -65,6 +66,19 @@ export interface RemotePricingConfig {
     solVoiceChangeAdditionalStepPriceUsdMicros: number;
     facelessVoiceChangeSourceSecondPriceUsdMicros: number;
     solVoiceChangeSourceSecondPriceUsdMicros: number;
+    facelessRhythmBeatsBasePriceUsdMicros: number;
+    solRhythmBeatsBasePriceUsdMicros: number;
+    facelessRhythmBeatsAdditionalStemPriceUsdMicros: number;
+    solRhythmBeatsAdditionalStemPriceUsdMicros: number;
+    facelessRhythmBeatsAdditionalStepPriceUsdMicros: number;
+    solRhythmBeatsAdditionalStepPriceUsdMicros: number;
+    facelessRhythmBeatsSourceSecondPriceUsdMicros: number;
+    solRhythmBeatsSourceSecondPriceUsdMicros: number;
+    musicFreeForHolders: boolean;
+    extractionFreeForHolders: boolean;
+    voiceChangeFreeForHolders: boolean;
+    transitionFreeForHolders: boolean;
+    rhythmBeatsFreeForHolders: boolean;
     updatedAt: string;
   };
   defaults: {
@@ -72,6 +86,9 @@ export interface RemotePricingConfig {
     musicInferenceSteps: number;
     extractionInferenceSteps: number;
     voiceChangeInferenceSteps: number;
+    transitionInferenceSteps: number;
+    rhythmBeatsInferenceSteps: number;
+    rhythmBeatsBaseStemCount: number;
   };
   slippageBps: number;
   market: {
@@ -100,7 +117,7 @@ export interface PaymentIntent {
   id: string;
   userId: string;
   walletAddress: string;
-  runtime: "ace-step" | "voice-change";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats";
   requestHash: string;
   currency: RemotePaymentCurrency;
   tokenMint: string;
@@ -112,6 +129,8 @@ export interface PaymentIntent {
   priceExpiresAt: string;
   recipientAddress: string;
   paymentReference: string;
+  paymentMode: "token-transfer" | "free-signature";
+  holderFree: boolean;
   status: string;
   transactionSignature?: string;
   expiresAt: string;
@@ -138,8 +157,8 @@ export class LaunchServerRequestError extends Error {
 export interface RemoteArtifact {
   id: string;
   jobId: string;
-  role: "audio" | "preview" | "metadata";
-  variant?: "merged" | "converted-vocal" | "instrumental";
+  role: "audio" | "preview" | "metadata" | "waveform" | "chart";
+  variant?: string;
   objectPath: string;
   publicUrl?: string;
   mimeType: string;
@@ -159,11 +178,25 @@ export interface RemoteJobEvent {
   createdAt: string;
 }
 
+export interface RemoteJobProgress {
+  status: string;
+  phase: string;
+  progress: number | null;
+  completedSteps: number | null;
+  totalSteps: number | null;
+  stage?: string;
+  stageIndex?: number;
+  stageCount?: number;
+  stageKind?: string;
+  message?: string;
+  updatedAt: string;
+}
+
 export interface RemoteJob {
   id: string;
   userId: string;
   paymentIntentId: string;
-  runtime: "ace-step" | "voice-change";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats";
   modelRevision: string;
   requestHash: string;
   request: RemoteGenerationRequest;
@@ -172,6 +205,7 @@ export interface RemoteJob {
   attemptCount: number;
   errorCode?: string;
   errorMessage?: string;
+  progress?: RemoteJobProgress;
   createdAt: string;
   updatedAt: string;
   artifacts: RemoteArtifact[];
@@ -269,11 +303,12 @@ export class LaunchServerClient {
     return this.request<RemoteJob>(`/v1/jobs/${encodeURIComponent(jobId)}`);
   }
 
-  async listJobs(userId: string, input: { limit?: number; cursor?: string; activeOnly?: boolean; knownJobIds?: string[] } = {}): Promise<RemoteJobHistoryPage> {
+  async listJobs(userId: string, input: { limit?: number; cursor?: string; activeOnly?: boolean; knownJobIds?: string[]; runtime?: RemoteGenerationRequest["runtime"] } = {}): Promise<RemoteJobHistoryPage> {
     const params = new URLSearchParams({ limit: String(input.limit ?? 50) });
     if (input.cursor) params.set("cursor", input.cursor);
     if (input.activeOnly) params.set("active", "true");
     if (input.knownJobIds?.length) params.set("knownIds", input.knownJobIds.join(","));
+    if (input.runtime) params.set("runtime", input.runtime);
     return this.request<RemoteJobHistoryPage>(`/v1/users/${encodeURIComponent(userId)}/jobs?${params.toString()}`);
   }
 

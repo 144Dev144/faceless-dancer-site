@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { CSSProperties } from "preact/compat";
+import { ArrowLeft, CircleHelp, Minus, Music2, Plus, RefreshCw, Sparkles, Trophy, Volume2, X } from "lucide-preact";
 import { runtimeConfig } from "../config/runtime";
-import gameTitleImage from "../../assets/game/game-title.png";
+import danceStageStartButtonImage from "../../assets/game/dance-stage-start-button-cropped.png";
+import danceStageTitleImage from "../../assets/game/dance-stage-title.png";
 import { navigateInApp } from "../../lib/clientNavigation";
 import { createPrecisePlaybackEngine, type PrecisePlaybackEngine } from "../lib/audio/precisePlaybackEngine";
 import {
@@ -42,6 +44,7 @@ interface HybridAnalysisResult {
 interface EnabledSongSummary {
   beatEntryId: string;
   title: string;
+  durationSeconds: number;
   majorBeatCount: number;
   gameBeatCount: number;
   coverImageUrl: string | null;
@@ -178,6 +181,16 @@ const orbControlLabels: Record<OrbBeatLane, string> = {
   r3: "R3"
 };
 
+const NOTE_SPEED_MIN = 0.2;
+const NOTE_SPEED_MAX = 2;
+const NOTE_SPEED_STEP = 0.1;
+const DEFAULT_NOTE_SPEED = 1.0;
+
+function formatGameDuration(value: number | undefined): string {
+  const seconds = Math.max(0, Math.round(value ?? 0));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function formatGameModeLabel(gameMode: GameMode): string {
   if (gameMode === "orb_beat") return "Orb Beat";
   if (gameMode === "laser_shoot") return "Rhythm Wizards";
@@ -304,6 +317,8 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   const [selectedGameMode, setSelectedGameMode] = useState<GameMode>("step_arrows");
   const [selectedDifficulty, setSelectedDifficulty] = useState<GameDifficulty>("normal");
   const [selectedWizardAiDifficulty, setSelectedWizardAiDifficulty] = useState<WizardAiDifficulty>("adept");
+  const [noteSpeed, setNoteSpeed] = useState(DEFAULT_NOTE_SPEED);
+  const [showHowToPlay, setShowHowToPlay] = useState(false);
   const [isLandscape, setIsLandscape] = useState(false);
 
   const [loadingSongs, setLoadingSongs] = useState(false);
@@ -977,24 +992,6 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     for (const card of cards) {
       const cardCenter = card.offsetTop + card.offsetHeight * 0.5;
       const distance = Math.abs(cardCenter - centerY);
-      const normalized = Math.max(-1.25, Math.min(1.25, (cardCenter - centerY) / (container.clientHeight * 0.5)));
-      const distanceNorm = Math.min(1, Math.abs(normalized));
-      const rotateX = normalized * -48;
-      const rotateY = normalized * -10;
-      const depth = 72 - distanceNorm * 112;
-      const lift = normalized * 24;
-      const scale = 1 - distanceNorm * 0.18;
-      const opacity = 1 - distanceNorm * 0.58;
-      const saturation = 1.18 - distanceNorm * 0.34;
-      const brightness = 1.08 - distanceNorm * 0.26;
-      card.style.setProperty("--card-rotate-x", `${rotateX.toFixed(2)}deg`);
-      card.style.setProperty("--card-rotate-y", `${rotateY.toFixed(2)}deg`);
-      card.style.setProperty("--card-z", `${depth.toFixed(2)}px`);
-      card.style.setProperty("--card-shift-y", `${lift.toFixed(2)}px`);
-      card.style.setProperty("--card-scale", scale.toFixed(3));
-      card.style.setProperty("--card-opacity", opacity.toFixed(3));
-      card.style.setProperty("--card-saturation", saturation.toFixed(3));
-      card.style.setProperty("--card-brightness", brightness.toFixed(3));
       if (distance < bestDistance) {
         bestDistance = distance;
         bestId = card.dataset.songId || bestId;
@@ -1034,19 +1031,14 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     });
   };
 
-  const focusSongCard = (songId: string, smooth = false): void => {
+  const focusSongCard = (songId: string): void => {
     setSelectedId(songId);
     const container = rolodexRef.current;
     if (!container) return;
     const cards = Array.from(container.querySelectorAll<HTMLButtonElement>(".game-song-card[data-song-id]"));
     const card = cards.find((item) => item.dataset.songId === songId);
     if (!card) return;
-    const targetScrollTop = card.offsetTop - (container.clientHeight - card.offsetHeight) * 0.5;
-    container.scrollTo({
-      top: Math.max(0, targetScrollTop),
-      behavior: smooth ? "smooth" : "auto"
-    });
-    handleRolodexScroll();
+    card.focus({ preventScroll: true });
   };
 
   const loadLeaderboards = async (
@@ -1646,7 +1638,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
       const focusId = selectedId && songs.some((song) => song.beatEntryId === selectedId)
         ? selectedId
         : songs[0].beatEntryId;
-      focusSongCard(focusId, false);
+      focusSongCard(focusId);
     });
     const onResize = () => handleRolodexScroll();
     window.addEventListener("resize", onResize);
@@ -1828,11 +1820,13 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     setRhythmWizardsMoveButtons({ left: false, right: false });
   }, [mode, phase, selectedGameMode]);
 
+  // Note speed changes only the visual travel window; note timestamps and judgement timing stay on the song clock.
+  const noteApproachSeconds = runtimeConfig.gameApproachSeconds / noteSpeed;
   const visibleNotes = useMemo(() => {
     const startWindow = currentTimeSeconds - windows.poor - 0.05;
-    const endWindow = currentTimeSeconds + runtimeConfig.gameApproachSeconds + 0.25;
+    const endWindow = currentTimeSeconds + noteApproachSeconds + 0.25;
     return notesRef.current.filter((note) => note.timeSeconds <= endWindow && Math.max(note.timeSeconds, note.endSeconds) >= startWindow);
-  }, [chartRevision, currentTimeSeconds, windows.poor]);
+  }, [chartRevision, currentTimeSeconds, noteApproachSeconds, windows.poor]);
 
   const activeLanes = selectedGameMode === "orb_beat" ? orbBeatLaneOrder : stepArrowLaneOrder;
   const rhythmWizardsPlayerTier = rhythmWizardsState
@@ -1900,35 +1894,49 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
     }
   };
 
+  const adjustNoteSpeed = (direction: -1 | 1): void => {
+    setNoteSpeed((current) => {
+      const next = current + direction * NOTE_SPEED_STEP;
+      return Math.max(NOTE_SPEED_MIN, Math.min(NOTE_SPEED_MAX, Math.round(next * 10) / 10));
+    });
+  };
+
   if (mode === "menu") {
     return (
       <section className="game-view-shell game-view-shell--menu">
         <header className="game-ui-header">
-          <a className="game-ui-link" href={homeHref} onClick={(event) => navigateInApp(event, homeHref)}>Back Home</a>
+          <a className="game-ui-link" href={homeHref} onClick={(event) => navigateInApp(event, homeHref)}>
+            <ArrowLeft size={16} aria-hidden="true" />
+            <span>Back Home</span>
+          </a>
           <h2 className="game-menu-title">
-            <img src={gameTitleImage} alt="Faceless Dance Stage" draggable={false} />
+            <img src={danceStageTitleImage} alt="Faceless Dance Stage" draggable={false} />
           </h2>
-          <button
-            type="button"
-            onClick={() => loadSongs({ reset: true, volumeId: selectedVolumeId, offset: 0 })}
-            disabled={loadingSongs}
-          >
-            {loadingSongs ? "Refreshing..." : "Refresh Songs"}
-          </button>
+          <div className="game-menu-header-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => loadSongs({ reset: true, volumeId: selectedVolumeId, offset: 0 })}
+              disabled={loadingSongs}
+            >
+              <RefreshCw size={15} aria-hidden="true" className={loadingSongs ? "game-icon-spin" : ""} />
+              <span>{loadingSongs ? "Refreshing" : "Refresh Songs"}</span>
+            </button>
+            <button
+              type="button"
+              className={`secondary game-menu-audio-toggle${menuAudioEnabled ? " enabled" : ""}`}
+              onClick={enableMenuAudio}
+              aria-pressed={menuAudioEnabled}
+            >
+              <Volume2 size={15} aria-hidden="true" />
+              <span>{menuAudioEnabled ? "Audio Enabled" : "Enable Audio"}</span>
+            </button>
+          </div>
         </header>
 
         <div className="game-menu-screen game-menu-screen--arc">
           <div className="game-menu-heading">
             <h3>Select Your Beat</h3>
-            <div className="game-menu-heading-actions">
-              <button
-                type="button"
-                className={`game-menu-audio-toggle${menuAudioEnabled ? " enabled" : " secondary"}`}
-                onClick={enableMenuAudio}
-              >
-                {menuAudioEnabled ? "Audio Enabled" : "Enable Audio"}
-              </button>
-            </div>
           </div>
 
           <div className="game-menu-arc-layout">
@@ -1974,20 +1982,25 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                         type="button"
                         data-song-id={song.beatEntryId}
                         className={`game-song-card${selectedId === song.beatEntryId ? " selected" : ""}`}
-                        onClick={() => focusSongCard(song.beatEntryId, true)}
+                        onClick={() => focusSongCard(song.beatEntryId)}
                       >
                         {song.coverImageUrl ? (
                           <img className="game-song-card-bg" src={song.coverImageUrl} alt="" draggable={false} />
                         ) : null}
                         <div className="game-song-card-overlay" />
                         <div className="game-song-card-glare" />
-                        <strong>{song.title}</strong>
-                        <span>
-                          {song.availableDifficulties?.length > 0
-                            ? `${song.availableDifficulties.join(", ")}`
-                            : `${song.gameBeatCount || song.majorBeatCount} notes`}
-                        </span>
-                        <span>{song.creatorName}</span>
+                        <div className="game-song-card-copy">
+                          <strong>{song.title}</strong>
+                          <span>
+                            {song.availableDifficulties?.length > 0
+                              ? `${song.availableDifficulties.join(", ")}`
+                              : `${song.gameBeatCount || song.majorBeatCount} notes`}
+                          </span>
+                          <span>{song.creatorName}</span>
+                          <small>
+                            {formatGameDuration(song.durationSeconds)} <i aria-hidden="true">·</i> {song.gameBeatCount || song.majorBeatCount} notes
+                          </small>
+                        </div>
                       </button>
                     ))}
                     {loadingMoreSongs ? (
@@ -2001,7 +2014,34 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
               </div>
             </div>
 
+            <section className="game-menu-stage" aria-label="Selected song">
+              <div className="game-menu-stage-visual">
+                <div className="game-menu-stage-bars" aria-hidden="true">
+                  {Array.from({ length: 34 }, (_, index) => (
+                    <span key={index} style={{ height: `${24 + ((index * 17) % 68)}%` }} />
+                  ))}
+                </div>
+                <div className="game-menu-stage-ring" aria-hidden="true" />
+              </div>
+              <div className="game-menu-now-playing">
+                <p className="game-menu-kicker">Now Playing</p>
+                <h3>{selectedSongSummary?.title ?? "Choose a beat"}</h3>
+                <p className="game-menu-stage-creator">{selectedSongSummary?.creatorName ?? "The Faceless Dancer"}</p>
+                <p className="game-menu-stage-difficulty">{selectedDifficulty.toUpperCase()}</p>
+                <div className="game-menu-stage-meta">
+                  <span><Music2 size={14} aria-hidden="true" /> {selectedSongSummary?.gameBeatCount ?? selectedSongSummary?.majorBeatCount ?? 0} notes</span>
+                  <span>{formatGameDuration(selectedEntry?.entry.durationSeconds ?? selectedSongSummary?.durationSeconds)}</span>
+                  <span><Sparkles size={14} aria-hidden="true" /> {formatGameModeLabel(selectedGameMode)}</span>
+                </div>
+                <div className="game-menu-load-status">
+                  <span>Loaded {songs.length} of {songsTotal}</span>
+                  <div aria-hidden="true"><span style={{ width: `${songsTotal > 0 ? Math.min(100, (songs.length / songsTotal) * 100) : 0}%` }} /></div>
+                </div>
+              </div>
+            </section>
+
             <aside className="game-menu-control-panel">
+              <h3 className="game-menu-control-title">Game Settings</h3>
               {selectedSongSummary ? (
                 <>
                   <div className="game-menu-control-group">
@@ -2067,60 +2107,104 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                   </p>
                 </>
               ) : null}
-              <div className="game-menu-actions game-menu-actions--cta">
-                <button
-                  type="button"
-                  disabled={
-                    isBlockedByLinkedDanceOff ||
-                    !selectedId ||
-                    loadingEntry ||
-                    ((selectedSongSummary?.modeDifficultyBeatCounts?.[selectedGameMode]?.[selectedDifficulty] ?? 0) <= 0 &&
-                      !(
-                        (selectedGameMode === "step_arrows" || selectedGameMode === "laser_shoot") &&
-                        selectedDifficulty === "normal" &&
-                        (selectedSongSummary?.majorBeatCount ?? 0) > 0
-                      ))
-                  }
-                  onClick={() => startSoloGame()}
-                >
-                  {loadingEntry ? "Loading Song..." : "Start Game"}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={
-                    isBlockedByLinkedDanceOff ||
-                    !selectedId ||
-                    loadingEntry ||
-                    ((selectedSongSummary?.modeDifficultyBeatCounts?.[selectedGameMode]?.[selectedDifficulty] ?? 0) <= 0 &&
-                      !(
-                        (selectedGameMode === "step_arrows" || selectedGameMode === "laser_shoot") &&
-                        selectedDifficulty === "normal" &&
-                        (selectedSongSummary?.majorBeatCount ?? 0) > 0
-                      ))
-                  }
-                  onClick={() => {
-                    window.dispatchEvent(
-                      new CustomEvent("danceoff:create-request", {
-                        detail: {
-                          beatEntryId: selectedId,
-                          gameMode: selectedGameMode,
-                          difficulty: selectedDifficulty,
-                        },
-                      })
-                    );
-                    window.dispatchEvent(new CustomEvent("danceoff:panel:open"));
-                  }}
-                >
-                  Dance-Off (PVP)
-                </button>
-                <button type="button" className="secondary" disabled={!selectedId} onClick={() => setMode("scores")}>View High Scores</button>
+              <div className="game-menu-control-group game-menu-control-group--speed">
+                <p className="game-menu-group-label">Note Speed</p>
+                <div className="game-speed-control">
+                  <button type="button" className="secondary game-icon-button" onClick={() => adjustNoteSpeed(-1)} disabled={noteSpeed <= NOTE_SPEED_MIN} aria-label="Decrease note speed" title="Decrease note speed">
+                    <Minus size={16} aria-hidden="true" />
+                  </button>
+                  <output aria-live="polite">{noteSpeed.toFixed(1)}x</output>
+                  <button type="button" className="secondary game-icon-button" onClick={() => adjustNoteSpeed(1)} disabled={noteSpeed >= NOTE_SPEED_MAX} aria-label="Increase note speed" title="Increase note speed">
+                    <Plus size={16} aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              <div className="game-menu-control-group game-menu-control-group--disabled-setting">
+                <p className="game-menu-group-label">Visual Effects</p>
+                <div className="game-menu-actions game-menu-actions--group">
+                  <button type="button" className="secondary" disabled aria-pressed="false">Off</button>
+                  <button type="button" className="secondary" disabled aria-pressed="false">On</button>
+                </div>
               </div>
               {isBlockedByLinkedDanceOff ? (
                 <p className="small game-menu-meta">You are already linked to a Dance-Off. Leave/cancel or finish it before starting another song.</p>
               ) : null}
             </aside>
           </div>
+          <div className="game-menu-bottom-actions">
+            <button type="button" className="secondary game-menu-bottom-secondary" disabled={!selectedId} onClick={() => setMode("scores")}>
+              <Trophy size={15} aria-hidden="true" />
+              <span>View High Scores</span>
+            </button>
+            <div className="game-menu-primary-actions">
+              <button
+                type="button"
+                className="game-menu-start-button"
+                disabled={
+                  isBlockedByLinkedDanceOff ||
+                  !selectedId ||
+                  loadingEntry ||
+                  ((selectedSongSummary?.modeDifficultyBeatCounts?.[selectedGameMode]?.[selectedDifficulty] ?? 0) <= 0 &&
+                    !(
+                      (selectedGameMode === "step_arrows" || selectedGameMode === "laser_shoot") &&
+                      selectedDifficulty === "normal" &&
+                      (selectedSongSummary?.majorBeatCount ?? 0) > 0
+                    ))
+                }
+                onClick={() => startSoloGame()}
+              >
+                <img src={danceStageStartButtonImage} alt="" aria-hidden="true" draggable={false} />
+                <span>{loadingEntry ? "Loading Song..." : "Start Game"}</span>
+              </button>
+              <button
+                type="button"
+                className="secondary game-menu-pvp-button"
+                disabled={
+                  isBlockedByLinkedDanceOff ||
+                  !selectedId ||
+                  loadingEntry ||
+                  ((selectedSongSummary?.modeDifficultyBeatCounts?.[selectedGameMode]?.[selectedDifficulty] ?? 0) <= 0 &&
+                    !(
+                      (selectedGameMode === "step_arrows" || selectedGameMode === "laser_shoot") &&
+                      selectedDifficulty === "normal" &&
+                      (selectedSongSummary?.majorBeatCount ?? 0) > 0
+                    ))
+                }
+                onClick={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("danceoff:create-request", {
+                      detail: {
+                        beatEntryId: selectedId,
+                        gameMode: selectedGameMode,
+                        difficulty: selectedDifficulty,
+                      },
+                    })
+                  );
+                  window.dispatchEvent(new CustomEvent("danceoff:panel:open"));
+                }}
+              >
+                Dance-Off (PVP)
+              </button>
+            </div>
+            <button type="button" className="secondary game-menu-bottom-secondary" onClick={() => setShowHowToPlay(true)}>
+              <CircleHelp size={15} aria-hidden="true" />
+              <span>How To Play</span>
+            </button>
+          </div>
+          {showHowToPlay ? (
+            <div className="game-how-to-play-backdrop" role="presentation" onClick={() => setShowHowToPlay(false)}>
+              <section className="game-how-to-play-modal" role="dialog" aria-modal="true" aria-labelledby="game-how-to-play-title" onClick={(event) => event.stopPropagation()}>
+                <div className="game-how-to-play-modal__header">
+                  <h3 id="game-how-to-play-title">How To Play</h3>
+                  <button type="button" className="game-icon-button secondary" onClick={() => setShowHowToPlay(false)} aria-label="Close how to play" title="Close">
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                </div>
+                <p>Choose a beat, select a mode and difficulty, then press the matching lane controls as they reach the receptor.</p>
+                <p>Use Note Speed to change how quickly notes approach. Your audio and judgement windows stay synchronized.</p>
+              </section>
+            </div>
+          ) : null}
           {error ? <p className="error">{error}</p> : null}
           {songs.length === 0 && !loadingSongs ? <p>No enabled songs available yet.</p> : null}
         </div>
@@ -2388,12 +2472,12 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                     <div key={lane} className={`orb-lane lane-${lane}`}>
                       {laneNotes.map((note) => {
                         const timeUntilHit = note.timeSeconds - currentTimeSeconds;
-                        const progress = 1 - timeUntilHit / Math.max(0.05, runtimeConfig.gameApproachSeconds);
+                        const progress = 1 - timeUntilHit / Math.max(0.05, noteApproachSeconds);
                         const distancePercent = Math.max(0, Math.min(100, progress * 100));
                         const isHold = note.type === "hold" && note.endSeconds - note.timeSeconds >= HOLD_MIN_SECONDS;
                         const tailScale = Math.max(
                           0.4,
-                          Math.min(2.5, (note.endSeconds - note.timeSeconds) / Math.max(0.08, runtimeConfig.gameApproachSeconds))
+                          Math.min(2.5, (note.endSeconds - note.timeSeconds) / Math.max(0.08, noteApproachSeconds))
                         );
                         return (
                           <div
@@ -2439,11 +2523,11 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
                   <div key={lane} className={`ddr-lane lane-${lane}`}>
                     {visibleNotes.filter((note) => note.lane === lane).map((note) => {
                       const timeUntilHit = note.timeSeconds - currentTimeSeconds;
-                      const progress = 1 - timeUntilHit / Math.max(0.05, runtimeConfig.gameApproachSeconds);
+                      const progress = 1 - timeUntilHit / Math.max(0.05, noteApproachSeconds);
                       const topPercent = 92 - progress * 87;
                       const isHold = note.type === "hold" && note.endSeconds - note.timeSeconds >= HOLD_MIN_SECONDS;
                       const tailSeconds = Math.max(0, note.endSeconds - note.timeSeconds);
-                      const holdHeightPx = Math.max(58, (tailSeconds / Math.max(0.05, runtimeConfig.gameApproachSeconds)) * 240);
+                      const holdHeightPx = Math.max(58, (tailSeconds / Math.max(0.05, noteApproachSeconds)) * 240);
                       return (
                         <div key={note.id} className={`ddr-note lane-${note.lane}${note.judged ? " judged" : ""}${note.holdStarted && !note.judged ? " holding" : ""}${isHold ? " hold-note" : ""}`} style={{ top: `${topPercent}%`, ...(isHold ? { height: `${holdHeightPx}px` } : null) } as CSSProperties}>
                           <img className={`ddr-arrow-graphic beat ${isHold ? "top-cap" : "single"}`} src={beatArrowImages[note.lane as StepArrowLane]} alt="" draggable={false} />

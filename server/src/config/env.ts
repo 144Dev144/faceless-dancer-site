@@ -33,6 +33,7 @@ const envSchema = z.object({
   COOKIE_SECURE: z.enum(["true", "false"]).default("false"),
 
   SOLANA_RPC_URL: z.string().url(),
+  SECONDARY_RPC_NODE: optionalUrlSchema,
   HOLDER_TOKEN_MINT: z.string().min(32),
   HOLDER_MIN_BALANCE: z.coerce.number().nonnegative().default(1),
 

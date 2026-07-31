@@ -1,11 +1,13 @@
+import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { env } from "../../config/env.js";
-import { getSiteSettings } from "../siteSettings/service.js";
 
-const connection = new Connection(env.SOLANA_RPC_URL, "confirmed");
+const connection = new Connection(env.SECONDARY_RPC_NODE || env.SOLANA_RPC_URL, "confirmed");
 
 export async function checkHolderEligibility(ownerPublicKey: string): Promise<boolean> {
-  const tokenAddress = (await getSiteSettings()).tokenAddress.trim();
+  // Holder verification is a wallet/RPC check. Keep it independent of the
+  // site-settings table so a busy application pool cannot block eligibility.
+  const tokenAddress = env.HOLDER_TOKEN_MINT.trim();
   if (!tokenAddress) {
     return false;
   }
@@ -19,18 +21,21 @@ export async function checkHolderEligibility(ownerPublicKey: string): Promise<bo
     return false;
   }
 
-  let accounts;
+  const tokenAccountAddress = getAssociatedTokenAddressSync(
+    holderMint,
+    owner,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+  );
+
   try {
-    accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint: holderMint });
-  } catch {
-    return false;
+    const balance = await connection.getTokenAccountBalance(tokenAccountAddress, "confirmed");
+    return Number(balance.value.uiAmountString) >= env.HOLDER_MIN_BALANCE;
+  } catch (error) {
+    // A wallet without the Token-2022 associated account is not a holder. Any
+    // other RPC failure remains a failed eligibility check and is logged by
+    // the authentication route rather than being mistaken for a balance.
+    if (String(error).toLowerCase().includes("could not find account")) return false;
+    throw error;
   }
-
-  const total = accounts.value.reduce((sum, account) => {
-    const parsedAmount =
-      account.account.data.parsed.info.tokenAmount.uiAmount ?? 0;
-    return sum + Number(parsedAmount);
-  }, 0);
-
-  return total >= env.HOLDER_MIN_BALANCE;
 }

@@ -13,13 +13,14 @@ const inputSchema = z.object({
 
 const metadataSchema = z.object({
   title: z.string().trim().min(1).max(120),
+  reanalysisOfJobId: z.string().uuid().optional(),
 }).optional();
 
 export const remoteGenerationPrioritySchema = z.enum(["low", "standard", "high"]);
 export const remotePaymentCurrencySchema = z.enum(["FACELESS", "SOL"]);
 
 export const remoteGenerationRequestSchema = z.object({
-  runtime: z.enum(["ace-step", "voice-change"]).default("ace-step"),
+  runtime: z.enum(["ace-step", "voice-change", "rhythm-beats"]).default("ace-step"),
   modelRevision: z.string().trim().min(1).max(200).default("ace-step-1.5"),
   inputs: z.array(inputSchema).max(16).default([]),
   priority: remoteGenerationPrioritySchema.default("standard"),
@@ -36,6 +37,15 @@ export const remoteGenerationRequestSchema = z.object({
     if (!roles.has("song") || !roles.has("reference")) context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "Voice Change requires song and reference audio inputs." });
     if (taskType !== "voice_change") context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "task_type"], message: "Voice Change requests must use task_type=voice_change." });
     if ("loudness_optimization" in value.parameters && typeof value.parameters.loudness_optimization !== "boolean") context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "loudness_optimization"], message: "loudness_optimization must be a boolean when provided." });
+  }
+  if (value.runtime === "rhythm-beats") {
+    const stems = ["vocals", "backing_vocals", "drums", "bass", "guitar", "keyboard", "percussion", "strings", "synth", "fx", "brass", "woodwinds"];
+    if (taskType !== "rhythm_beats") context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "task_type"], message: "Rhythm Beats requests must use task_type=rhythm_beats." });
+    if (value.inputs.length !== 1) context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "Rhythm Beats requires one source audio input." });
+    const mode = value.parameters.stem_mode;
+    const selected = value.parameters.selected_stems;
+    if (mode !== "all" && mode !== "selected") context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "stem_mode"], message: "Choose all stems or selected stems." });
+    if (mode === "selected" && (!Array.isArray(selected) || selected.length < 1 || selected.some((stem) => typeof stem !== "string" || !stems.includes(stem)))) context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "selected_stems"], message: "Select at least one supported stem." });
   }
 });
 

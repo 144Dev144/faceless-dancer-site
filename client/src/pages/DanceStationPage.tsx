@@ -1,9 +1,10 @@
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { AudioWaveform, Check, CircleHelp, FileUp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Search, Settings2, SlidersHorizontal, Sparkles, Upload, X as XIcon, type LucideIcon } from "lucide-preact";
+import { AudioWaveform, Check, CircleHelp, FileUp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Search, Settings2, SlidersHorizontal, Sparkles, Upload, Waves, X as XIcon, type LucideIcon } from "lucide-preact";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
 import { RemoteGenerationPanel } from "../components/danceStation/RemoteGenerationPanel";
+import { RhythmBeatsPanel } from "../components/danceStation/RhythmBeatsPanel";
 import { AudioMassInlineEditor, audioMassInlineController, type AudioMassEvent } from "../components/danceStation/AudioMassInlineEditor";
 import { AudioPlayButton } from "../components/audio/SiteAudioPlayer";
 import { api, type LibraryItem, type SupportIssueType } from "../lib/api";
@@ -25,10 +26,11 @@ interface Props {
   setSession: (next: SessionState) => void;
 }
 
-type DanceStationPanel = "library" | "audio-edit" | "instrument-lab" | "generation";
+type DanceStationPanel = "library" | "audio-edit" | "instrument-lab" | "generation" | "rhythm-beats";
 
 const panelHashById: Record<DanceStationPanel, string> = {
   generation: "music-generation",
+  "rhythm-beats": "rhythm-beats",
   library: "library",
   "audio-edit": "audio-edit",
   "instrument-lab": "instrument-lab",
@@ -37,6 +39,7 @@ const panelHashById: Record<DanceStationPanel, string> = {
 const panelIdByHash: Record<string, DanceStationPanel> = {
   "music-generation": "generation",
   generation: "generation",
+  "rhythm-beats": "rhythm-beats",
   library: "library",
   "audio-edit": "audio-edit",
   "instrument-lab": "instrument-lab",
@@ -60,6 +63,13 @@ const tools: Array<{
     status: "REMOTE",
     available: true,
     Icon: Sparkles,
+  },
+  {
+    id: "rhythm-beats",
+    label: "Rhythm Beats",
+    status: "REMOTE",
+    available: true,
+    Icon: Waves,
   },
   {
     id: "audio-edit",
@@ -272,12 +282,128 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     await refreshWorkspace();
   };
 
+  const publishRhythmGameWorkspaceItem = async (item: BrowserWorkspaceItem): Promise<void> => {
+    if (!session.authenticated) throw new Error("Connect a wallet before publishing.");
+
+    const metadata = item.metadata;
+    const publicLibrary = recordMetadata(metadata.publicLibrary);
+    const publicFiles = Array.isArray(publicLibrary.files)
+      ? publicLibrary.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+      : [];
+    const sourceAudio = recordMetadata(metadata.sourceAudio);
+    const sourceUrl = metadataText(sourceAudio.publicUrl, metadataText(metadata.publicUrl, publicFiles.find((file) => file.role === "audio")?.publicUrl as string ?? ""));
+    const sourceFileName = metadataText(sourceAudio.fileName, metadataText(metadata.fileName, `${item.title}.audio`));
+    const sourceMimeType = metadataText(sourceAudio.mimeType, metadataText(metadata.mimeType, "audio/mpeg"));
+    const coverBlob = workspaceMetadataFile(metadata.cardImageBlob, metadata.cardImageFileName, metadata.cardImageMimeType);
+    const publicCover = publicFiles.find((file) => file.role === "cover");
+    if (!sourceUrl) throw new Error("This beat asset is missing its source audio.");
+    if (!coverBlob && !publicCover?.publicUrl) throw new Error("Add a cover image before publishing this game beat asset.");
+
+    const modeDifficultyCharts = recordMetadata(metadata.modeDifficultyCharts);
+    const chartData = recordMetadata(metadata.chartData);
+    const chartPayload = {
+      schemaVersion: 1,
+      runtime: "rhythm-beats",
+      title: item.title,
+      durationSeconds: metadata.durationSeconds,
+      tempoBpm: chartData.tempoBpm,
+      selectedStems: metadata.selectedStems,
+      selectedEventKinds: metadata.selectedEventKinds,
+      difficultySelectedEventIds: metadata.difficultySelectedEventIds,
+      difficultyRangeSelections: metadata.difficultyRangeSelections,
+      modeDifficultyCharts,
+      availableGameModes: metadata.availableGameModes,
+      availableDifficulties: metadata.availableDifficulties,
+      modeDifficultyBeatCounts: metadata.modeDifficultyBeatCounts,
+      gameBeats: metadata.gameBeats,
+      gameNotes: metadata.gameNotes,
+      gameBeatSelections: metadata.gameBeatSelections,
+      gameBeatConfig: metadata.gameBeatConfig,
+      gameBeatsUpdatedAtIso: metadata.gameBeatsUpdatedAtIso,
+      entry: {
+        durationSeconds: metadata.durationSeconds,
+        tempoBpm: chartData.tempoBpm,
+      },
+    };
+
+    const publicMetadata: Record<string, unknown> = { ...metadata, sourceTool: "rhythm-beats", category: "rhythm_game", gameEnabled: true };
+    ["audioArtifacts", "cardImageBlob", "chartObjectPath", "chartUrl", "publicLibrary", "publicLibraryStatus", "libraryItemId", "files"].forEach((key) => delete publicMetadata[key]);
+    const volumeSlug = metadataText(metadata.volumeSlug, "rhythm-game");
+    const tags = [...new Set(["rhythm-game", "game-ready", volumeSlug])];
+    const currentlyPublished = isPublishedLibraryMetadata(metadata);
+    const publishVerb = currentlyPublished ? "Updating" : "Publishing";
+    const setPublishStage = (stage: string): void => {
+      setWorkspaceMessage(`${publishVerb} ${item.title} · ${stage}`);
+    };
+    setPublishStage("Preparing public library item");
+
+    const managed = await api.upsertOwnedLibraryItem({
+      visibility: "public",
+      kind: "rhythm_game",
+      title: item.title,
+      description: "Rhythm-game-ready music and metadata package.",
+      tags,
+      metadata: publicMetadata,
+      sourceLineage: {
+        localId: item.id,
+        source: "dance-station-site",
+        runtime: "rhythm-beats",
+      },
+      localId: item.id,
+    });
+    await api.clearOwnedLibraryItemFiles(managed.item.id);
+
+    setPublishStage("Uploading source audio");
+    const sourceFile = await fetchPublicAssetFile(sourceUrl, sourceFileName, sourceMimeType);
+    await api.uploadDraftLibraryFile(managed.item.id, {
+      role: "audio",
+      metadata: { originalTitle: item.title, source: "rhythm-beats-source" },
+      file: sourceFile,
+    });
+
+    setPublishStage("Uploading chart");
+    await api.uploadDraftLibraryFile(managed.item.id, {
+      role: "chart",
+      metadata: { originalTitle: `${item.title}.json`, source: "rhythm-beats-selected-chart" },
+      file: jsonDownloadFile(`${item.title}.json`, chartPayload),
+    });
+
+    setPublishStage("Uploading cover");
+    const coverFile = coverBlob ?? await fetchPublicAssetFile(String(publicCover?.publicUrl), "cover-image", metadataText(publicCover?.mimeType, "image/png"));
+    await api.uploadDraftLibraryFile(managed.item.id, {
+      role: "cover",
+      metadata: { originalTitle: coverFile.name },
+      file: coverFile,
+    });
+
+    setPublishStage("Finalizing publication");
+    const published = await api.publishDraftLibraryItem(managed.item.id);
+    await saveWorkspaceItem({
+      ...item,
+      creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || published.item.creator?.publicKey || item.creatorName,
+      updatedAt: new Date().toISOString(),
+      metadata: {
+        ...item.metadata,
+        publicLibrary: published.item,
+        libraryItemId: published.item.id,
+        publicLibraryStatus: "published",
+        files: published.item.files,
+      },
+    });
+    setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
+    await refreshWorkspace();
+  };
+
   const publishWorkspaceItem = async (item: BrowserWorkspaceItem) => {
     if (!session.authenticated) {
       throw new Error("Connect a wallet before publishing.");
     }
     if (item.source !== "private") {
       throw new Error("Only private assets can be published from the site right now.");
+    }
+    if (item.kind === "rhythm_game") {
+      await publishRhythmGameWorkspaceItem(item);
+      return;
     }
     const linkedLibraryId = linkedLibraryItemIdFromMetadata(item.metadata);
     const currentlyPublished = isPublishedLibraryMetadata(item.metadata);
@@ -301,7 +427,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           ...item.metadata,
           publicLibrary: published.item,
           libraryItemId: published.item.id,
-          publicLibraryStatus: published.item.status,
+          publicLibraryStatus: "published",
           files: published.item.files,
         },
       });
@@ -393,7 +519,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         ...item.metadata,
         publicLibrary: published.item,
         libraryItemId: published.item.id,
-        publicLibraryStatus: published.item.status,
+        publicLibraryStatus: "published",
       },
     });
     setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
@@ -401,11 +527,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   };
 
   const revokeWorkspaceItem = async (item: BrowserWorkspaceItem) => {
-    const libraryItemId = typeof item.metadata.libraryItemId === "string"
-      ? item.metadata.libraryItemId
-      : (item.metadata.publicLibrary && typeof item.metadata.publicLibrary === "object"
-        ? String((item.metadata.publicLibrary as { id?: unknown }).id ?? "")
-        : "");
+    const linkedPublicItem = publicLibraryItemForWorkspaceItem(item, publicItems);
+    const libraryItemId = linkedPublicItem?.id || linkedLibraryItemIdFromMetadata(item.metadata);
     if (!libraryItemId) {
       throw new Error("This asset is not linked to a published library item.");
     }
@@ -1148,7 +1271,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           ))}
         </section>
 
-        <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" || activePanel === "audio-edit" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}`}>
+        <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" || activePanel === "audio-edit" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}${activePanel === "rhythm-beats" ? " dance-station-main-grid--rhythm-beats" : ""}`}>
           <div className="home-v2-card dance-station-main-panel">
             {showSettings ? (
               <BrowserWorkspaceSettings
@@ -1199,12 +1322,14 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
               <InstrumentLabPanel frameRef={instrumentLabFrameRef} />
             ) : activePanel === "generation" ? (
               <RemoteGenerationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
+            ) : activePanel === "rhythm-beats" ? (
+              <RhythmBeatsPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} onPublishAsset={publishWorkspaceItem} />
             ) : (
               <UnavailablePanel tool={tools.find((tool) => tool.id === activePanel) ?? tools[0]} />
             )}
           </div>
 
-          {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "library" && activePanel !== "audio-edit" ? <aside className="home-v2-card dance-station-context-panel">
+          {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "rhythm-beats" && activePanel !== "library" && activePanel !== "audio-edit" ? <aside className="home-v2-card dance-station-context-panel">
             {showSettings ? (
               <SettingsSummaryPanel
                 session={session}
@@ -1323,6 +1448,7 @@ function LibraryWorkspacePanel({
             <PrivateAssetRow
               key={item.id}
               item={item}
+              linkedPublicItem={publicLibraryItemForWorkspaceItem(item, publicItems)}
               canPublish={session.authenticated && item.source === "private" && hasWorkspaceFile(item.metadata)}
               isAuthenticated={session.authenticated}
               onPublish={publishWorkspaceItem}
@@ -1381,6 +1507,7 @@ function LibraryWorkspacePanel({
 
 function PrivateAssetRow({
   item,
+  linkedPublicItem,
   canPublish,
   isAuthenticated,
   onPublish,
@@ -1391,6 +1518,7 @@ function PrivateAssetRow({
   setWorkspaceMessage,
 }: {
   item: BrowserWorkspaceItem;
+  linkedPublicItem?: LibraryItem;
   canPublish: boolean;
   isAuthenticated: boolean;
   onPublish: (item: BrowserWorkspaceItem) => Promise<void>;
@@ -1411,8 +1539,8 @@ function PrivateAssetRow({
   const size = typeof metadata.sizeBytes === "number" ? formatBytes(metadata.sizeBytes) : "";
   const mime = typeof metadata.mimeType === "string" ? metadata.mimeType : item.source === "public-library" ? "public library item" : "";
   const updated = new Date(item.updatedAt);
-  const published = isPublishedLibraryMetadata(metadata);
-  const hasLinkedLibraryItem = Boolean(linkedLibraryItemIdFromMetadata(metadata));
+  const published = isPublishedLibraryMetadata(metadata) || linkedPublicItem?.status === "published";
+  const hasLinkedLibraryItem = Boolean(linkedLibraryItemIdFromMetadata(metadata) || linkedPublicItem?.id);
   const publishHint = !canPublish
     ? !isAuthenticated
       ? "Login to publish"
@@ -2598,15 +2726,54 @@ function linkedLibraryItemIdFromMetadata(metadata: Record<string, unknown>): str
   return "";
 }
 
+function publicLibraryItemForWorkspaceItem(item: BrowserWorkspaceItem, publicItems: LibraryItem[]): LibraryItem | undefined {
+  const linkedId = linkedLibraryItemIdFromMetadata(item.metadata);
+  if (linkedId) {
+    const linked = publicItems.find((publicItem) => publicItem.id === linkedId);
+    if (linked) return linked;
+  }
+
+  const remoteJobId = typeof item.metadata.remoteJobId === "string" ? item.metadata.remoteJobId.trim() : "";
+  return publicItems.find((publicItem) => {
+    if (publicItem.kind !== item.kind) return false;
+    const localId = typeof publicItem.sourceLineage?.localId === "string" ? publicItem.sourceLineage.localId : "";
+    const publicRemoteJobId = typeof publicItem.metadata?.remoteJobId === "string" ? publicItem.metadata.remoteJobId : "";
+    return localId === item.id || Boolean(remoteJobId && publicRemoteJobId === remoteJobId);
+  });
+}
+
+function recordMetadata(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function metadataText(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function jsonDownloadFile(name: string, value: unknown): File {
+  return new File([JSON.stringify(value, null, 2)], name, { type: "application/json" });
+}
+
+async function fetchPublicAssetFile(url: string, fileName: string, mimeType: string): Promise<File> {
+  // Public CDN assets use wildcard CORS and cannot be fetched with credentials.
+  const response = await fetch(url, { credentials: "omit" });
+  if (!response.ok) throw new Error(`Could not read the source audio (${response.status}).`);
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("The source audio file is empty.");
+  return new File([blob], fileName, { type: mimeType || blob.type || "application/octet-stream" });
+}
+
 function isPublishedLibraryMetadata(metadata: Record<string, unknown>): boolean {
   if (!linkedLibraryItemIdFromMetadata(metadata)) return false;
   if (typeof metadata.publicLibraryStatus === "string") {
-    return metadata.publicLibraryStatus === "published";
+    return metadata.publicLibraryStatus.trim().toLowerCase() === "published";
   }
   if (!metadata.publicLibrary || typeof metadata.publicLibrary !== "object") return true;
   const record = metadata.publicLibrary as { status?: unknown; visibility?: unknown };
   if (record.status === undefined) return true;
-  return record.status === "published" && (record.visibility === undefined || record.visibility === "public");
+  return typeof record.status === "string"
+    && record.status.trim().toLowerCase() === "published"
+    && (record.visibility === undefined || record.visibility === "public");
 }
 
 function midiNoteLabel(pitch: number): string {

@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => {
     `http://localhost:${Number.isFinite(apiDevPort) ? apiDevPort : 3001}`;
 
   return {
+    envDir: siteRoot,
     envPrefix: ["VITE_", "SECONDARY_RPC_NODE"],
     resolve: {
       alias: {

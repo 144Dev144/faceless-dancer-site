@@ -118,10 +118,11 @@ export type RemotePaymentCurrency = "FACELESS" | "SOL";
 
 export interface RemoteGenerationMetadata {
   title: string;
+  reanalysisOfJobId?: string;
 }
 
 export interface RemoteGenerationRequest {
-  runtime: "ace-step" | "voice-change";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats";
   modelRevision: string;
   inputs: RemoteGenerationInput[];
   priority: "low" | "standard" | "high";
@@ -171,6 +172,19 @@ export interface RemotePaymentSettings {
   solTransitionAdditionalStepPriceUsdMicros: number;
   facelessTransitionSecondPriceUsdMicros: number;
   solTransitionSecondPriceUsdMicros: number;
+  facelessRhythmBeatsBasePriceUsdMicros: number;
+  solRhythmBeatsBasePriceUsdMicros: number;
+  facelessRhythmBeatsAdditionalStemPriceUsdMicros: number;
+  solRhythmBeatsAdditionalStemPriceUsdMicros: number;
+  facelessRhythmBeatsAdditionalStepPriceUsdMicros: number;
+  solRhythmBeatsAdditionalStepPriceUsdMicros: number;
+  facelessRhythmBeatsSourceSecondPriceUsdMicros: number;
+  solRhythmBeatsSourceSecondPriceUsdMicros: number;
+  musicFreeForHolders: boolean;
+  extractionFreeForHolders: boolean;
+  voiceChangeFreeForHolders: boolean;
+  transitionFreeForHolders: boolean;
+  rhythmBeatsFreeForHolders: boolean;
   updatedAt: string;
 }
 
@@ -185,6 +199,8 @@ export interface RemotePricingConfig {
     extractionInferenceSteps: number;
     voiceChangeInferenceSteps: number;
     transitionInferenceSteps: number;
+    rhythmBeatsInferenceSteps: number;
+    rhythmBeatsBaseStemCount: number;
   };
   slippageBps: number;
   market: {
@@ -213,7 +229,7 @@ export interface RemotePaymentIntent {
   id: string;
   userId: string;
   walletAddress: string;
-  runtime: "ace-step" | "voice-change";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats";
   requestHash: string;
   currency: RemotePaymentCurrency;
   tokenMint: string;
@@ -227,6 +243,7 @@ export interface RemotePaymentIntent {
   recipientAddress: string;
   paymentReference: string;
   paymentMode: "token-transfer" | "free-signature";
+  holderFree: boolean;
   paymentMessage?: string;
   status: string;
   transactionSignature?: string;
@@ -245,8 +262,8 @@ export interface RemotePaymentIntent {
 export interface RemoteArtifact {
   id: string;
   jobId: string;
-  role: "audio" | "preview" | "metadata" | "waveform";
-  variant?: "merged" | "converted-vocal" | "instrumental";
+  role: "audio" | "preview" | "metadata" | "waveform" | "chart";
+  variant?: string;
   objectPath: string;
   publicUrl?: string;
   mimeType: string;
@@ -266,11 +283,25 @@ export interface RemoteJobEvent {
   createdAt: string;
 }
 
+export interface RemoteJobProgress {
+  status: string;
+  phase: string;
+  progress: number | null;
+  completedSteps: number | null;
+  totalSteps: number | null;
+  stage?: string;
+  stageIndex?: number;
+  stageCount?: number;
+  stageKind?: string;
+  message?: string;
+  updatedAt: string;
+}
+
 export interface RemoteJob {
   id: string;
   userId: string;
   paymentIntentId: string;
-  runtime: "ace-step" | "voice-change";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats";
   modelRevision: string;
   requestHash: string;
   request: RemoteGenerationRequest;
@@ -280,6 +311,7 @@ export interface RemoteJob {
   attemptCount: number;
   errorCode?: string;
   errorMessage?: string;
+  progress?: RemoteJobProgress;
   createdAt: string;
   updatedAt: string;
   artifacts: RemoteArtifact[];
@@ -607,12 +639,15 @@ export const api = {
 
   remoteJob: (jobId: string) => apiFetch<RemoteJob>(`/remote-generation/jobs/${encodeURIComponent(jobId)}`),
 
-  remoteJobs: (input: number | { limit?: number; cursor?: string; activeOnly?: boolean; knownJobIds?: string[] } = 50) => {
+  remoteChart: (objectPath: string) => apiFetch<unknown>(`/remote-generation/assets/chart?path=${encodeURIComponent(objectPath)}`),
+
+  remoteJobs: (input: number | { limit?: number; cursor?: string; activeOnly?: boolean; knownJobIds?: string[]; runtime?: RemoteGenerationRequest["runtime"] } = 50) => {
     const options = typeof input === "number" ? { limit: input } : input;
     const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
     if (options.cursor) params.set("cursor", options.cursor);
     if (options.activeOnly) params.set("active", "true");
     if (options.knownJobIds?.length) params.set("knownIds", options.knownJobIds.join(","));
+    if (options.runtime) params.set("runtime", options.runtime);
     return apiFetch<RemoteJobHistoryPage>(`/remote-generation/jobs?${params.toString()}`);
   },
 

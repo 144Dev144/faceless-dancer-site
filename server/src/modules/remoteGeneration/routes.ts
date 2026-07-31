@@ -133,7 +133,7 @@ router.post("/availability", async (req, res, next) => {
   try {
     const request = z.object({
       priority: remoteGenerationPrioritySchema,
-      runtime: z.enum(["ace-step", "voice-change"]),
+      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats"]),
     }).parse({
       priority: req.body?.priority ?? "standard",
       runtime: req.body?.runtime ?? "ace-step",
@@ -145,6 +145,25 @@ router.post("/availability", async (req, res, next) => {
 });
 
 router.use(requireAuth);
+
+router.get("/assets/chart", async (req, res) => {
+  if (!requireEnabled(res)) return;
+  const objectPath = typeof req.query.path === "string" ? req.query.path.trim() : "";
+  if (!isRemoteGenerationObjectPath(objectPath)) {
+    res.status(400).json({ error: "Invalid remote chart asset path" });
+    return;
+  }
+
+  try {
+    const asset = await downloadFromBunny(objectPath);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.send(asset.buffer);
+  } catch (error) {
+    console.error("[remote-generation] chart asset proxy failed", { objectPath, error });
+    res.status(404).json({ error: "Remote chart asset not found" });
+  }
+});
 
 router.post("/sources", sourceUpload.single("file"), async (req, res, next) => {
   if (!requireEnabled(res)) return;
@@ -264,10 +283,11 @@ router.get("/jobs", async (req, res, next) => {
     const limit = Number.isFinite(limitValue) ? Math.min(Math.max(Math.trunc(limitValue), 1), 50) : 50;
     const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
     const activeOnly = req.query.active === "true";
+    const runtime = typeof req.query.runtime === "string" ? req.query.runtime : undefined;
     const knownJobIds = typeof req.query.knownIds === "string"
       ? [...new Set(req.query.knownIds.split(",").map((id) => id.trim()).filter(Boolean))].slice(0, 100)
       : undefined;
-    return res.json(await launchServerClient.listJobs(req.session!.userId, { limit, cursor, activeOnly, knownJobIds }));
+    return res.json(await launchServerClient.listJobs(req.session!.userId, { limit, cursor, activeOnly, knownJobIds, runtime: runtime as "ace-step" | "voice-change" | "rhythm-beats" | undefined }));
   } catch (error) {
     return respondRemoteGenerationError(error, res, "Generation history is temporarily unavailable. Please try again shortly.");
   }

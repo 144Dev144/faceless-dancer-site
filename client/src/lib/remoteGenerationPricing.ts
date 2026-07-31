@@ -17,6 +17,19 @@ export interface RemoteMarketPrice {
   source: string;
 }
 
+export function createFreeMarketPrice(config: RemotePricingConfig, source: "free-signature" | "holder-free" = "free-signature"): RemoteMarketPrice {
+  const fetchedAt = new Date().toISOString();
+  return {
+    tokenMint: config.market.tokenMint,
+    facelessPriceUsd: 1,
+    solPriceUsd: 1,
+    pairAddress: "",
+    fetchedAt,
+    expiresAt: new Date(Date.now() + config.market.maxAgeSeconds * 1000).toISOString(),
+    source,
+  };
+}
+
 function bytes(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value;
   throw new Error("On-chain pricing returned an unreadable account");
@@ -129,14 +142,29 @@ function atomicAmount(priceUsd: number, tokenPriceUsd: number, decimals: number,
   return amount.toString();
 }
 
-export function calculateRemotePricing(config: RemotePricingConfig, request: RemoteGenerationRequest, market: RemoteMarketPrice): RemotePricingQuote {
+export function holderFreeForRequest(config: RemotePricingConfig, request: RemoteGenerationRequest): boolean {
+  switch (request.parameters.task_type) {
+    case "extract": return config.settings.extractionFreeForHolders;
+    case "voice_change": return config.settings.voiceChangeFreeForHolders;
+    case "transition_chain": return config.settings.transitionFreeForHolders;
+    case "rhythm_beats": return config.settings.rhythmBeatsFreeForHolders;
+    default: return config.settings.musicFreeForHolders;
+  }
+}
+
+export function calculateRemotePricing(
+  config: RemotePricingConfig,
+  request: RemoteGenerationRequest,
+  market: RemoteMarketPrice,
+  options: { freeForHolder?: boolean } = {},
+): RemotePricingQuote {
   const parameters = request.parameters;
-  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : "text2music";
+  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : parameters.task_type === "rhythm_beats" ? "rhythm_beats" : "text2music";
   const transitionPlan = taskType === "transition_chain" && parameters.transition_plan && typeof parameters.transition_plan === "object" ? parameters.transition_plan as { transitionClips?: Array<{ startSeconds: number; endSeconds: number }> } : undefined;
   const transitionStageCount = transitionPlan?.transitionClips?.length ?? 1;
   const transitionSeconds = transitionPlan?.transitionClips?.reduce((sum, clip) => sum + Math.max(0, clip.endSeconds - clip.startSeconds), 0) ?? 0;
-  const duration = taskType === "transition_chain" ? transitionSeconds : positiveNumber(parameters.audio_duration, config.defaults.musicDurationSeconds);
-  const defaultSteps = taskType === "extract" ? config.defaults.extractionInferenceSteps : taskType === "voice_change" ? config.defaults.voiceChangeInferenceSteps : taskType === "transition_chain" ? config.defaults.transitionInferenceSteps : config.defaults.musicInferenceSteps;
+  const duration = taskType === "transition_chain" ? transitionSeconds : positiveNumber(parameters.audio_duration ?? parameters.source_duration_seconds, config.defaults.musicDurationSeconds);
+  const defaultSteps = taskType === "extract" || taskType === "rhythm_beats" ? config.defaults.extractionInferenceSteps : taskType === "voice_change" ? config.defaults.voiceChangeInferenceSteps : taskType === "transition_chain" ? config.defaults.transitionInferenceSteps : config.defaults.musicInferenceSteps;
   const configuredSteps = taskType === "voice_change" ? parameters.diffusion_steps : parameters.inference_steps;
   const steps = Math.max(1, Math.round(positiveNumber(configuredSteps, defaultSteps)));
   const currency = request.paymentCurrency ?? "FACELESS";
@@ -148,6 +176,8 @@ export function calculateRemotePricing(config: RemotePricingConfig, request: Rem
       ? (isSol ? settings.solVoiceChangeBasePriceUsdMicros : settings.facelessVoiceChangeBasePriceUsdMicros)
       : taskType === "transition_chain"
         ? (isSol ? settings.solTransitionBasePriceUsdMicros : settings.facelessTransitionBasePriceUsdMicros)
+        : taskType === "rhythm_beats"
+          ? (isSol ? settings.solRhythmBeatsBasePriceUsdMicros : settings.facelessRhythmBeatsBasePriceUsdMicros)
         : (isSol ? settings.solBasePriceUsdMicros : settings.facelessBasePriceUsdMicros);
   const stepRateMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionAdditionalStepPriceUsdMicros : settings.facelessExtractionAdditionalStepPriceUsdMicros)
@@ -155,6 +185,8 @@ export function calculateRemotePricing(config: RemotePricingConfig, request: Rem
       ? (isSol ? settings.solVoiceChangeAdditionalStepPriceUsdMicros : settings.facelessVoiceChangeAdditionalStepPriceUsdMicros)
       : taskType === "transition_chain"
         ? (isSol ? settings.solTransitionAdditionalStepPriceUsdMicros : settings.facelessTransitionAdditionalStepPriceUsdMicros)
+        : taskType === "rhythm_beats"
+          ? (isSol ? settings.solRhythmBeatsAdditionalStepPriceUsdMicros : settings.facelessRhythmBeatsAdditionalStepPriceUsdMicros)
         : (isSol ? settings.solGenerationAdditionalStepPriceUsdMicros : settings.facelessGenerationAdditionalStepPriceUsdMicros);
   const durationRateMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionSourceSecondPriceUsdMicros : settings.facelessExtractionSourceSecondPriceUsdMicros)
@@ -162,15 +194,22 @@ export function calculateRemotePricing(config: RemotePricingConfig, request: Rem
       ? (isSol ? settings.solVoiceChangeSourceSecondPriceUsdMicros : settings.facelessVoiceChangeSourceSecondPriceUsdMicros)
       : taskType === "transition_chain"
         ? (isSol ? settings.solTransitionSecondPriceUsdMicros : settings.facelessTransitionSecondPriceUsdMicros)
+        : taskType === "rhythm_beats"
+          ? (isSol ? settings.solRhythmBeatsSourceSecondPriceUsdMicros : settings.facelessRhythmBeatsSourceSecondPriceUsdMicros)
         : (isSol ? settings.solGenerationAdditionalSecondPriceUsdMicros : settings.facelessGenerationAdditionalSecondPriceUsdMicros);
-  const sourceDurationSeconds = taskType === "extract" || taskType === "voice_change" ? nonNegativeNumber(request.inputs.find((input) => input.role === (taskType === "voice_change" ? "song" : input.role))?.durationSeconds ?? parameters.source_duration_seconds) : 0;
-  if ((taskType === "extract" || taskType === "voice_change") && durationRateMicros > 0 && sourceDurationSeconds <= 0) throw new Error(`${taskType === "voice_change" ? "Voice Change song" : "Extraction source"} duration is required for the configured per-second price`);
-  const additionalDurationSeconds = taskType === "transition_chain" ? transitionSeconds * transitionStageCount : taskType === "extract" || taskType === "voice_change" ? sourceDurationSeconds : Math.max(0, duration - config.defaults.musicDurationSeconds);
-  const calculatedPriceMicros = basePriceMicros * (taskType === "transition_chain" ? transitionStageCount : 1)
+  const sourceDurationSeconds = taskType === "extract" || taskType === "voice_change" || taskType === "rhythm_beats" ? nonNegativeNumber(request.inputs.find((input) => input.role === (taskType === "voice_change" ? "song" : input.role))?.durationSeconds ?? parameters.source_duration_seconds) : 0;
+  if ((taskType === "extract" || taskType === "voice_change" || taskType === "rhythm_beats") && durationRateMicros > 0 && sourceDurationSeconds <= 0) throw new Error(`${taskType === "voice_change" ? "Voice Change song" : taskType === "rhythm_beats" ? "Rhythm Beats source" : "Extraction source"} duration is required for the configured per-second price`);
+  const additionalDurationSeconds = taskType === "transition_chain" ? transitionSeconds * transitionStageCount : taskType === "extract" || taskType === "voice_change" || taskType === "rhythm_beats" ? sourceDurationSeconds : Math.max(0, duration - config.defaults.musicDurationSeconds);
+  const stemCount = taskType === "rhythm_beats" ? (parameters.stem_mode === "selected" && Array.isArray(parameters.selected_stems) ? parameters.selected_stems.length : 12) : 0;
+  const baseChargeMicros = basePriceMicros * (taskType === "transition_chain" ? transitionStageCount : 1);
+  const calculatedPriceMicros = baseChargeMicros
     + Math.max(0, steps - defaultSteps) * stepRateMicros * (taskType === "transition_chain" ? transitionStageCount : 1)
-    + Math.round(additionalDurationSeconds * durationRateMicros);
+    + Math.round(additionalDurationSeconds * durationRateMicros)
+    + (taskType === "rhythm_beats" ? Math.max(0, stemCount - positiveNumber(config.defaults.rhythmBeatsBaseStemCount, 5)) * (isSol ? settings.solRhythmBeatsAdditionalStemPriceUsdMicros : settings.facelessRhythmBeatsAdditionalStemPriceUsdMicros) : 0);
   const freeSignature = config.paymentMode === "free-signature";
-  const priceUsd = freeSignature ? 0 : calculatedPriceMicros / 1_000_000;
+  const holderFree = options.freeForHolder === true;
+  const billablePriceMicros = holderFree ? Math.max(0, calculatedPriceMicros - baseChargeMicros) : calculatedPriceMicros;
+  const priceUsd = freeSignature ? 0 : billablePriceMicros / 1_000_000;
   const tokenPriceUsd = isSol ? market.solPriceUsd : market.facelessPriceUsd;
   const token = config.currencies[currency];
   return {
@@ -183,8 +222,8 @@ export function calculateRemotePricing(config: RemotePricingConfig, request: Rem
     priceUsdCents: Math.ceil(priceUsd * 100),
     tokenPriceUsd,
     amountAtomic: atomicAmount(priceUsd, tokenPriceUsd, token.tokenDecimals, config.slippageBps),
-    priceSource: freeSignature ? "free-signature" : market.source,
-    pairAddress: freeSignature ? "" : market.pairAddress,
+    priceSource: freeSignature ? "free-signature" : holderFree ? "holder-free" : market.source,
+    pairAddress: freeSignature || billablePriceMicros === 0 ? "" : market.pairAddress,
     fetchedAt: market.fetchedAt,
     expiresAt: market.expiresAt,
   };

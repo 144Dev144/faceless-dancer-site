@@ -1,6 +1,12 @@
 import { buildObjectPath, buildBunnyPublicUrl } from "../storage/bunnyStorage.js";
 import { env } from "../../config/env.js";
 import { pool } from "../../db/postgres.js";
+import {
+  getAvailableDifficulties,
+  getAvailableGameModes,
+  getDifficultyBeatCounts,
+  getModeDifficultyBeatCounts,
+} from "../game/difficultyCharts.js";
 import { listAllSongs } from "../game/service.js";
 import { readSavedBeatEntry } from "../game/storage.js";
 
@@ -62,7 +68,8 @@ export async function getMaterializedLegacyRhythmIds(): Promise<Set<string>> {
   return ids;
 }
 
-function buildMetadata(song: LegacySong, title: string): Record<string, unknown> {
+function buildMetadata(song: LegacySong, title: string, entry: Record<string, unknown>): Record<string, unknown> {
+  const entryData = (entry.entry as { durationSeconds?: unknown } | undefined) ?? {};
   return {
     category: "rhythm_game",
     gameEnabled: song.is_enabled === 1,
@@ -78,6 +85,12 @@ function buildMetadata(song: LegacySong, title: string): Record<string, unknown>
     },
     legacyCatalogSource: LEGACY_SOURCE,
     songTitle: title,
+    durationSeconds: Number(entryData.durationSeconds ?? 0),
+    majorBeatCount: Array.isArray(entry.majorBeats) ? entry.majorBeats.length : 0,
+    availableGameModes: getAvailableGameModes(entry),
+    availableDifficulties: getAvailableDifficulties(entry),
+    difficultyBeatCounts: getDifficultyBeatCounts(entry),
+    modeDifficultyBeatCounts: getModeDifficultyBeatCounts(entry),
   };
 }
 
@@ -224,7 +237,7 @@ export async function migrateLegacyRhythmLibrary(): Promise<LegacyRhythmMigratio
           title,
           "Official Faceless rhythm-game level.",
           JSON.stringify(["official", "faceless-volume-1", "rhythm-game"]),
-          JSON.stringify(buildMetadata(song, title)),
+          JSON.stringify(buildMetadata(song, title, entry)),
           JSON.stringify({ source: LEGACY_SOURCE, legacyBeatEntryId: entryId }),
           song.created_at,
           song.updated_at,

@@ -120,6 +120,20 @@ export async function resolveProviderForAddress(
     }
   }
 
+  // A restored site session can outlive the wallet extension's trusted
+  // connection. Reconnect the wallet selected during authentication so the
+  // payment flow can open the wallet normally instead of failing before the
+  // transaction prompt is shown.
+  if (preferredProvider && supportsProviderCapability(preferredProvider, capability)) {
+    try {
+      const result = await withTimeout(preferredProvider.connect(), 10_000);
+      const connectedAddress = result.publicKey?.toString?.() ?? preferredProvider.publicKey?.toString?.() ?? "";
+      if (connectedAddress === address) return preferredProvider;
+    } catch {
+      // The payment helper will present the user-facing reconnect error.
+    }
+  }
+
   return undefined;
 }
 

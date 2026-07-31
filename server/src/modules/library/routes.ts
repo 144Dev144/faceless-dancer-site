@@ -18,7 +18,7 @@ import { createId, hashToken } from "../../utils/crypto.js";
 import { buildObjectPath, downloadFromBunny, uploadBufferToBunny } from "../storage/bunnyStorage.js";
 import { verifyAccessToken } from "../auth/tokens.js";
 import { listOfficialRhythmGameLibraryItems, readOfficialRhythmGameLibraryItem } from "./officialRhythmGames.js";
-import { normalizeLibraryItemMetadata, syncPublishedRhythmGameCatalogEntry } from "./rhythmGameLibrary.js";
+import { normalizeLibraryItemMetadata } from "./rhythmGameLibrary.js";
 import { parseSfzInstrument } from "./sfz.js";
 
 const router = Router();
@@ -884,7 +884,6 @@ router.post("/publish/items/:itemId/submit", async (req, res) => {
   if (!item) {
     return res.status(404).json({ error: "Library item not found" });
   }
-  await syncPublishedRhythmGameCatalogEntry(item.id);
   const fullItem = await readItemWithFiles(item.id);
   return res.json({ item: fullItem });
 });
@@ -912,7 +911,6 @@ router.post("/publish/items/:itemId/publish", async (req, res) => {
   if (!item) {
     return res.status(404).json({ error: "Library item not found" });
   }
-  await syncPublishedRhythmGameCatalogEntry(item.id);
   const fullItem = await readItemWithFiles(item.id);
   return res.json({ item: fullItem });
 });

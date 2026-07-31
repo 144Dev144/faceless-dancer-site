@@ -8,7 +8,6 @@ import {
 } from "../game/difficultyCharts.js";
 import { pool } from "../../db/postgres.js";
 import { downloadFromBunny } from "../storage/bunnyStorage.js";
-import { findSongByEntryId, setSongEnabledForEntry, upsertSongForEntry } from "../game/service.js";
 
 type LibraryFileRow = {
   id: string;
@@ -46,10 +45,45 @@ type PublishedRhythmGameItemRow = {
 
 export interface PublishedRhythmGameCatalogRow {
   itemId: string;
+  beatEntryId: string;
   title: string;
   metadata: NormalizedRhythmGameMetadata;
   creatorName: string;
   coverPublicUrl: string | null;
+}
+
+export interface PublishedRhythmGameCatalogSong {
+  beatEntryId: string;
+  title: string;
+  durationSeconds: number;
+  majorBeatCount: number;
+  gameBeatCount: number;
+  coverImageUrl: string | null;
+  availableGameModes: Array<"step_arrows" | "orb_beat" | "laser_shoot">;
+  availableDifficulties: Array<"easy" | "normal" | "hard">;
+  difficultyBeatCounts: Partial<Record<"easy" | "normal" | "hard", number>>;
+  modeDifficultyBeatCounts: Partial<
+    Record<"step_arrows" | "orb_beat" | "laser_shoot", Partial<Record<"easy" | "normal" | "hard", number>>>
+  >;
+  volumeId: string;
+  volumeLabel: string;
+  volumeSlug: string;
+  officialVolume: boolean;
+  creatorName: string;
+  published: true;
+}
+
+export interface PublishedRhythmGameCatalogPage {
+  songs: PublishedRhythmGameCatalogSong[];
+  total: number;
+  selectedVolumeId: string;
+  volumes: Array<{
+    volumeId: string;
+    volumeLabel: string;
+    volumeSlug: string;
+    officialVolume: boolean;
+    songCount: number;
+  }>;
 }
 
 export interface NormalizedRhythmGameMetadata {
@@ -212,6 +246,7 @@ function mapPublishedCatalogRow(
 ): PublishedRhythmGameCatalogRow {
   return {
     itemId: row.id,
+    beatEntryId: String(row.source_lineage_json?.legacyBeatEntryId || row.id),
     title: row.title,
     metadata: normalizeRhythmGameLibraryMetadata(row.metadata_json),
     creatorName: row.creator_display_name || row.creator_slug || "Faceless creator",
@@ -287,7 +322,11 @@ export async function listPublishedRhythmGameLibraryItems(): Promise<PublishedRh
 export async function listPublishedRhythmGameCatalogRows(
   itemIds?: string[]
 ): Promise<Map<string, PublishedRhythmGameCatalogRow>> {
-  const filters: string[] = [`li.kind = 'rhythm_game'`];
+  const filters: string[] = [
+    `li.kind = 'rhythm_game'`,
+    `li.visibility = 'public'`,
+    `li.status = 'published'`,
+  ];
   const values: unknown[] = [];
   if (itemIds && itemIds.length > 0) {
     values.push(itemIds);
@@ -303,7 +342,8 @@ export async function listPublishedRhythmGameCatalogRows(
             u.public_key AS creator_public_key
      FROM library_items li
      LEFT JOIN users u ON u.id = li.owner_user_id
-     ${whereClause}`,
+     ${whereClause}
+     ORDER BY li.updated_at DESC`,
     values
   );
   if (itemResult.rows.length === 0) {
@@ -325,11 +365,150 @@ export async function listPublishedRhythmGameCatalogRows(
     }
   }
   return new Map(
-    itemResult.rows.map((row) => [
-      row.id,
-      mapPublishedCatalogRow(row, coverByItem.get(row.id)),
-    ])
+    itemResult.rows
+      .map((row) => mapPublishedCatalogRow(row, coverByItem.get(row.id)))
+      .filter((row) => row.metadata.gameEnabled)
+      .map((row) => [row.beatEntryId, row])
   );
+}
+
+type PublishedRhythmGameCatalogPageQuery = {
+  songs: PublishedRhythmGameCatalogSong[];
+  total: number;
+  selected_volume_id: string;
+  volumes: PublishedRhythmGameCatalogPage["volumes"];
+};
+
+/**
+ * Returns only the catalog fields needed to render the Dance Stage song list.
+ * Full chart JSON stays on the per-song detail endpoint.
+ */
+export async function listPublishedRhythmGameCatalogPage(params: {
+  volumeId?: string;
+  limit: number;
+  offset: number;
+}): Promise<PublishedRhythmGameCatalogPage> {
+  const result = await pool.query<PublishedRhythmGameCatalogPageQuery>(
+    `WITH catalog AS MATERIALIZED (
+       SELECT
+         COALESCE(NULLIF(li.source_lineage_json ->> 'legacyBeatEntryId', ''), li.id) AS beat_entry_id,
+         li.title,
+         COALESCE(cover.public_url, u.banner_public_url, u.avatar_public_url) AS cover_image_url,
+         COALESCE(NULLIF(li.metadata_json ->> 'volumeId', ''), NULLIF(li.metadata_json ->> 'volume_id', ''), '') AS volume_id,
+         COALESCE(NULLIF(li.metadata_json ->> 'volumeLabel', ''), NULLIF(li.metadata_json ->> 'volume_label', ''), '') AS volume_label,
+         COALESCE(NULLIF(li.metadata_json ->> 'volumeSlug', ''), NULLIF(li.metadata_json ->> 'volume_slug', ''), '') AS volume_slug,
+         COALESCE(NULLIF(li.metadata_json ->> 'durationSeconds', ''), NULLIF(li.metadata_json ->> 'duration_seconds', '')) AS duration_text,
+         COALESCE(NULLIF(li.metadata_json ->> 'majorBeatCount', ''), NULLIF(li.metadata_json ->> 'major_beat_count', '')) AS major_beat_count_text,
+         COALESCE(NULLIF(li.metadata_json #>> '{modeDifficultyBeatCounts,step_arrows,normal}', ''), '0') AS game_beat_count_text,
+         COALESCE(li.metadata_json -> 'availableGameModes', '[]'::jsonb) AS available_game_modes,
+         COALESCE(li.metadata_json -> 'availableDifficulties', '[]'::jsonb) AS available_difficulties,
+         COALESCE(li.metadata_json -> 'difficultyBeatCounts', '{}'::jsonb) AS difficulty_beat_counts,
+         COALESCE(li.metadata_json -> 'modeDifficultyBeatCounts', '{}'::jsonb) AS mode_difficulty_beat_counts,
+         CASE
+           WHEN COALESCE(NULLIF(li.metadata_json ->> 'officialVolume', ''), NULLIF(li.metadata_json ->> 'official_volume', '')) = 'true'
+           THEN true
+           ELSE false
+         END AS official_volume,
+         COALESCE(NULLIF(li.metadata_json ->> 'sortOrder', ''), NULLIF(li.metadata_json ->> 'sort_order', ''), '0') AS sort_order_text,
+         COALESCE(u.display_name, u.creator_slug, 'Faceless creator') AS creator_name,
+         li.updated_at
+       FROM library_items li
+       LEFT JOIN users u ON u.id = li.owner_user_id
+       LEFT JOIN LATERAL (
+         SELECT lf.public_url
+         FROM library_files lf
+         WHERE lf.item_id = li.id
+           AND lf.role = 'cover'
+         ORDER BY lf.created_at ASC
+         LIMIT 1
+       ) cover ON true
+       WHERE li.kind = 'rhythm_game'
+         AND li.visibility = 'public'
+         AND li.status = 'published'
+         AND COALESCE(NULLIF(li.metadata_json ->> 'gameEnabled', ''), li.metadata_json ->> 'game_enabled') = 'true'
+     ), volume_summary AS (
+       SELECT volume_id, volume_label, volume_slug, official_volume, COUNT(*)::int AS song_count
+       FROM catalog
+       GROUP BY volume_id, volume_label, volume_slug, official_volume
+     ), selected AS (
+       SELECT COALESCE(
+         (
+           SELECT $1::text
+           WHERE NULLIF($1::text, '') IS NOT NULL
+             AND EXISTS (SELECT 1 FROM catalog WHERE volume_id = $1::text)
+         ),
+         (SELECT volume_id FROM volume_summary ORDER BY official_volume DESC, volume_label ASC LIMIT 1),
+         ''
+       ) AS selected_volume_id
+     ), filtered AS (
+       SELECT catalog.*
+       FROM catalog
+       CROSS JOIN selected
+       WHERE catalog.volume_id = selected.selected_volume_id
+     ), page AS (
+       SELECT *
+       FROM filtered
+       ORDER BY official_volume DESC, updated_at DESC, beat_entry_id ASC
+       LIMIT $2::int
+       OFFSET $3::int
+     )
+     SELECT
+       COALESCE(
+         (
+           SELECT jsonb_agg(
+             jsonb_build_object(
+               'beatEntryId', page.beat_entry_id,
+               'title', page.title,
+               'durationSeconds', CASE WHEN page.duration_text ~ '^[0-9]+(\\.[0-9]+)?$' THEN page.duration_text::double precision ELSE 0 END,
+               'majorBeatCount', CASE WHEN page.major_beat_count_text ~ '^[0-9]+$' THEN page.major_beat_count_text::int ELSE 0 END,
+               'gameBeatCount', CASE WHEN page.game_beat_count_text ~ '^[0-9]+$' THEN page.game_beat_count_text::int ELSE 0 END,
+               'coverImageUrl', page.cover_image_url,
+               'availableGameModes', page.available_game_modes,
+               'availableDifficulties', page.available_difficulties,
+               'difficultyBeatCounts', page.difficulty_beat_counts,
+               'modeDifficultyBeatCounts', page.mode_difficulty_beat_counts,
+               'volumeId', page.volume_id,
+               'volumeLabel', page.volume_label,
+               'volumeSlug', page.volume_slug,
+               'officialVolume', page.official_volume,
+               'creatorName', page.creator_name,
+               'published', true
+             )
+             ORDER BY page.official_volume DESC, page.updated_at DESC, page.beat_entry_id ASC
+           )
+           FROM page
+         ),
+         '[]'::jsonb
+       ) AS songs,
+       (SELECT COUNT(*)::int FROM filtered) AS total,
+       COALESCE(
+         (
+           SELECT jsonb_agg(
+             jsonb_build_object(
+               'volumeId', volume_summary.volume_id,
+               'volumeLabel', volume_summary.volume_label,
+               'volumeSlug', volume_summary.volume_slug,
+               'officialVolume', volume_summary.official_volume,
+               'songCount', volume_summary.song_count
+             )
+             ORDER BY volume_summary.official_volume DESC, volume_summary.volume_label ASC
+           )
+           FROM volume_summary
+         ),
+         '[]'::jsonb
+       ) AS volumes,
+       selected.selected_volume_id
+     FROM selected`,
+    [params.volumeId?.trim() ?? "", params.limit, params.offset]
+  );
+
+  const row = result.rows[0];
+  return {
+    songs: row?.songs ?? [],
+    total: Number(row?.total ?? 0),
+    selectedVolumeId: row?.selected_volume_id ?? "",
+    volumes: row?.volumes ?? [],
+  };
 }
 
 function filterEntryModes(entry: Record<string, unknown>, metadata: NormalizedRhythmGameMetadata) {
@@ -406,50 +585,6 @@ export async function createPublishedRhythmGameCoverReadStream(
   };
 }
 
-export async function syncPublishedRhythmGameCatalogEntry(itemId: string): Promise<void> {
-  const item = await readPublishedRhythmGameLibraryItem(itemId);
-  if (!item) {
-    return;
-  }
-  if (item.sourceLineage.source === "legacy_game_catalog") {
-    // Legacy game_songs already owns these entries. The Library migration only
-    // materializes their public asset references and must not resync them on
-    // every game-catalog freshness check.
-    return;
-  }
-  const shouldEnable =
-    item.kind === "rhythm_game" &&
-    item.visibility === "public" &&
-    item.status === "published" &&
-    item.metadata.gameEnabled;
-  const chartFile = item.files.find((file) => file.role === "chart");
-  const audioFile = item.files.find((file) => file.role === "audio" || file.role === "preview");
-  const beatEntryId = String(item.sourceLineage.legacyBeatEntryId || item.id);
-  if (shouldEnable && chartFile && audioFile) {
-    await upsertSongForEntry({
-      beatEntryId,
-      title: item.title,
-      isEnabled: true,
-      createdByUserId: item.ownerUserId,
-    });
-    return;
-  }
-  const existing = await findSongByEntryId(beatEntryId);
-  if (existing) {
-    await setSongEnabledForEntry(beatEntryId, false, item.title);
-  }
-}
-
-export async function syncAllPublishedRhythmGameCatalogEntries(): Promise<void> {
-  const items = await listPublishedRhythmGameLibraryItems();
-  for (const item of items) {
-    if (item.sourceLineage.source === "legacy_game_catalog") {
-      continue;
-    }
-    await syncPublishedRhythmGameCatalogEntry(item.id);
-  }
-}
-
 export function normalizeLibraryItemMetadata(kind: string, metadata: Record<string, unknown>): Record<string, unknown> {
   if (kind !== "rhythm_game") {
     return metadata;
@@ -469,6 +604,7 @@ export function buildPublishedSongSummary(item: PublishedRhythmGameLibraryItem, 
   return {
     beatEntryId,
     title: item.title,
+    durationSeconds: Number((entry.entry as Record<string, unknown> | undefined)?.durationSeconds ?? 0),
     majorBeatCount: Array.isArray(entry.majorBeats) ? entry.majorBeats.length : 0,
     gameBeatCount: normalChart || (getDifficultyBeatCounts(entry, "step_arrows").normal ?? 0),
     coverImageUrl: coverFile?.publicUrl ?? item.creator.bannerUrl ?? item.creator.avatarUrl ?? null,

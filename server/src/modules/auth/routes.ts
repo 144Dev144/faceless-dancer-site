@@ -307,7 +307,18 @@ router.get("/me", requireAuth, async (req, res) => {
     return res.status(401).json({ error: "User missing" });
   }
 
-  return res.json(mapAuthResponse(user));
+  let isHolder = isTruthyDbFlag(user.is_holder);
+  try {
+    const currentHolderStatus = await checkHolderEligibility(user.public_key);
+    if (currentHolderStatus !== isHolder) {
+      await pool.query(`UPDATE users SET is_holder = $1, updated_at = now() WHERE id = $2`, [currentHolderStatus ? 1 : 0, user.id]);
+      isHolder = currentHolderStatus;
+    }
+  } catch (error) {
+    console.error("Holder eligibility refresh failed", { userId: user.id, error });
+  }
+
+  return res.json({ ...mapAuthResponse(user), isHolder });
 });
 
 router.put("/profile", requireAuth, async (req, res) => {

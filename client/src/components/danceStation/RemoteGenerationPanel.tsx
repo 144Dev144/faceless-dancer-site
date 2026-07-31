@@ -15,7 +15,7 @@ import {
 } from "../../lib/api";
 import { fetchFaceLESSWalletBalance, fetchSolWalletBalance, type FaceLESSWalletBalance } from "../../lib/facelessBalance";
 import { sendRemoteGenerationPayment, sendRemoteGenerationSolPayment, signRemoteGenerationPayment } from "../../lib/remoteGenerationPayment";
-import { calculateRemotePricing, fetchOnChainMarketPrice, type RemoteMarketPrice } from "../../lib/remoteGenerationPricing";
+import { calculateRemotePricing, createFreeMarketPrice, fetchOnChainMarketPrice, holderFreeForRequest, type RemoteMarketPrice } from "../../lib/remoteGenerationPricing";
 import { fallbackGenerationCoverUrl } from "../../lib/remoteGenerationCoverArt";
 import { createRemoteAudioWorkspaceItem, listWorkspaceItems, saveWorkspaceItem } from "../../lib/danceStationWorkspace";
 import type { BrowserWorkspaceItem } from "../../lib/danceStationWorkspace";
@@ -641,6 +641,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
     };
   }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, transitionGuidanceScale, transitionInferenceSteps, transitionWorkspace, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
 
+  const holderFreeAvailable = Boolean(session.isHolder && pricingConfig && holderFreeForRequest(pricingConfig, request));
+
   const hasActiveJobs = jobs.some((candidate) => activeStatuses.has(candidate.status));
   busyRef.current = busy;
   const rewardSubmissionsByJob = useMemo(() => new Map(rewardSubmissions.map((submission) => [submission.jobId, submission])), [rewardSubmissions]);
@@ -781,20 +783,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
 
     void api.remoteGenerationPricingConfig()
       .then((nextConfig) => {
-        if (nextConfig.paymentMode === "free-signature") {
-          const fetchedAt = new Date().toISOString();
-          return {
-            nextConfig,
-            nextMarketPrice: {
-              tokenMint: nextConfig.market.tokenMint,
-              facelessPriceUsd: 1,
-              solPriceUsd: 1,
-              pairAddress: "",
-              fetchedAt,
-              expiresAt: new Date(Date.now() + nextConfig.market.maxAgeSeconds * 1000).toISOString(),
-              source: "free-signature",
-            } satisfies RemoteMarketPrice,
-          };
+        if (nextConfig.paymentMode === "free-signature" || (session.isHolder && holderFreeForRequest(nextConfig, request))) {
+          return { nextConfig, nextMarketPrice: createFreeMarketPrice(nextConfig, nextConfig.paymentMode === "free-signature" ? "free-signature" : "holder-free") };
         }
         return fetchOnChainMarketPrice(nextConfig)
           .then((nextMarketPrice) => ({ nextConfig, nextMarketPrice }));
@@ -825,7 +815,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
     const voiceChangeNeedsSongDuration = generationMode === "voice-change"
       && voiceChangeSourceRateMicros > 0
       && !voiceSongInput;
-    if (!pricingConfig || !marketPrice
+    const effectiveMarketPrice = marketPrice ?? (pricingConfig && holderFreeAvailable ? createFreeMarketPrice(pricingConfig, "holder-free") : null);
+    if (!pricingConfig || !effectiveMarketPrice
       || (generationMode === "extraction" && (!extractionSourceInput || extractionSourceTooLong))
       || (generationMode === "transition" && !transitionWorkspace?.valid)
       || voiceChangeNeedsSongDuration) {
@@ -833,11 +824,20 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
       return;
     }
     try {
-      setPricing(calculateRemotePricing(pricingConfig, request, marketPrice));
+      const nextPricing = calculateRemotePricing(pricingConfig, request, effectiveMarketPrice, { freeForHolder: holderFreeAvailable });
+      setPricing(nextPricing);
+      if (holderFreeAvailable && marketPrice?.source === "holder-free" && nextPricing.priceUsd > 0) {
+        void fetchOnChainMarketPrice(pricingConfig)
+          .then((nextMarketPrice) => setMarketPrice(nextMarketPrice))
+          .catch(() => {
+            setPricing(null);
+            setPricingError("Pricing is temporarily unavailable. Please try again shortly.");
+          });
+      }
     } catch {
       setPricing(null);
     }
-  }, [extractionSourceInput, extractionSourceTooLong, generationMode, marketPrice, pricingConfig, request, transitionWorkspace, voiceReferenceInput, voiceSongInput]);
+  }, [extractionSourceInput, extractionSourceTooLong, generationMode, holderFreeAvailable, marketPrice, pricingConfig, request, transitionWorkspace, voiceReferenceInput, voiceSongInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1067,7 +1067,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const displayedCurrency = paymentCurrency;
   const currencyLabel = displayedCurrency === "FACELESS" ? "$FACELESS" : "SOL";
   const currentPricing = pricing?.currency === paymentCurrency ? pricing : null;
-  const costLabel = currentPricing ? `${formatPaymentToken(currentPricing.amountAtomic, currentPricing.tokenDecimals)} ${currencyLabel}` : `— ${currencyLabel}`;
+  const holderBaseOnlyFree = holderFreeAvailable && (!currentPricing || currentPricing.priceUsd === 0);
+  const costLabel = holderBaseOnlyFree ? "Free · signature required" : currentPricing ? `${formatPaymentToken(currentPricing.amountAtomic, currentPricing.tokenDecimals)} ${currencyLabel}${holderFreeAvailable ? " · base waived" : ""}` : `— ${currencyLabel}`;
   const walletBalanceLabel = !session.authenticated
     ? "Connect wallet"
     : walletBalance
@@ -1343,8 +1344,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                   </>
                 )}
               </div>
-              <div className="dance-station-payment-currency" role="radiogroup" aria-label="Payment currency">
-                {(["FACELESS", "SOL"] as const).map((currency) => (
+              <div className="dance-station-payment-currency" role="radiogroup" aria-label={holderFreeAvailable ? "Holder payment benefit" : "Payment currency"}>
+                {holderBaseOnlyFree ? <label className="is-active"><input type="radio" checked readOnly disabled={busy} /><span>Free for holders</span></label> : (["FACELESS", "SOL"] as const).map((currency) => (
                   <label key={currency} className={paymentCurrency === currency ? "is-active" : ""}>
                     <input type="radio" name="remote-generation-payment-currency" value={currency} checked={paymentCurrency === currency} onChange={() => setPaymentCurrency(currency)} disabled={busy} />
                     <span>{currency === "FACELESS" ? "$FACELESS" : "SOL"}</span>
