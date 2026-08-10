@@ -48,6 +48,8 @@ function isManifestArtifact(artifact: RemoteJob["artifacts"][number]): boolean {
   return artifact.mimeType.includes("json") || /manifest\.json$/i.test(artifact.objectPath);
 }
 
+const avatarTerminalStatuses = new Set(["succeeded", "failed", "cancelled", "expired", "refunded"]);
+
 function inputFromWorkspace(item: BrowserWorkspaceItem, role: "mesh" | "manifest" | "reference-image"): { file: File | null; url: string; role: "mesh" | "manifest" | "reference-image" } {
   const metadata = item.metadata;
   const files = Array.isArray(metadata.files) ? metadata.files.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object")) : [];
@@ -288,7 +290,7 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
     for (let attempt = 0; attempt < 180; attempt += 1) {
       const current = await api.remoteJob(queued.id);
       setAvatarJob(current);
-      if (["completed", "failed", "cancelled", "refunded"].includes(current.status)) return current;
+      if (avatarTerminalStatuses.has(current.status)) return current;
       await new Promise((resolve) => window.setTimeout(resolve, 4000));
     }
     throw new Error("The avatar generation is still running. Check the generation history for its result.");
@@ -302,7 +304,7 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
       const inputs: RemoteGenerationInput[] = [];
       if (referenceImage) inputs.push((await api.uploadRemoteGenerationAvatarSource(referenceImage, "reference-image")).input);
       const job = await submitAvatarRequest({ ...avatarRequest, inputs });
-      if (job.status !== "completed") throw new Error(job.errorMessage || "The avatar worker could not complete this model.");
+      if (job.status !== "succeeded") throw new Error(job.errorMessage || "The avatar worker could not complete this model.");
       await applyAvatarArtifacts(job);
     } catch (error: unknown) {
       setAvatarMessage(error instanceof Error ? error.message : "Avatar generation failed.");
@@ -343,7 +345,7 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
         metadata: { title: `${model.label} reskin` },
         parameters: { task_type: "avatar_reskin", quality: "runtime", max_attempts: 2 },
       });
-      if (job.status !== "completed") throw new Error(job.errorMessage || "The avatar reskin could not complete.");
+      if (job.status !== "succeeded") throw new Error(job.errorMessage || "The avatar reskin could not complete.");
       await applyAvatarArtifacts(job);
     } catch (error: unknown) {
       setAvatarMessage(error instanceof Error ? error.message : "Avatar reskin failed.");
