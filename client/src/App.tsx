@@ -15,12 +15,25 @@ function currentPath(): string {
 export function App() {
   const { state, setState, refreshSession } = useSession();
   const [path, setPath] = useState<string>(currentPath());
+  const [danceEnginePage, setDanceEnginePage] = useState<JSX.Element | null>(null);
 
   useEffect(() => {
     const onPopState = () => setPath(currentPath());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => {
+    if (path !== "/dance-engine") {
+      setDanceEnginePage(null);
+      return;
+    }
+    let cancelled = false;
+    void import("./pages/DanceEnginePage").then(({ DanceEnginePage }) => {
+      if (!cancelled) setDanceEnginePage(<DanceEnginePage />);
+    });
+    return () => { cancelled = true; };
+  }, [path]);
 
   let page: JSX.Element;
   if (path === "/game") {
@@ -39,6 +52,8 @@ export function App() {
     page = <DanceStationPage session={state} setSession={setState} />;
   } else if (path === "/profile") {
     page = <ProfilePage session={state} setSession={setState} />;
+  } else if (path === "/dance-engine") {
+    page = danceEnginePage ?? <main className="dance-engine-route-loading">Loading Dance Engine Lab...</main>;
   } else {
     page = (
       <HomePage

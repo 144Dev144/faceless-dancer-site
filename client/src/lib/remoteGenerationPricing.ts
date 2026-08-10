@@ -148,6 +148,9 @@ export function holderFreeForRequest(config: RemotePricingConfig, request: Remot
     case "voice_change": return config.settings.voiceChangeFreeForHolders;
     case "transition_chain": return config.settings.transitionFreeForHolders;
     case "rhythm_beats": return config.settings.rhythmBeatsFreeForHolders;
+    case "avatar":
+    case "avatar_reskin":
+    case "reskin": return config.settings.avatarFreeForHolders ?? config.settings.musicFreeForHolders;
     default: return config.settings.musicFreeForHolders;
   }
 }
@@ -159,7 +162,7 @@ export function calculateRemotePricing(
   options: { freeForHolder?: boolean } = {},
 ): RemotePricingQuote {
   const parameters = request.parameters;
-  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : parameters.task_type === "rhythm_beats" ? "rhythm_beats" : "text2music";
+  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : parameters.task_type === "rhythm_beats" ? "rhythm_beats" : ["avatar", "avatar_reskin", "reskin"].includes(String(parameters.task_type)) ? "avatar" : "text2music";
   const transitionPlan = taskType === "transition_chain" && parameters.transition_plan && typeof parameters.transition_plan === "object" ? parameters.transition_plan as { transitionClips?: Array<{ startSeconds: number; endSeconds: number }> } : undefined;
   const transitionStageCount = transitionPlan?.transitionClips?.length ?? 1;
   const transitionSeconds = transitionPlan?.transitionClips?.reduce((sum, clip) => sum + Math.max(0, clip.endSeconds - clip.startSeconds), 0) ?? 0;
@@ -178,7 +181,9 @@ export function calculateRemotePricing(
         ? (isSol ? settings.solTransitionBasePriceUsdMicros : settings.facelessTransitionBasePriceUsdMicros)
         : taskType === "rhythm_beats"
           ? (isSol ? settings.solRhythmBeatsBasePriceUsdMicros : settings.facelessRhythmBeatsBasePriceUsdMicros)
-        : (isSol ? settings.solBasePriceUsdMicros : settings.facelessBasePriceUsdMicros);
+        : taskType === "avatar"
+          ? (isSol ? (settings.solAvatarBasePriceUsdMicros ?? settings.solBasePriceUsdMicros) : (settings.facelessAvatarBasePriceUsdMicros ?? settings.facelessBasePriceUsdMicros))
+          : (isSol ? settings.solBasePriceUsdMicros : settings.facelessBasePriceUsdMicros);
   const stepRateMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionAdditionalStepPriceUsdMicros : settings.facelessExtractionAdditionalStepPriceUsdMicros)
     : taskType === "voice_change"

@@ -71,6 +71,12 @@ const envSchema = z.object({
   BEAT_PREVIEW_OFFSET_SECONDS: z.coerce.number().nonnegative().default(30),
   BEAT_PREVIEW_DURATION_SECONDS: z.coerce.number().positive().default(15),
 
+  DANCE_MOTION_STORAGE_DIR: z.string().default("../data/dance-motion"),
+  DANCE_MOTION_MAX_UPLOAD_MB: z.coerce.number().positive().max(1024).default(250),
+  DANCE_MOTION_MAX_RESULT_MB: z.coerce.number().positive().max(1024).default(250),
+  DANCE_MOTION_FFMPEG_PATH: z.string().min(1).default("ffmpeg"),
+  DANCE_MOTION_CONVERSION_TIMEOUT_MS: z.coerce.number().int().positive().max(900000).default(180000),
+
   REMOTE_GENERATION_ENABLED: z.enum(["true", "false"]).default("false"),
   LAUNCH_SERVER_URL: z.string().url().default("http://localhost:4100"),
   LAUNCH_SERVER_INTERNAL_TOKEN: z.string().min(8).default("local-development-token"),
@@ -118,6 +124,13 @@ export const env = {
   beatLocalCacheDir: path.isAbsolute(data.BEAT_LOCAL_CACHE_DIR)
     ? data.BEAT_LOCAL_CACHE_DIR
     : path.resolve(process.cwd(), data.BEAT_LOCAL_CACHE_DIR),
+  danceMotionStorageDir: path.isAbsolute(data.DANCE_MOTION_STORAGE_DIR)
+    ? data.DANCE_MOTION_STORAGE_DIR
+    : path.resolve(process.cwd(), data.DANCE_MOTION_STORAGE_DIR),
+  danceMotionMaxUploadBytes: data.DANCE_MOTION_MAX_UPLOAD_MB * 1024 * 1024,
+  danceMotionMaxResultBytes: data.DANCE_MOTION_MAX_RESULT_MB * 1024 * 1024,
+  danceMotionFfmpegPath: data.DANCE_MOTION_FFMPEG_PATH,
+  danceMotionConversionTimeoutMs: data.DANCE_MOTION_CONVERSION_TIMEOUT_MS,
   runMigrationsOnStart: data.RUN_MIGRATIONS_ON_START === "true",
   remoteGenerationEnabled: data.REMOTE_GENERATION_ENABLED === "true",
   launchServerUrl: data.LAUNCH_SERVER_URL.replace(/\/$/, ""),

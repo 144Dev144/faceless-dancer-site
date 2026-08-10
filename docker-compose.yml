@@ -43,6 +43,7 @@ services:
       LAUNCH_SERVER_INTERNAL_TOKEN: "${LAUNCH_SERVER_INTERNAL_TOKEN:-local-development-token}"
     volumes:
       - ${BEAT_STORAGE_HOST_PATH:-/var/lib/faceless-dancer/beat-storage}:/app/beat-storage
+      - ${DANCE_MOTION_STORAGE_HOST_PATH:-./data}:/app/data
     ports:
       - "127.0.0.1:${PORT:-3001}:${PORT:-3001}"
     restart: unless-stopped

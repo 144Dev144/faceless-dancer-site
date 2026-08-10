@@ -37,6 +37,12 @@ const supportedAudioMimeAliases = new Set([
 
 const supportedAudioExtensions = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"]);
 const browserFallbackMimeTypes = new Set(["", "application/octet-stream", "binary/octet-stream"]);
+const avatarSourceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: env.libraryMaxUploadSizeBytes },
+});
+const avatarSourceRoles = new Set(["mesh", "manifest", "reference-image"]);
+const avatarSourceExtensions = new Set([".glb", ".gltf", ".json", ".png", ".jpg", ".jpeg", ".webp"]);
 
 function isSupportedAudioUpload(file: Express.Multer.File): boolean {
   const mimeType = String(file.mimetype || "").trim().toLowerCase();
@@ -49,6 +55,15 @@ function isSupportedAudioUpload(file: Express.Multer.File): boolean {
 function safeSourceFileName(name: string): string {
   const clean = name.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return clean.slice(0, 120) || "source-audio";
+}
+
+function isSupportedAvatarSource(file: Express.Multer.File, role: string): boolean {
+  if (!avatarSourceRoles.has(role)) return false;
+  const extension = path.extname(file.originalname || "").toLowerCase();
+  if (!avatarSourceExtensions.has(extension)) return false;
+  if (role === "mesh") return extension === ".glb" || extension === ".gltf";
+  if (role === "manifest") return extension === ".json";
+  return [".png", ".jpg", ".jpeg", ".webp"].includes(extension);
 }
 
 function isRemoteGenerationObjectPath(objectPath: string): boolean {
@@ -133,7 +148,7 @@ router.post("/availability", async (req, res, next) => {
   try {
     const request = z.object({
       priority: remoteGenerationPrioritySchema,
-      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats"]),
+      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar"]),
     }).parse({
       priority: req.body?.priority ?? "standard",
       runtime: req.body?.runtime ?? "ace-step",
@@ -204,6 +219,32 @@ router.post("/sources", sourceUpload.single("file"), async (req, res, next) => {
         sizeBytes: req.file.size,
       },
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/avatar-sources", avatarSourceUpload.single("file"), async (req, res, next) => {
+  if (!requireEnabled(res)) return;
+  try {
+    const role = typeof req.body?.role === "string" ? req.body.role.trim() : "";
+    if (!req.file) return res.status(400).json({ error: "Choose an avatar file first" });
+    if (!isSupportedAvatarSource(req.file, role)) {
+      return res.status(400).json({ error: "Avatar uploads must be a GLB/GLTF mesh, JSON manifest, or reference image." });
+    }
+    const sourceId = createId();
+    const originalName = safeSourceFileName(req.file.originalname || `avatar-${role}`);
+    const extension = path.extname(originalName);
+    const objectPath = buildObjectPath(["remote-generation", "avatar-sources", req.session!.userId, `${sourceId}-${originalName}`]);
+    const uploadResult = await uploadBufferToBunny({ buffer: req.file.buffer, objectPath, contentType: req.file.mimetype || "application/octet-stream" });
+    return res.status(201).json({ input: {
+      role,
+      sourceUrl: uploadResult.publicUrl,
+      mimeType: req.file.mimetype || (extension === ".json" ? "application/json" : "application/octet-stream"),
+      fileName: req.file.originalname || originalName,
+      sha256: crypto.createHash("sha256").update(req.file.buffer).digest("hex"),
+      sizeBytes: req.file.size,
+    } });
   } catch (error) {
     return next(error);
   }
@@ -287,7 +328,7 @@ router.get("/jobs", async (req, res, next) => {
     const knownJobIds = typeof req.query.knownIds === "string"
       ? [...new Set(req.query.knownIds.split(",").map((id) => id.trim()).filter(Boolean))].slice(0, 100)
       : undefined;
-    return res.json(await launchServerClient.listJobs(req.session!.userId, { limit, cursor, activeOnly, knownJobIds, runtime: runtime as "ace-step" | "voice-change" | "rhythm-beats" | undefined }));
+    return res.json(await launchServerClient.listJobs(req.session!.userId, { limit, cursor, activeOnly, knownJobIds, runtime: runtime as "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | undefined }));
   } catch (error) {
     return respondRemoteGenerationError(error, res, "Generation history is temporarily unavailable. Please try again shortly.");
   }

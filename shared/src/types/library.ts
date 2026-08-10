@@ -15,6 +15,8 @@ export type LibraryKind =
   | "dataset"
   | "lokr"
   | "rhythm_game"
+  | "dance_motion"
+  | "avatar"
   | "tool";
 
 export type LibraryFileRole =
@@ -30,6 +32,9 @@ export type LibraryFileRole =
   | "adapter_weights"
   | "chart"
   | "stem"
+  | "motion"
+  | "model"
+  | "rig_manifest"
   | "project";
 
 export type LibraryStorageProvider = "local" | "bunny";

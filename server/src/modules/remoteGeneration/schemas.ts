@@ -20,7 +20,7 @@ export const remoteGenerationPrioritySchema = z.enum(["low", "standard", "high"]
 export const remotePaymentCurrencySchema = z.enum(["FACELESS", "SOL"]);
 
 export const remoteGenerationRequestSchema = z.object({
-  runtime: z.enum(["ace-step", "voice-change", "rhythm-beats"]).default("ace-step"),
+  runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar"]).default("ace-step"),
   modelRevision: z.string().trim().min(1).max(200).default("ace-step-1.5"),
   inputs: z.array(inputSchema).max(16).default([]),
   priority: remoteGenerationPrioritySchema.default("standard"),
@@ -46,6 +46,15 @@ export const remoteGenerationRequestSchema = z.object({
     const selected = value.parameters.selected_stems;
     if (mode !== "all" && mode !== "selected") context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "stem_mode"], message: "Choose all stems or selected stems." });
     if (mode === "selected" && (!Array.isArray(selected) || selected.length < 1 || selected.some((stem) => typeof stem !== "string" || !stems.includes(stem)))) context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "selected_stems"], message: "Select at least one supported stem." });
+  }
+  if (value.runtime === "avatar") {
+    if (!["avatar", "avatar_reskin", "reskin"].includes(taskType)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "task_type"], message: "Avatar requests must use task_type=avatar or task_type=avatar_reskin." });
+    }
+    if (taskType === "avatar_reskin" || taskType === "reskin") {
+      const roles = new Set(value.inputs.map((input) => input.role));
+      if (!roles.has("mesh") || !roles.has("manifest")) context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "Avatar reskin requires mesh and manifest inputs." });
+    }
   }
 });
 

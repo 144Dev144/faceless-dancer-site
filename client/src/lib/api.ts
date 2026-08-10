@@ -122,7 +122,7 @@ export interface RemoteGenerationMetadata {
 }
 
 export interface RemoteGenerationRequest {
-  runtime: "ace-step" | "voice-change" | "rhythm-beats";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar";
   modelRevision: string;
   inputs: RemoteGenerationInput[];
   priority: "low" | "standard" | "high";
@@ -180,11 +180,14 @@ export interface RemotePaymentSettings {
   solRhythmBeatsAdditionalStepPriceUsdMicros: number;
   facelessRhythmBeatsSourceSecondPriceUsdMicros: number;
   solRhythmBeatsSourceSecondPriceUsdMicros: number;
+  facelessAvatarBasePriceUsdMicros: number;
+  solAvatarBasePriceUsdMicros: number;
   musicFreeForHolders: boolean;
   extractionFreeForHolders: boolean;
   voiceChangeFreeForHolders: boolean;
   transitionFreeForHolders: boolean;
   rhythmBeatsFreeForHolders: boolean;
+  avatarFreeForHolders: boolean;
   updatedAt: string;
 }
 
@@ -229,7 +232,7 @@ export interface RemotePaymentIntent {
   id: string;
   userId: string;
   walletAddress: string;
-  runtime: "ace-step" | "voice-change" | "rhythm-beats";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar";
   requestHash: string;
   currency: RemotePaymentCurrency;
   tokenMint: string;
@@ -301,7 +304,7 @@ export interface RemoteJob {
   id: string;
   userId: string;
   paymentIntentId: string;
-  runtime: "ace-step" | "voice-change" | "rhythm-beats";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar";
   modelRevision: string;
   requestHash: string;
   request: RemoteGenerationRequest;
@@ -598,6 +601,22 @@ export const api = {
       throw new Error(body.error ?? `Upload failed (${response.status})`);
     }
 
+    return response.json() as Promise<{ input: RemoteGenerationInput }>;
+  },
+
+  uploadRemoteGenerationAvatarSource: async (file: File, role: "mesh" | "manifest" | "reference-image") => {
+    const formData = new FormData();
+    formData.set("file", file);
+    formData.set("role", role);
+    const response = await fetch(`${API_BASE}/remote-generation/avatar-sources`, {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error ?? `Avatar upload failed (${response.status})`);
+    }
     return response.json() as Promise<{ input: RemoteGenerationInput }>;
   },
 

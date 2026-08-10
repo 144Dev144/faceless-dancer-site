@@ -142,6 +142,11 @@ deploy-bundle.tar.gz
 /expanded-prompt-check.png
 /pump_hourly.csv
 /tmp/
+/tmp-*.png
+
+# Local 3D avatar generation outputs and model caches
+/tools/dance-avatar-poc/output/
+/tools/dance-avatar-poc/model-cache/
 
 # Empty local artifact from rhythm catalog inspection
 /server/legacyBeatEntryId

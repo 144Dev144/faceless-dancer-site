@@ -17,6 +17,8 @@ export const libraryKindSchema = z.enum([
   "dataset",
   "lokr",
   "rhythm_game",
+  "dance_motion",
+  "avatar",
   "tool",
 ]);
 
@@ -33,6 +35,9 @@ export const libraryFileRoleSchema = z.enum([
   "adapter_weights",
   "chart",
   "stem",
+  "motion",
+  "model",
+  "rig_manifest",
   "project",
 ]);
 

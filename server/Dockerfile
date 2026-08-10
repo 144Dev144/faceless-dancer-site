@@ -13,6 +13,7 @@ RUN npm run build --workspace @faceless/shared && npm run build --workspace @fac
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apk add --no-cache ffmpeg
 COPY package.json ./
 COPY server/package.json ./server/package.json
 COPY shared/package.json ./shared/package.json

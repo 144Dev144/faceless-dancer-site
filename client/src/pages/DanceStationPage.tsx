@@ -5,6 +5,7 @@ import { HomeTopNav } from "../components/home/HomeTopNav";
 import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
 import { RemoteGenerationPanel } from "../components/danceStation/RemoteGenerationPanel";
 import { RhythmBeatsPanel } from "../components/danceStation/RhythmBeatsPanel";
+import { DanceCreationPanel } from "../components/danceStation/DanceCreationPanel";
 import { AudioMassInlineEditor, audioMassInlineController, type AudioMassEvent } from "../components/danceStation/AudioMassInlineEditor";
 import { AudioPlayButton } from "../components/audio/SiteAudioPlayer";
 import { api, type LibraryItem, type SupportIssueType } from "../lib/api";
@@ -26,11 +27,12 @@ interface Props {
   setSession: (next: SessionState) => void;
 }
 
-type DanceStationPanel = "library" | "audio-edit" | "instrument-lab" | "generation" | "rhythm-beats";
+type DanceStationPanel = "library" | "audio-edit" | "instrument-lab" | "generation" | "rhythm-beats" | "dance-creation";
 
 const panelHashById: Record<DanceStationPanel, string> = {
   generation: "music-generation",
   "rhythm-beats": "rhythm-beats",
+  "dance-creation": "dance-creation",
   library: "library",
   "audio-edit": "audio-edit",
   "instrument-lab": "instrument-lab",
@@ -40,6 +42,7 @@ const panelIdByHash: Record<string, DanceStationPanel> = {
   "music-generation": "generation",
   generation: "generation",
   "rhythm-beats": "rhythm-beats",
+  "dance-creation": "dance-creation",
   library: "library",
   "audio-edit": "audio-edit",
   "instrument-lab": "instrument-lab",
@@ -70,6 +73,13 @@ const tools: Array<{
     status: "REMOTE",
     available: true,
     Icon: Waves,
+  },
+  {
+    id: "dance-creation",
+    label: "Dance Creation",
+    status: "REMOTE",
+    available: true,
+    Icon: Sparkles,
   },
   {
     id: "audio-edit",
@@ -403,6 +413,38 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     }
     if (item.kind === "rhythm_game") {
       await publishRhythmGameWorkspaceItem(item);
+      return;
+    }
+    if (item.kind === "dance_motion") {
+      const composition = item.metadata.composition;
+      if (!composition || typeof composition !== "object") throw new Error("This dance motion is missing its composition data.");
+      const currentlyPublished = isPublishedLibraryMetadata(item.metadata);
+      setWorkspaceMessage(`${currentlyPublished ? "Updating" : "Publishing"} ${item.title}...`);
+      const managed = await api.upsertOwnedLibraryItem({
+        visibility: "public",
+        kind: "dance_motion",
+        title: item.title,
+        description: "Canonical dance motion composition for avatar playback.",
+        tags: ["dance", "motion", "avatar"],
+        metadata: { sourceTool: "dance-creation", composition },
+        sourceLineage: { localId: item.id, source: "dance-station-site" },
+        localId: item.id,
+      });
+      await api.clearOwnedLibraryItemFiles(managed.item.id);
+      await api.uploadDraftLibraryFile(managed.item.id, {
+        role: "motion",
+        metadata: { originalTitle: `${item.title}.dance.json`, source: "dance-creation" },
+        file: jsonDownloadFile(`${item.title}.dance.json`, composition),
+      });
+      const published = await api.publishDraftLibraryItem(managed.item.id);
+      await saveWorkspaceItem({
+        ...item,
+        creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || published.item.creator?.publicKey || item.creatorName,
+        updatedAt: new Date().toISOString(),
+        metadata: { ...item.metadata, publicLibrary: published.item, libraryItemId: published.item.id, publicLibraryStatus: "published", files: published.item.files },
+      });
+      setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
+      await refreshWorkspace();
       return;
     }
     const linkedLibraryId = linkedLibraryItemIdFromMetadata(item.metadata);
@@ -1199,7 +1241,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   }, [activePanel, activeInstrumentTrackId, activeInstrumentNotes, instrumentOctave, instrumentRecording, instrumentBpm]);
 
   return (
-    <main className={`home-v2 library-page-shell dance-station-app-shell${activePanel === "generation" ? " dance-station-app-shell--generation" : ""}`}>
+    <main className={`home-v2 library-page-shell dance-station-app-shell${activePanel === "generation" ? " dance-station-app-shell--generation" : ""}${activePanel === "dance-creation" ? " dance-station-app-shell--dance-creation" : ""}`}>
       <div className="home-v2-shell">
         <HomeTopNav session={session} setSession={setSession} />
 
@@ -1271,7 +1313,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           ))}
         </section>
 
-        <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" || activePanel === "audio-edit" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}${activePanel === "rhythm-beats" ? " dance-station-main-grid--rhythm-beats" : ""}`}>
+        <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" || activePanel === "audio-edit" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}${activePanel === "rhythm-beats" ? " dance-station-main-grid--rhythm-beats" : ""}${activePanel === "dance-creation" ? " dance-station-main-grid--dance-creation" : ""}`}>
           <div className="home-v2-card dance-station-main-panel">
             {showSettings ? (
               <BrowserWorkspaceSettings
@@ -1324,12 +1366,14 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
               <RemoteGenerationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
             ) : activePanel === "rhythm-beats" ? (
               <RhythmBeatsPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} onPublishAsset={publishWorkspaceItem} />
+            ) : activePanel === "dance-creation" ? (
+              <DanceCreationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} onPublishAsset={publishWorkspaceItem} />
             ) : (
               <UnavailablePanel tool={tools.find((tool) => tool.id === activePanel) ?? tools[0]} />
             )}
           </div>
 
-          {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "rhythm-beats" && activePanel !== "library" && activePanel !== "audio-edit" ? <aside className="home-v2-card dance-station-context-panel">
+          {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "rhythm-beats" && activePanel !== "dance-creation" && activePanel !== "library" && activePanel !== "audio-edit" ? <aside className="home-v2-card dance-station-context-panel">
             {showSettings ? (
               <SettingsSummaryPanel
                 session={session}
