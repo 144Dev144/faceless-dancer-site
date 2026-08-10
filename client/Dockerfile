@@ -1,5 +1,5 @@
 FROM node:22-alpine AS build
-WORKDIR /app/client
+WORKDIR /app
 ARG VITE_SOLANA_NETWORK=devnet
 ARG VITE_SOLANA_RPC_URL=https://api.devnet.solana.com
 ARG VITE_FACELESS_PRICE_RPC_URL=https://solana-rpc.publicnode.com
@@ -8,10 +8,13 @@ ENV VITE_SOLANA_NETWORK=${VITE_SOLANA_NETWORK}
 ENV VITE_SOLANA_RPC_URL=${VITE_SOLANA_RPC_URL}
 ENV VITE_FACELESS_PRICE_RPC_URL=${VITE_FACELESS_PRICE_RPC_URL}
 ENV SECONDARY_RPC_NODE=${SECONDARY_RPC_NODE}
-COPY client/package.json ./
+COPY package.json package-lock.json ./
+COPY client/package.json ./client/package.json
+COPY shared/package.json ./shared/package.json
 RUN npm install
-COPY client ./
-RUN npm run build
+COPY shared ./shared
+COPY client ./client
+RUN npm run build --workspace @faceless/shared && npm run build --workspace @faceless/client
 
 FROM nginx:1.27-alpine
 COPY client/nginx.conf /etc/nginx/templates/default.conf.template
