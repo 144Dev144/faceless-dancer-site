@@ -35,6 +35,7 @@ interface RestLegPose {
 }
 
 interface RestArmPose {
+  side: "left" | "right";
   upper: THREE.Object3D;
   lower: THREE.Object3D;
   hand: THREE.Object3D;
@@ -113,7 +114,10 @@ const ARM_SAMPLE = new THREE.Vector3();
 const ARM_PENETRATION_CANDIDATE = new THREE.Vector3();
 const ARM_BEST_PENETRATION = new THREE.Vector3();
 const LEG_IK_BLEND = 0.35;
-const ARM_CLEARANCE_IK_BLEND = 1;
+// Clearance is a collision safeguard, not a replacement for the captured
+// elbow pose. A soft solve prevents small torso-proxy overlaps from flipping
+// the arm onto the opposite bend plane.
+const ARM_CLEARANCE_IK_BLEND = 0.12;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -322,7 +326,7 @@ function buildRestArmPose(
   const upperLength = upperPosition.distanceTo(elbowPosition);
   const lowerLength = elbowPosition.distanceTo(handPosition);
   if (upperLength < 0.0001 || lowerLength < 0.0001) return null;
-  return { upper, lower, hand, upperLength, lowerLength };
+  return { side, upper, lower, hand, upperLength, lowerLength };
 }
 
 function restBoneDirection(bone: THREE.Object3D): THREE.Vector3 | null {
@@ -472,12 +476,12 @@ export class CapturedMotionRetargeter {
     }
     this.applyLegIk("left", framePosition);
     this.applyLegIk("right", framePosition);
-    this.applyArmClearance();
+    this.applyArmClearance(framePosition);
     this.rig.root.updateWorldMatrix(true, true);
     return true;
   }
 
-  private applyArmClearance(): void {
+  private applyArmClearance(framePosition: number): void {
     if (!this.torsoClearanceProxy || !this.arms.length) return;
     this.rig.root.updateWorldMatrix(true, true);
     this.rig.root.getWorldDirection(ARM_FORWARD_WORLD).normalize();
@@ -486,8 +490,11 @@ export class CapturedMotionRetargeter {
     for (const arm of this.arms) {
       // Re-test after every solve. A hand-only correction can leave the elbow
       // inside the torso, especially on models with long forearms.
-      for (let iteration = 0; iteration < 4; iteration += 1) {
-        const correction = this.armClearanceCorrection(arm);
+      // One soft correction is enough to clear a visible overlap. Re-solving
+      // the same chain repeatedly can turn a small depth correction into a
+      // visibly different elbow bend.
+      for (let iteration = 0; iteration < 1; iteration += 1) {
+        const correction = this.armClearanceCorrection(arm, framePosition);
         if (correction <= 0.0001) break;
         arm.hand.getWorldPosition(ARM_HAND);
         ARM_TARGET_LOCAL_POINT.copy(ARM_HAND);
@@ -495,12 +502,12 @@ export class CapturedMotionRetargeter {
         ARM_TARGET_LOCAL_POINT.add(ARM_BEST_PENETRATION);
         ARM_TARGET.copy(ARM_TARGET_LOCAL_POINT);
         this.rig.root.localToWorld(ARM_TARGET);
-        this.solveArmToTarget(arm, ARM_TARGET);
+        this.solveArmToTarget(arm, ARM_TARGET, framePosition);
       }
     }
   }
 
-  private armClearanceCorrection(arm: RestArmPose): number {
+  private armClearanceCorrection(arm: RestArmPose, framePosition: number): number {
     const proxy = this.torsoClearanceProxy;
     if (!proxy) return 0;
     arm.upper.getWorldPosition(ARM_ORIGIN);
@@ -514,11 +521,28 @@ export class CapturedMotionRetargeter {
     const hand = ARM_LOCAL_POINT.clone();
     let maximum = 0;
     ARM_BEST_PENETRATION.set(0, 0, 0);
-    const sample = (start: THREE.Vector3, end: THREE.Vector3, startRatio: number, endRatio: number) => {
+    const sample = (
+      start: THREE.Vector3,
+      end: THREE.Vector3,
+      startRatio: number,
+      endRatio: number,
+      parentJoint: string,
+      childJoint: string
+    ) => {
       for (let index = 0; index <= 4; index += 1) {
         const ratio = startRatio + (endRatio - startRatio) * (index / 4);
         ARM_SAMPLE.copy(start).lerp(end, ratio);
-        const penetration = this.torsoPenetration(ARM_SAMPLE, ARM_PENETRATION_CANDIDATE);
+        const capturedDepth = this.capturedArmDepth(
+          framePosition,
+          parentJoint,
+          childJoint,
+          ratio
+        );
+        const penetration = this.torsoPenetration(
+          ARM_SAMPLE,
+          ARM_PENETRATION_CANDIDATE,
+          capturedDepth
+        );
         if (penetration > maximum) {
           maximum = penetration;
           ARM_BEST_PENETRATION.copy(ARM_PENETRATION_CANDIDATE);
@@ -526,14 +550,32 @@ export class CapturedMotionRetargeter {
       }
     };
     // Skip the shoulder pivot itself, which naturally sits close to the torso.
-    sample(origin, elbow, 0.18, 1);
-    sample(elbow, hand, 0, 1);
+    sample(origin, elbow, 0.18, 1, `${arm.side}Arm`, `${arm.side}Forearm`);
+    sample(elbow, hand, 0, 1, `${arm.side}Forearm`, `${arm.side}Hand`);
     return Math.min(proxy.maxCorrection, maximum);
+  }
+
+  private capturedArmDepth(
+    framePosition: number,
+    parentJoint: string,
+    childJoint: string,
+    ratio: number
+  ): number | null {
+    if (!this.clip) return null;
+    const parent = sourcePointAtFramePosition(this.clip, framePosition, parentJoint);
+    const child = sourcePointAtFramePosition(this.clip, framePosition, childJoint);
+    const hips = sourcePointAtFramePosition(this.clip, framePosition, "hips");
+    const chest = sourcePointAtFramePosition(this.clip, framePosition, "chest");
+    if (!parent || !child || !hips || !chest) return null;
+    const sourcePoint = parent.lerp(child, ratio);
+    const torsoCenterDepth = (hips.z + chest.z) * 0.5;
+    return sourcePoint.z - torsoCenterDepth;
   }
 
   private torsoPenetration(
     point: THREE.Vector3,
-    correction: THREE.Vector3
+    correction: THREE.Vector3,
+    capturedDepth: number | null
   ): number {
     const proxy = this.torsoClearanceProxy;
     correction.set(0, 0, 0);
@@ -552,7 +594,9 @@ export class CapturedMotionRetargeter {
     const backBoundary = proxy.backZ - surfaceOffset;
     let targetZ = point.z;
     if (point.z > backBoundary && point.z < frontBoundary) {
-      targetZ = point.z >= proxy.center.z ? frontBoundary : backBoundary;
+      targetZ = capturedDepth === null
+        ? (point.z >= proxy.center.z ? frontBoundary : backBoundary)
+        : capturedDepth >= 0 ? frontBoundary : backBoundary;
     }
     const depth = Math.abs(targetZ - point.z);
     if (depth <= 0.000001) return 0;
@@ -562,7 +606,7 @@ export class CapturedMotionRetargeter {
     return limitedDepth;
   }
 
-  private solveArmToTarget(arm: RestArmPose, target: THREE.Vector3): void {
+  private solveArmToTarget(arm: RestArmPose, target: THREE.Vector3, framePosition: number): void {
     arm.upper.updateWorldMatrix(true, false);
     arm.lower.updateWorldMatrix(true, false);
     arm.hand.updateWorldMatrix(true, false);
@@ -579,7 +623,15 @@ export class CapturedMotionRetargeter {
     ARM_DIRECTION.normalize();
     ARM_TARGET.copy(ARM_ORIGIN).addScaledVector(ARM_DIRECTION, distance);
 
-    ARM_POLE.copy(ARM_ELBOW).sub(ARM_ORIGIN);
+    const capturedUpperDirection = this.clip
+      ? sourceDirectionAtFramePosition(this.clip, framePosition, {
+        boneKey: arm.side === "left" ? "upperArmLeft" : "upperArmRight",
+        parentJoint: `${arm.side}Arm`,
+        childJoint: `${arm.side}Forearm`
+      })
+      : null;
+    if (capturedUpperDirection) ARM_POLE.copy(capturedUpperDirection);
+    else ARM_POLE.copy(ARM_ELBOW).sub(ARM_ORIGIN);
     ARM_PROJECTED_POLE.copy(ARM_POLE).addScaledVector(
       ARM_DIRECTION,
       -ARM_POLE.dot(ARM_DIRECTION)

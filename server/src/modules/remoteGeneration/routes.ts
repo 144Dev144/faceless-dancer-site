@@ -161,6 +161,25 @@ router.post("/availability", async (req, res, next) => {
 
 router.use(requireAuth);
 
+router.get("/assets/file", async (req, res) => {
+  if (!requireEnabled(res)) return;
+  const objectPath = typeof req.query.path === "string" ? req.query.path.trim() : "";
+  if (!isRemoteGenerationObjectPath(objectPath)) {
+    res.status(400).json({ error: "Invalid remote generation asset path" });
+    return;
+  }
+
+  try {
+    const asset = await downloadFromBunny(objectPath);
+    res.setHeader("Content-Type", asset.contentType || "application/octet-stream");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.send(asset.buffer);
+  } catch (error) {
+    console.error("[remote-generation] asset proxy failed", { objectPath, error });
+    res.status(404).json({ error: "Remote generation asset not found" });
+  }
+});
+
 router.get("/assets/chart", async (req, res) => {
   if (!requireEnabled(res)) return;
   const objectPath = typeof req.query.path === "string" ? req.query.path.trim() : "";

@@ -82,6 +82,17 @@ function disposeObject(root: THREE.Object3D): void {
 }
 
 function labelForJoint(name: string): string {
+  const legBoneLabels: Record<string, string> = {
+    leftUpperLeg: "Left hip",
+    rightUpperLeg: "Right hip",
+    leftLowerLeg: "Left upper leg",
+    rightLowerLeg: "Right upper leg",
+    leftFoot: "Left lower leg",
+    rightFoot: "Right lower leg",
+    leftToe: "Left foot",
+    rightToe: "Right foot"
+  };
+  if (legBoneLabels[name]) return legBoneLabels[name];
   return name
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/^./, (value) => value.toUpperCase());

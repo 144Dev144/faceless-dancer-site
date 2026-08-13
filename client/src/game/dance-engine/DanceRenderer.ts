@@ -111,6 +111,7 @@ export class DanceRenderer {
   private readonly loader = new GLTFLoader();
   private readonly ambientLight = new THREE.HemisphereLight(0x8bc9ff, 0x0e1020, 1.7);
   private readonly keyLight = new THREE.DirectionalLight(0xffe5c4, 2.2);
+  private readonly cameraTarget = new THREE.Vector3(0, 1.03, 0);
   private mixer: THREE.AnimationMixer | null = null;
   private root: THREE.Object3D | null = null;
   private clips = new Map<string, THREE.AnimationClip>();
@@ -129,6 +130,7 @@ export class DanceRenderer {
   private reducedQuality = false;
   private loaded = false;
   private loadGeneration = 0;
+  private avatarBounds: THREE.Box3 | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -148,7 +150,7 @@ export class DanceRenderer {
     this.scene.add(this.keyLight);
     this.scene.add(this.avatarGroup);
     this.camera.position.set(0, 1.18, 4.7);
-    this.camera.lookAt(0, 1.03, 0);
+    this.camera.lookAt(this.cameraTarget);
     this.resize();
   }
 
@@ -179,6 +181,7 @@ export class DanceRenderer {
     root.position.y -= box.min.y;
     root.position.z -= center.z;
     this.avatarGroup.add(root);
+    this.avatarBounds = new THREE.Box3().setFromObject(root);
     this.root = root;
     this.mixer = new THREE.AnimationMixer(root);
     this.clips = new Map(gltf.animations.map((clip) => [clip.name, clip]));
@@ -240,6 +243,7 @@ export class DanceRenderer {
     this.capturedMotionRetargeter.setClip(this.capturedMotion);
     this.modelLabel = preset.label;
     this.loaded = true;
+    this.fitCameraToAvatar();
   }
 
   setCapturedMotion(clip: DanceMotionClip | null): void {
@@ -326,6 +330,7 @@ export class DanceRenderer {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.fitCameraToAvatar();
   }
 
   setQuality(reduced: boolean): void {
@@ -367,5 +372,25 @@ export class DanceRenderer {
     this.clips.clear();
     this.proceduralMotion = null;
     this.capturedMotionRetargeter = null;
+    this.avatarBounds = null;
+  }
+
+  private fitCameraToAvatar(): void {
+    if (!this.avatarBounds) return;
+
+    const size = this.avatarBounds.getSize(new THREE.Vector3());
+    const center = this.avatarBounds.getCenter(new THREE.Vector3());
+    const verticalFov = THREE.MathUtils.degToRad(this.camera.fov);
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(0.01, this.camera.aspect));
+    const verticalDistance = size.y / (2 * Math.tan(verticalFov / 2));
+    const horizontalDistance = size.x / (2 * Math.tan(horizontalFov / 2));
+    const depthDistance = size.z / (2 * Math.tan(verticalFov / 2));
+    // Leave room for captured motion to extend beyond the neutral mesh bounds.
+    // The dancer sits beside the play lanes, so clipping is especially visible.
+    const distance = Math.max(3.2, verticalDistance, horizontalDistance, depthDistance) * 1.3;
+
+    this.cameraTarget.copy(center);
+    this.camera.position.set(center.x, center.y, center.z + distance);
+    this.camera.lookAt(this.cameraTarget);
   }
 }

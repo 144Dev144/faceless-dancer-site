@@ -122,6 +122,7 @@ export function DanceEnginePage(): JSX.Element {
   const [customModelUrl, setCustomModelUrl] = useState("");
   const [customModel, setCustomModel] = useState<DanceModelPreset | null>(null);
   const [localManifest, setLocalManifest] = useState<DanceModelPreset["manifest"]>();
+  const [originalOrientationYawRadians, setOriginalOrientationYawRadians] = useState(0);
   const [canonicalProfile, setCanonicalProfile] = useState<CanonicalRigProfile | null>(null);
   const [originalCanonicalProfile, setOriginalCanonicalProfile] = useState<CanonicalRigProfile | null>(null);
   const [localModelName, setLocalModelName] = useState("");
@@ -262,6 +263,7 @@ export function DanceEnginePage(): JSX.Element {
     const profile = localManifest?.canonicalProfile ?? null;
     setCanonicalProfile(profile);
     setOriginalCanonicalProfile(profile);
+    setOriginalOrientationYawRadians(localManifest?.orientation?.yawRadians ?? 0);
     setCustomModel(next);
     setModelId(next.id);
     setLocalModelName(file.name);
@@ -276,6 +278,7 @@ export function DanceEnginePage(): JSX.Element {
       setLocalManifest(parsed.manifest);
       setCanonicalProfile(parsed.manifest.canonicalProfile ?? null);
       setOriginalCanonicalProfile(parsed.manifest.canonicalProfile ?? null);
+      setOriginalOrientationYawRadians(parsed.manifest.orientation?.yawRadians ?? 0);
       setLocalManifestName(file.name);
       setModelNotice(parsed.warnings.length ? parsed.warnings.join(" ") : "Manifest validated for humanoid-v1.");
       if (customModel?.source === "Local file") {
@@ -302,6 +305,11 @@ export function DanceEnginePage(): JSX.Element {
     setCanonicalProfile(profile);
     setLocalManifest((current) => current ? { ...current, canonicalProfile: profile } : current);
     setCustomModel((current) => current?.manifest ? { ...current, manifest: { ...current.manifest, canonicalProfile: profile } } : current);
+  };
+
+  const updateOrientation = (yawRadians: number) => {
+    setLocalManifest((current) => current ? { ...current, orientation: { yawRadians } } : current);
+    setCustomModel((current) => current?.manifest ? { ...current, manifest: { ...current.manifest, orientation: { yawRadians } } } : current);
   };
 
   const seek = (event: Event) => {
@@ -374,7 +382,10 @@ export function DanceEnginePage(): JSX.Element {
         model={selectedModel}
         profile={canonicalProfile}
         originalProfile={originalCanonicalProfile}
+        orientationYawRadians={selectedModel.manifest?.orientation?.yawRadians ?? 0}
+        originalOrientationYawRadians={originalOrientationYawRadians}
         onProfileChange={updateCanonicalProfile}
+        onOrientationChange={updateOrientation}
         onLoadProfile={loadStandaloneProfile}
       />
     </main>

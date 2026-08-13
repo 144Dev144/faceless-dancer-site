@@ -5,6 +5,8 @@ import type { SessionState } from "../hooks/useSession";
 import { WalletAuthCard } from "../components/WalletAuthCard";
 import { refreshWalletConnectionStatus } from "../lib/walletConnection";
 import { DanceOffPresencePanel } from "../game/components/DanceOffPresencePanel";
+import { api, type LibraryItem } from "../lib/api";
+import { listWorkspaceItems, type BrowserWorkspaceItem } from "../lib/danceStationWorkspace";
 
 interface Props {
   session: SessionState;
@@ -17,6 +19,8 @@ export function GamePage({ session, setSession, refreshSession }: Props): JSX.El
   const [showDanceOffPanel, setShowDanceOffPanel] = useState(false);
   const [gameMode, setGameMode] = useState<"menu" | "play" | "scores">("menu");
   const [walletPublicKey, setWalletPublicKey] = useState("");
+  const [workspaceItems, setWorkspaceItems] = useState<BrowserWorkspaceItem[]>([]);
+  const [publicItems, setPublicItems] = useState<LibraryItem[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,6 +60,22 @@ export function GamePage({ session, setSession, refreshSession }: Props): JSX.El
       setShowDanceOffPanel(false);
     }
   }, [gameMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      listWorkspaceItems().catch(() => [] as BrowserWorkspaceItem[]),
+      api.publicLibrary({ kind: "avatar", limit: 60 }).then((result) => result.items).catch(() => [] as LibraryItem[]),
+      api.publicLibrary({ kind: "dance_motion", limit: 60 }).then((result) => result.items).catch(() => [] as LibraryItem[]),
+    ]).then(([workspace, avatars, dances]) => {
+      if (cancelled) return;
+      setWorkspaceItems(workspace);
+      setPublicItems([...avatars, ...dances]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const onOpenDanceOffPanel = () => {
@@ -114,6 +134,8 @@ export function GamePage({ session, setSession, refreshSession }: Props): JSX.El
         canSubmitHolderScore={session.authenticated && session.isHolder}
         holderPublicKey={session.publicKey}
         homeHref="/"
+        workspaceItems={workspaceItems}
+        publicItems={publicItems}
         onModeChange={setGameMode}
       />
     </main>

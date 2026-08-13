@@ -272,3 +272,128 @@ export function createRemoteAudioWorkspaceItem(input: {
     },
   };
 }
+
+export function normalizeRemoteAvatarMetadata(
+  metadata: Record<string, unknown> | undefined,
+  files: Array<Record<string, unknown>>,
+): Record<string, unknown> {
+  const source = metadata ?? {};
+  const {
+    files: _files,
+    blob: _blob,
+    publicUrl: _publicUrl,
+    objectPath: _objectPath,
+    fileName: _fileName,
+    mimeType: _mimeType,
+    sizeBytes: _sizeBytes,
+    sha256: _sha256,
+    modelUrl: _modelUrl,
+    manifestUrl: _manifestUrl,
+    modelFile: _modelFile,
+    manifestFile: _manifestFile,
+    orientation: _orientation,
+    orientationYawRadians: _orientationYawRadians,
+    canonicalProfile: _canonicalProfile,
+    rig: _rig,
+    repairedFinalizedAvatar: _repairedFinalizedAvatar,
+    avatarActiveConfigVersion: _avatarActiveConfigVersion,
+    ...preserved
+  } = source;
+  return {
+    ...preserved,
+    storage: "remote-cdn",
+    sourceTool: "avatar-generation",
+    files,
+    avatarActiveConfigVersion: 2,
+  };
+}
+
+export function createRemoteAvatarWorkspaceItem(input: {
+  jobId: string;
+  title: string;
+  model: {
+    objectPath: string;
+    publicUrl?: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+  };
+  manifest?: {
+    objectPath: string;
+    publicUrl?: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+  };
+  modelUrl: string;
+  reskinSource?: {
+    objectPath: string;
+    publicUrl?: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+  };
+  manifestUrl?: string;
+  manifestOverride?: unknown;
+  createdAt: string;
+  updatedAt: string;
+  replaceItem?: BrowserWorkspaceItem;
+}): BrowserWorkspaceItem {
+  const previousFiles = Array.isArray(input.replaceItem?.metadata.files)
+    ? input.replaceItem.metadata.files.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object"))
+    : [];
+  const previousSource = previousFiles.find((file) => file.role === "reskin_source");
+  const reskinSource = input.reskinSource
+    ? {
+      role: "reskin_source",
+      fileName: "source-mesh.glb",
+      objectPath: input.reskinSource.objectPath,
+      // Keep browser reads on the authenticated site origin. Bunny does not
+      // expose CORS headers for these private remote-generation objects.
+      publicUrl: `/api/remote-generation/assets/file?path=${encodeURIComponent(input.reskinSource.objectPath)}`,
+      sourcePublicUrl: input.reskinSource.publicUrl,
+      mimeType: input.reskinSource.mimeType,
+      sizeBytes: input.reskinSource.sizeBytes,
+      sha256: input.reskinSource.sha256,
+    }
+    : previousSource;
+  const files = [
+    {
+      role: "model",
+      fileName: "avatar.glb",
+      objectPath: input.model.objectPath,
+      publicUrl: input.modelUrl,
+      sourcePublicUrl: input.model.publicUrl,
+      mimeType: input.model.mimeType,
+      sizeBytes: input.model.sizeBytes,
+      sha256: input.model.sha256,
+    },
+    ...(input.manifest && input.manifestUrl ? [{
+      role: "rig_manifest",
+      fileName: "manifest.json",
+      objectPath: input.manifest.objectPath,
+      publicUrl: input.manifestUrl,
+      sourcePublicUrl: input.manifest.publicUrl,
+      mimeType: input.manifest.mimeType,
+      sizeBytes: input.manifest.sizeBytes,
+      sha256: input.manifest.sha256,
+      ...(input.manifestOverride !== undefined ? { blob: new Blob([JSON.stringify(input.manifestOverride, null, 2)], { type: "application/json" }) } : {}),
+    }] : []),
+    ...(reskinSource ? [reskinSource] : []),
+    ...previousFiles.filter((file) => !["model", "rig_manifest", "reskin_source"].includes(String(file.role))),
+  ];
+  return {
+    id: input.replaceItem?.id ?? `remote-avatar-${input.jobId}`,
+    title: input.title || "Generated avatar",
+    kind: "avatar",
+    source: "private",
+    creatorName: input.replaceItem?.creatorName,
+    createdAt: input.replaceItem?.createdAt ?? input.createdAt,
+    updatedAt: input.updatedAt,
+    metadata: {
+      ...normalizeRemoteAvatarMetadata(input.replaceItem?.metadata, files),
+      avatarTitle: input.title || "Generated avatar",
+      remoteJobId: input.jobId,
+    },
+  };
+}

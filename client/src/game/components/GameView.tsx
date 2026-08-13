@@ -23,6 +23,9 @@ import {
   getModeDifficultyChart,
 } from "../lib/game/difficultyCharts";
 import { LyricsSubtitle } from "./LyricsSubtitle";
+import { DanceStageDancerPanel } from "./DanceStageDancerPanel";
+import type { LibraryItem } from "../../lib/api";
+import type { BrowserWorkspaceItem } from "../../lib/danceStationWorkspace";
 import { rhythmWizardsConfig } from "../lib/rhythmWizards/balance";
 import { buildBeatTimelineFromNoteTimes, evaluateBeatSync } from "../lib/rhythmWizards/beatSync";
 import { getDamageTier, rhythmWizardsAssets, selectObstacleSprite, selectWizardSprite } from "../lib/rhythmWizards/assets";
@@ -34,6 +37,8 @@ interface GameViewProps {
   canSubmitHolderScore: boolean;
   holderPublicKey?: string;
   homeHref?: string;
+  workspaceItems: BrowserWorkspaceItem[];
+  publicItems: LibraryItem[];
   onModeChange?: (mode: ViewMode) => void;
 }
 
@@ -272,7 +277,7 @@ function spriteStyle(src: string, frames?: number, frameDurationMs?: number): CS
   } as CSSProperties;
 }
 
-export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, homeHref = "/", onModeChange }: GameViewProps): JSX.Element {
+export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, homeHref = "/", workspaceItems, publicItems, onModeChange }: GameViewProps): JSX.Element {
   const engineRef = useRef<PrecisePlaybackEngine | null>(null);
   const loopRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
@@ -312,6 +317,8 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   const [songsTotal, setSongsTotal] = useState(0);
   const [songsHasMore, setSongsHasMore] = useState(false);
   const [selectedId, setSelectedId] = useState("");
+  const [selectedDancerId, setSelectedDancerId] = useState("");
+  const [selectedDanceId, setSelectedDanceId] = useState("");
   const [selectedEntry, setSelectedEntry] = useState<SavedBeatEntry | null>(null);
   const [analysisMajorBeats, setAnalysisMajorBeats] = useState<Array<{ timeSeconds: number; strength: number }> | null>(null);
   const [selectedGameMode, setSelectedGameMode] = useState<GameMode>("step_arrows");
@@ -2016,12 +2023,16 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
 
             <section className="game-menu-stage" aria-label="Selected song">
               <div className="game-menu-stage-visual">
-                <div className="game-menu-stage-bars" aria-hidden="true">
-                  {Array.from({ length: 34 }, (_, index) => (
-                    <span key={index} style={{ height: `${24 + ((index * 17) % 68)}%` }} />
-                  ))}
-                </div>
-                <div className="game-menu-stage-ring" aria-hidden="true" />
+                <DanceStageDancerPanel
+                  workspaceItems={workspaceItems}
+                  publicItems={publicItems}
+                  selectedModelId={selectedDancerId}
+                  selectedDanceId={selectedDanceId}
+                  onSelectionChange={(kind, id) => {
+                    if (kind === "model") setSelectedDancerId(id);
+                    else setSelectedDanceId(id);
+                  }}
+                />
               </div>
               <div className="game-menu-now-playing">
                 <p className="game-menu-kicker">Now Playing</p>
@@ -2247,14 +2258,14 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
   }
 
   return (
-    <section className="game-view-shell game-mode-active">
+    <section className={`game-view-shell game-mode-active${selectedGameMode === "step_arrows" ? " game-view-shell--step-arrows" : ""}`}>
       <div
         className={`ddr-field${
           selectedGameMode === "orb_beat"
             ? ` orb-field${isLandscape ? " landscape" : " portrait"}`
             : selectedGameMode === "laser_shoot"
               ? " rw-field"
-              : ""
+              : " step-arrows-field"
         }`}
       >
         <div className="game-play-overlay">
@@ -2324,7 +2335,7 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
           </div>
         </div>
 
-        <div className="game-play-stage">
+        <div className={`game-play-stage${selectedGameMode === "step_arrows" ? " game-play-stage--step-arrows" : ""}`}>
           {selectedGameMode === "laser_shoot" ? (
             <>
               <div className="rw-battlefield" onPointerDown={handleRhythmWizardsFieldPointerDown}>
@@ -2518,6 +2529,22 @@ export function GameView({ apiBaseUrl, canSubmitHolderScore, holderPublicKey, ho
             </>
           ) : (
             <>
+              <div className="ddr-dancer-side" aria-label="Selected dancer">
+                <DanceStageDancerPanel
+                  workspaceItems={workspaceItems}
+                  publicItems={publicItems}
+                  selectedModelId={selectedDancerId}
+                  selectedDanceId={selectedDanceId}
+                  onSelectionChange={(kind, id) => {
+                    if (kind === "model") setSelectedDancerId(id);
+                    else setSelectedDanceId(id);
+                  }}
+                  showSelectors={false}
+                  showHeading={false}
+                  className="game-play-dancer-panel"
+                  motionPlaybackPlaying={playing}
+                />
+              </div>
               <div className="ddr-lanes">
                 {stepArrowLaneOrder.map((lane) => (
                   <div key={lane} className={`ddr-lane lane-${lane}`}>

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { JSX } from "preact";
-import { AudioLines, CheckCircle2, FileVideo, LoaderCircle, Play, Plus, RefreshCw, RotateCcw, Save, Sparkles, Trash2, Upload, WandSparkles } from "lucide-preact";
+import { AudioLines, CheckCircle2, Database, FileVideo, LoaderCircle, Play, RefreshCw, RotateCcw, Save, Sparkles, Upload, WandSparkles } from "lucide-preact";
 import type { DanceMotionClip, DanceMotionComposition, DanceMotionCompositionSegment, DanceMotionJob } from "@faceless/shared";
 import { api, type LibraryItem, type RemoteGenerationInput, type RemoteGenerationRequest, type RemoteJob, type RemotePaymentCurrency, type RemotePricingConfig, type RemotePricingQuote } from "../../lib/api";
 import type { SessionState } from "../../hooks/useSession";
 import type { BrowserWorkspaceItem } from "../../lib/danceStationWorkspace";
-import { saveWorkspaceItem } from "../../lib/danceStationWorkspace";
+import { createRemoteAvatarWorkspaceItem, getWorkspaceSetting, normalizeRemoteAvatarMetadata, saveWorkspaceItem, setWorkspaceSetting } from "../../lib/danceStationWorkspace";
 import { fetchFaceLESSWalletBalance, fetchSolWalletBalance, type FaceLESSWalletBalance } from "../../lib/facelessBalance";
 import { sendRemoteGenerationPayment, sendRemoteGenerationSolPayment, signRemoteGenerationPayment } from "../../lib/remoteGenerationPayment";
 import { calculateRemotePricing, createFreeMarketPrice, fetchOnChainMarketPrice, holderFreeForRequest, type RemoteMarketPrice } from "../../lib/remoteGenerationPricing";
@@ -16,6 +16,7 @@ import { parseDanceModelManifest } from "../../game/dance-engine/modelManifest";
 import type { DanceModelManifest, DanceModelPreset, DanceRuntimeOptions, DanceRuntimeSnapshot } from "../../game/dance-engine/types";
 import { DanceMotionCapturePanel } from "../dance-engine/DanceMotionCapturePanel";
 import { RigAdjustmentPanel } from "../dance-engine/RigAdjustmentPanel";
+import { DanceMotionCompositionTrack } from "./DanceMotionCompositionTrack";
 
 interface Props {
   session: SessionState;
@@ -36,30 +37,185 @@ const DEFAULT_OPTIONS: DanceRuntimeOptions = {
   seed: 17,
 };
 
-function artifactUrl(job: RemoteJob, test: (artifact: RemoteJob["artifacts"][number]) => boolean): string | null {
-  return job.artifacts.find((artifact) => test(artifact))?.publicUrl ?? null;
+function remoteArtifactUrl(artifact: RemoteJob["artifacts"][number]): string {
+  return `/api/remote-generation/assets/file?path=${encodeURIComponent(artifact.objectPath)}`;
 }
 
 function isModelArtifact(artifact: RemoteJob["artifacts"][number]): boolean {
+  if (artifact.mimeType.toLowerCase().startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(artifact.objectPath)) return false;
   return artifact.mimeType === "model/gltf-binary" || artifact.mimeType === "model/gltf+json" || /\.glb$|\.gltf$/i.test(artifact.objectPath) || artifact.variant === "avatar-output";
 }
 
 function isManifestArtifact(artifact: RemoteJob["artifacts"][number]): boolean {
-  return artifact.mimeType.includes("json") || /manifest\.json$/i.test(artifact.objectPath);
+  return /(?:^|\/)manifest\.json$/i.test(artifact.objectPath) || (artifact.mimeType.toLowerCase().includes("json") && !/\.(png|jpe?g|webp|gif)$/i.test(artifact.objectPath));
+}
+
+function artifactFileName(objectPath: string): string {
+  return objectPath.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+}
+
+function remoteArtifactProxyUrl(objectPath: string): string {
+  return `/api/remote-generation/assets/file?path=${encodeURIComponent(objectPath)}`;
+}
+
+function avatarModelArtifact(job: RemoteJob): RemoteJob["artifacts"][number] | null {
+  const finalizedAvatar = job.artifacts.find((artifact) => artifactFileName(artifact.objectPath) === "avatar.glb" && isModelArtifact(artifact));
+  if (finalizedAvatar) return finalizedAvatar;
+  const explicitModel = job.artifacts.find((artifact) => artifact.mimeType === "model/gltf-binary" || artifact.mimeType === "model/gltf+json" || /\.glb$|\.gltf$/i.test(artifact.objectPath));
+  return explicitModel ?? job.artifacts.find(isModelArtifact) ?? null;
+}
+
+function avatarManifestArtifact(job: RemoteJob): RemoteJob["artifacts"][number] | null {
+  const canonicalManifest = job.artifacts.find((artifact) => /(?:^|\/)manifest\.json$/i.test(artifact.objectPath));
+  return canonicalManifest ?? job.artifacts.find(isManifestArtifact) ?? null;
+}
+
+function avatarReskinSourceArtifact(job: RemoteJob): RemoteJob["artifacts"][number] | null {
+  return job.artifacts.find((artifact) => artifactFileName(artifact.objectPath) === "source-mesh.glb" && isModelArtifact(artifact)) ?? null;
 }
 
 const avatarTerminalStatuses = new Set(["succeeded", "failed", "cancelled", "expired", "refunded"]);
+const pendingAvatarTitlesSetting = "dance-creation.pending-avatar-titles";
+const genericAvatarTitles = new Set(["generated avatar", "generated asset", "avatar generation"]);
+
+type PendingAvatarTitles = Record<string, string>;
+
+async function rememberPendingAvatarTitle(jobId: string, title: string): Promise<void> {
+  const current = await getWorkspaceSetting<PendingAvatarTitles>(pendingAvatarTitlesSetting) ?? {};
+  await setWorkspaceSetting(pendingAvatarTitlesSetting, { ...current, [jobId]: title });
+}
+
+async function consumePendingAvatarTitle(jobId: string): Promise<string | null> {
+  const current = await getWorkspaceSetting<PendingAvatarTitles>(pendingAvatarTitlesSetting) ?? {};
+  const title = current[jobId] ?? null;
+  if (!title) return null;
+  const { [jobId]: _consumed, ...remaining } = current;
+  await setWorkspaceSetting(pendingAvatarTitlesSetting, remaining);
+  return title;
+}
 
 function inputFromWorkspace(item: BrowserWorkspaceItem, role: "mesh" | "manifest" | "reference-image"): { file: File | null; url: string; role: "mesh" | "manifest" | "reference-image" } {
   const metadata = item.metadata;
   const files = Array.isArray(metadata.files) ? metadata.files.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object")) : [];
   const wantedRole = role === "mesh" ? ["model", "metadata"] : role === "manifest" ? ["rig_manifest", "metadata"] : ["cover", "preview"];
   const record = files.find((file) => wantedRole.includes(String(file.role))) ?? files[0];
-  const blob = metadata.blob instanceof Blob ? metadata.blob : null;
+  const blob = record?.blob instanceof Blob ? record.blob : metadata.blob instanceof Blob ? metadata.blob : null;
   const publicUrl = typeof record?.publicUrl === "string" ? record.publicUrl : typeof metadata.publicUrl === "string" ? metadata.publicUrl : "";
   const fileName = typeof record?.fileName === "string" ? record.fileName : typeof metadata.fileName === "string" ? metadata.fileName : `${item.title}.${role === "mesh" ? "glb" : role === "manifest" ? "json" : "png"}`;
   const mimeType = typeof record?.mimeType === "string" ? record.mimeType : typeof metadata.mimeType === "string" ? metadata.mimeType : "application/octet-stream";
   return { file: blob ? new File([blob], fileName, { type: mimeType }) : null, url: publicUrl, role };
+}
+
+function meaningfulAvatarTitle(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const title = value.trim();
+  return title && !genericAvatarTitles.has(title.toLowerCase()) ? title : "";
+}
+
+function avatarTitleFromItem(item: BrowserWorkspaceItem): string {
+  return meaningfulAvatarTitle(item.metadata.avatarTitle) || meaningfulAvatarTitle(item.title);
+}
+
+function workspaceFileRecords(item: BrowserWorkspaceItem): Array<Record<string, unknown>> {
+  return Array.isArray(item.metadata.files)
+    ? item.metadata.files.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object"))
+    : [];
+}
+
+async function repairLegacyRemoteAvatarItem(item: BrowserWorkspaceItem): Promise<BrowserWorkspaceItem | null> {
+  if (item.metadata.sourceTool !== "avatar-generation") return null;
+  const remoteJobId = typeof item.metadata.remoteJobId === "string" ? item.metadata.remoteJobId.trim() : "";
+  if (!remoteJobId) return null;
+  const files = workspaceFileRecords(item);
+  const modelRecord = files.find((file) => file.role === "model");
+  const modelPath = typeof modelRecord?.objectPath === "string"
+    ? modelRecord.objectPath
+    : typeof modelRecord?.fileName === "string" ? modelRecord.fileName : "";
+  const manifestRecord = files.find((file) => file.role === "rig_manifest");
+  const sourceRecord = files.find((file) => file.role === "reskin_source");
+  const sourceUrl = typeof sourceRecord?.publicUrl === "string" ? sourceRecord.publicUrl : "";
+  const sourceUsesSiteProxy = sourceUrl.startsWith("/api/remote-generation/assets/file?");
+  const needsRepair = artifactFileName(modelPath) !== "avatar.glb"
+    || item.metadata.avatarActiveConfigVersion !== 2
+    || !manifestRecord
+    || (!!sourceRecord && !sourceUsesSiteProxy)
+    || !avatarTitleFromItem(item);
+  if (!needsRepair) return null;
+
+  const job = await api.remoteJob(remoteJobId);
+  const recoveredDescription = meaningfulAvatarTitle(job.request.parameters?.description);
+  const recoveredTitle = avatarTitleFromItem(item)
+    || meaningfulAvatarTitle(job.request.metadata?.title)
+    || recoveredDescription
+    || "Generated avatar";
+  const modelArtifact = avatarModelArtifact(job);
+  if (!modelArtifact || artifactFileName(modelArtifact.objectPath) !== "avatar.glb") {
+    throw new Error("This avatar asset only has an intermediate mesh; its finalized rigged model is not available.");
+  }
+  const modelUrl = remoteArtifactUrl(modelArtifact);
+  const manifestArtifact = avatarManifestArtifact(job);
+  if (!manifestArtifact) throw new Error("This avatar asset is missing the finalized rig manifest.");
+  // A saved adjustment is the active manifest for this private asset. Keep it
+  // when repairing older records instead of replacing it with the worker's
+  // original manifest from the remote job.
+  let manifestBlob = manifestRecord?.blob instanceof Blob ? manifestRecord.blob : null;
+  if (!manifestBlob) {
+    const manifestResponse = await fetch(remoteArtifactUrl(manifestArtifact), { credentials: "include" });
+    if (!manifestResponse.ok) throw new Error("The finalized avatar rig manifest could not be loaded.");
+    manifestBlob = await manifestResponse.blob();
+  }
+  const sourceArtifact = avatarReskinSourceArtifact(job);
+  const previousSource = files.find((file) => file.role === "reskin_source");
+  const finalizedModelRecord = {
+    role: "model",
+    fileName: "avatar.glb",
+    objectPath: modelArtifact.objectPath,
+    publicUrl: modelUrl,
+    sourcePublicUrl: modelArtifact.publicUrl,
+    mimeType: modelArtifact.mimeType,
+    sizeBytes: modelArtifact.sizeBytes,
+    sha256: modelArtifact.sha256,
+  };
+  const finalizedManifestRecord = {
+    ...(manifestRecord ? Object.fromEntries(Object.entries(manifestRecord).filter(([key]) => key !== "blob")) : {}),
+    role: "rig_manifest",
+    fileName: "manifest.json",
+    objectPath: manifestArtifact.objectPath,
+    publicUrl: remoteArtifactUrl(manifestArtifact),
+    sourcePublicUrl: manifestArtifact.publicUrl,
+    mimeType: manifestArtifact.mimeType,
+    sizeBytes: manifestArtifact.sizeBytes,
+    sha256: manifestArtifact.sha256,
+    blob: manifestBlob,
+  };
+  const reskinSource = sourceArtifact ? {
+    role: "reskin_source",
+    fileName: "source-mesh.glb",
+    objectPath: sourceArtifact.objectPath,
+    publicUrl: remoteArtifactProxyUrl(sourceArtifact.objectPath),
+    sourcePublicUrl: sourceArtifact.publicUrl,
+    mimeType: sourceArtifact.mimeType,
+    sizeBytes: sourceArtifact.sizeBytes,
+    sha256: sourceArtifact.sha256,
+  } : previousSource;
+  const nextFiles = [
+    finalizedModelRecord,
+    finalizedManifestRecord,
+    ...(reskinSource ? [reskinSource] : []),
+    ...files.filter((file) => !["model", "rig_manifest", "reskin_source"].includes(String(file.role))),
+  ];
+  const repairedItem: BrowserWorkspaceItem = {
+    ...item,
+    title: recoveredTitle,
+    updatedAt: new Date().toISOString(),
+    metadata: {
+      ...normalizeRemoteAvatarMetadata(item.metadata, nextFiles),
+      avatarTitle: recoveredTitle,
+      remoteJobId,
+    },
+  };
+  await saveWorkspaceItem(repairedItem);
+  return repairedItem;
 }
 
 function inputFromLibrary(item: LibraryItem, role: "mesh" | "manifest"): { file: File | null; url: string; role: "mesh" | "manifest" } {
@@ -77,8 +233,23 @@ async function fileFromUrl(url: string, name: string, mimeType: string): Promise
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, { credentials: "include" });
-  if (!response.ok) throw new Error(`Could not load ${url}.`);
-  return response.json() as Promise<T>;
+  const contentType = response.headers.get("content-type") || "unknown content type";
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`Could not load avatar manifest (${response.status}, ${contentType}).`);
+  }
+  try {
+    return JSON.parse(body) as T;
+  } catch (error) {
+    console.error("[dance-creation] avatar manifest was not valid JSON", {
+      url,
+      status: response.status,
+      contentType,
+      preview: body.slice(0, 160),
+      error,
+    });
+    throw new Error(`The avatar worker returned an invalid manifest (${contentType}).`);
+  }
 }
 
 function publicLibraryForWorkspace(item: BrowserWorkspaceItem): LibraryItem | null {
@@ -103,9 +274,12 @@ function formatPaymentToken(amountAtomic: string, decimals: number): string {
 export function DanceCreationPanel({ session, workspaceItems, publicItems, onWorkspaceChanged, onPublishAsset }: Props): JSX.Element {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const modelObjectUrlRef = useRef<string | null>(null);
+  const avatarWorkspaceItemRef = useRef<BrowserWorkspaceItem | null>(null);
+  const [avatarTitle, setAvatarTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [referenceImage, setReferenceImage] = useState<File | null>(null);
   const [model, setModel] = useState<DanceModelPreset | null>(null);
+  const [originalOrientationYawRadians, setOriginalOrientationYawRadians] = useState(0);
   const [modelFile, setModelFile] = useState<File | null>(null);
   const [selectedAvatarId, setSelectedAvatarId] = useState("");
   const [profile, setProfile] = useState<CanonicalRigProfile | null>(null);
@@ -113,6 +287,8 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
   const [avatarJob, setAvatarJob] = useState<RemoteJob | null>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarMessage, setAvatarMessage] = useState<string | null>(null);
+  const [reskinMessage, setReskinMessage] = useState<string | null>(null);
+  const restoredAvatarJobRef = useRef<string | null>(null);
   const [paymentCurrency, setPaymentCurrency] = useState<RemotePaymentCurrency>("FACELESS");
   const [pricingConfig, setPricingConfig] = useState<RemotePricingConfig | null>(null);
   const [marketPrice, setMarketPrice] = useState<RemoteMarketPrice | null>(null);
@@ -123,6 +299,8 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
   const [walletBalanceRefreshKey, setWalletBalanceRefreshKey] = useState(0);
   const [captureJob, setCaptureJob] = useState<DanceMotionJob | null>(null);
   const [captureClip, setCaptureClip] = useState<DanceMotionClip | null>(null);
+  const [captureTitle, setCaptureTitle] = useState("");
+  const [captureSaveBusy, setCaptureSaveBusy] = useState(false);
   const [segments, setSegments] = useState<DanceMotionCompositionSegment[]>([]);
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
   const [compositionTitle, setCompositionTitle] = useState("My Dance Motion");
@@ -131,8 +309,10 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const [snapshot, setSnapshot] = useState<DanceRuntimeSnapshot | null>(null);
   const [motionEnabled, setMotionEnabled] = useState(false);
-  const [loadedCompositionId, setLoadedCompositionId] = useState("");
+  const [previewCompositionId, setPreviewCompositionId] = useState("");
+  const [assemblyOpenId, setAssemblyOpenId] = useState("");
   const [trackAssetId, setTrackAssetId] = useState("");
+  const [cursorSeconds, setCursorSeconds] = useState(0);
 
   const avatarRequest = useMemo<RemoteGenerationRequest>(() => ({
     runtime: "avatar",
@@ -140,9 +320,9 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
     inputs: [],
     priority: "low",
     paymentCurrency,
-    metadata: { title: prompt.trim().slice(0, 120) || "Avatar generation" },
+    metadata: { title: avatarTitle.trim() || "Avatar generation" },
     parameters: { task_type: "avatar", description: prompt.trim(), quality: "runtime", max_attempts: 2 },
-  }), [paymentCurrency, prompt]);
+  }), [avatarTitle, paymentCurrency, prompt]);
 
   const holderFreeAvailable = Boolean(session.isHolder && pricingConfig && holderFreeForRequest(pricingConfig, avatarRequest));
 
@@ -226,58 +406,96 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
     title: compositionTitle.trim() || "My Dance Motion",
     durationSeconds: Math.max(0.01, ...segments.map((segment) => segment.offsetSeconds + Math.max(0, segment.trimEndSeconds - segment.trimStartSeconds))),
     segments,
-    ...(captureJob?.artifacts.find((artifact) => artifact.kind === "source-video") ? {
-      audioSource: {
-        url: captureJob.artifacts.find((artifact) => artifact.kind === "source-video")!.url,
-        fileName: captureJob.originalFileName,
-        mimeType: captureJob.mimeType,
-      },
-    } : {}),
     createdAt: savedItem?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  }), [captureJob, compositionTitle, savedItem, segments]);
+  }), [compositionTitle, savedItem, segments]);
   const composedClip = useMemo(() => composeDanceMotion(composed), [composed]);
+  const previewComposition = useMemo(() => {
+    if (!previewCompositionId) return null;
+    const item = workspaceItems.find((candidate) => candidate.kind === "dance_motion" && candidate.id === previewCompositionId);
+    const publicItem = publicItems.find((candidate) => candidate.kind === "dance_motion" && candidate.id === previewCompositionId);
+    return item ? compositionFromItem(item) : publicItem ? compositionFromItem(publicItem) : null;
+  }, [previewCompositionId, publicItems, workspaceItems]);
+  const previewCompositionClip = useMemo(() => previewComposition ? composeDanceMotion(previewComposition) : null, [previewComposition]);
+  const previewClip = previewCompositionClip ?? composedClip ?? captureClip;
   const selectedSegment = segments.find((segment) => segment.id === selectedSegmentId) ?? null;
 
   useEffect(() => () => {
     if (modelObjectUrlRef.current) URL.revokeObjectURL(modelObjectUrlRef.current);
   }, []);
 
-  useEffect(() => {
-    const item = workspaceItems.find((candidate) => candidate.kind === "dance_motion" && candidate.id === loadedCompositionId);
-    const publicItem = publicItems.find((candidate) => candidate.kind === "dance_motion" && candidate.id === loadedCompositionId);
-    const nextComposition = item ? compositionFromItem(item) : publicItem ? compositionFromItem(publicItem) : null;
-    if (!nextComposition) return;
-    setCompositionTitle(nextComposition.title);
-    setSegments(nextComposition.segments);
-    setSelectedSegmentId(nextComposition.segments[0]?.id ?? null);
-    setMotionEnabled(true);
-  }, [loadedCompositionId, publicItems, workspaceItems]);
-
-  const applyAvatarArtifacts = useCallback(async (job: RemoteJob): Promise<void> => {
-    const modelUrl = artifactUrl(job, isModelArtifact);
-    const manifestUrl = artifactUrl(job, isManifestArtifact);
-    if (!modelUrl) throw new Error("The avatar worker finished without returning a GLB model.");
+  const applyAvatarArtifacts = useCallback(async (job: RemoteJob, orientationOverride?: number, replacementItem?: BrowserWorkspaceItem | null, titleOverride?: string, profileOverride?: CanonicalRigProfile): Promise<void> => {
+    const modelArtifact = avatarModelArtifact(job);
+    const manifestArtifact = avatarManifestArtifact(job);
+    const modelUrl = modelArtifact ? remoteArtifactUrl(modelArtifact) : null;
+    const manifestUrl = manifestArtifact ? remoteArtifactUrl(manifestArtifact) : null;
+    if (!modelArtifact || !modelUrl) throw new Error("The avatar worker finished without returning a GLB model.");
+    const title = avatarTitleFromItem(replacementItem ?? { title: "", metadata: {}, id: "", kind: "avatar", source: "private", createdAt: "", updatedAt: "" }) || meaningfulAvatarTitle(titleOverride) || meaningfulAvatarTitle(job.request.metadata?.title) || "Generated avatar";
     let manifest: DanceModelManifest | undefined;
     if (manifestUrl) {
       const parsed = parseDanceModelManifest(await fetchJson<unknown>(manifestUrl));
-      manifest = { ...parsed.manifest, modelFile: modelUrl };
-      setProfile(parsed.manifest.canonicalProfile ?? null);
-      setOriginalProfile(parsed.manifest.canonicalProfile ?? null);
+      const yawRadians = orientationOverride ?? parsed.manifest.orientation?.yawRadians ?? 0;
+      const activeProfile = profileOverride ?? parsed.manifest.canonicalProfile;
+      manifest = { ...parsed.manifest, modelFile: modelUrl, orientation: { yawRadians }, canonicalProfile: activeProfile };
+      setOriginalOrientationYawRadians(yawRadians);
+      setProfile(activeProfile ?? null);
+      setOriginalProfile(activeProfile ?? null);
       setAvatarMessage(parsed.warnings.length ? `Avatar ready with ${parsed.warnings.length} rig warning${parsed.warnings.length === 1 ? "" : "s"}.` : "Avatar model and rig are ready.");
     } else {
+      setOriginalOrientationYawRadians(0);
       setProfile(null);
       setOriginalProfile(null);
       setAvatarMessage("Avatar model is ready. Load its canonical manifest to adjust the rig.");
     }
+    const workspaceItem = createRemoteAvatarWorkspaceItem({
+      jobId: job.id,
+      title,
+      model: modelArtifact,
+      reskinSource: avatarReskinSourceArtifact(job) ?? undefined,
+      manifest: manifestArtifact ?? undefined,
+      manifestOverride: orientationOverride === undefined || !manifest ? undefined : { ...manifest, modelFile: "avatar.glb" },
+      modelUrl,
+      manifestUrl: manifestArtifact && manifestUrl ? manifestUrl : undefined,
+      createdAt: job.createdAt,
+      updatedAt: new Date().toISOString(),
+      replaceItem: replacementItem ?? undefined,
+    });
+    await saveWorkspaceItem(workspaceItem);
+    avatarWorkspaceItemRef.current = workspaceItem;
+    onWorkspaceChanged?.();
+    setSelectedAvatarId(`private:${workspaceItem.id}`);
     if (modelObjectUrlRef.current) URL.revokeObjectURL(modelObjectUrlRef.current);
     modelObjectUrlRef.current = null;
     setModelFile(null);
-    setModel({ id: `remote-avatar-${job.id}`, label: job.request.metadata?.title ?? "Generated avatar", url: modelUrl, clipNames: { idle: "Idle" }, source: "Remote avatar worker", manifest });
+    setModel({ id: workspaceItem.id, label: title, url: modelUrl, clipNames: { idle: "Idle" }, source: "Remote avatar worker", manifest });
     setAvatarJob(job);
-  }, []);
+    setAvatarMessage(manifest ? "Avatar model and rig are ready. Saved to Private Assets." : "Avatar model is ready and saved to Private Assets.");
+  }, [onWorkspaceChanged]);
 
-  const submitAvatarRequest = async (request: RemoteGenerationRequest): Promise<RemoteJob> => {
+  useEffect(() => {
+    if (!session.authenticated || restoredAvatarJobRef.current) return undefined;
+    let cancelled = false;
+    void api.remoteJobs({ limit: 20, runtime: "avatar" })
+      .then(async ({ jobs }) => {
+        if (cancelled) return;
+        const alreadySaved = new Set(workspaceItems
+          .map((item) => typeof item.metadata.remoteJobId === "string" ? item.metadata.remoteJobId : "")
+          .filter(Boolean));
+        const latestSucceeded = jobs.find((job) => job.status === "succeeded" && !alreadySaved.has(job.id));
+        if (!latestSucceeded || cancelled) return;
+        restoredAvatarJobRef.current = latestSucceeded.id;
+        const pendingTitle = await consumePendingAvatarTitle(latestSucceeded.id);
+        await applyAvatarArtifacts(latestSucceeded, undefined, undefined, pendingTitle ?? undefined);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setAvatarMessage(error instanceof Error ? error.message : "The completed avatar could not be loaded.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.authenticated]);
+
+  const submitAvatarRequest = async (request: RemoteGenerationRequest, onQueued?: (jobId: string) => Promise<void>): Promise<RemoteJob> => {
     if (!session.authenticated) throw new Error("Connect and verify your wallet before generating an avatar.");
     const intent = await api.createRemotePaymentIntent(request);
     const signature = intent.paymentMode === "free-signature"
@@ -287,6 +505,7 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
         : await sendRemoteGenerationPayment({ walletAddress: session.publicKey, recipientAddress: intent.recipientAddress, tokenMint: intent.tokenMint, tokenDecimals: intent.tokenDecimals, network: intent.network, amountAtomic: intent.amountAtomic, paymentReference: intent.paymentReference });
     const paid = await api.verifyRemotePayment(intent.id, signature);
     const queued = await api.createRemoteJob(paid.id, request);
+    await onQueued?.(queued.id);
     for (let attempt = 0; attempt < 180; attempt += 1) {
       const current = await api.remoteJob(queued.id);
       setAvatarJob(current);
@@ -297,23 +516,30 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
   };
 
   const generateAvatar = async () => {
-    if (!prompt.trim() || avatarBusy) return;
+    const title = avatarTitle.trim();
+    const description = prompt.trim();
+    if (!title || !description || avatarBusy) return;
     setAvatarBusy(true);
     setAvatarMessage(null);
+    let queuedJobId = "";
     try {
       const inputs: RemoteGenerationInput[] = [];
       if (referenceImage) inputs.push((await api.uploadRemoteGenerationAvatarSource(referenceImage, "reference-image")).input);
-      const job = await submitAvatarRequest({ ...avatarRequest, inputs });
+      const job = await submitAvatarRequest({ ...avatarRequest, inputs }, async (jobId) => {
+        queuedJobId = jobId;
+        await rememberPendingAvatarTitle(jobId, title);
+      });
       if (job.status !== "succeeded") throw new Error(job.errorMessage || "The avatar worker could not complete this model.");
-      await applyAvatarArtifacts(job);
+      await applyAvatarArtifacts(job, undefined, undefined, title);
     } catch (error: unknown) {
       setAvatarMessage(error instanceof Error ? error.message : "Avatar generation failed.");
     } finally {
+      if (queuedJobId) await consumePendingAvatarTitle(queuedJobId).catch(() => undefined);
       setAvatarBusy(false);
     }
   };
 
-  const loadModelFile = async (file: File, manifestFile?: File, label = file.name, source = "Saved avatar asset") => {
+  const loadModelFile = async (file: File, manifestFile?: File, label = file.name, source = "Saved avatar asset", modelId = `asset-avatar-${file.name}`) => {
     if (modelObjectUrlRef.current) URL.revokeObjectURL(modelObjectUrlRef.current);
     const url = URL.createObjectURL(file);
     modelObjectUrlRef.current = url;
@@ -321,24 +547,49 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
     if (manifestFile) {
       const parsed = parseDanceModelManifest(JSON.parse(await manifestFile.text()));
       manifest = { ...parsed.manifest, modelFile: url };
+      setOriginalOrientationYawRadians(parsed.manifest.orientation?.yawRadians ?? 0);
       setProfile(parsed.manifest.canonicalProfile ?? null);
       setOriginalProfile(parsed.manifest.canonicalProfile ?? null);
+    } else {
+      setOriginalOrientationYawRadians(0);
     }
     setModelFile(file);
-    setModel({ id: `asset-avatar-${file.name}`, label, url, clipNames: { idle: "Idle" }, source, manifest });
+    avatarWorkspaceItemRef.current = null;
+    setModel({ id: modelId, label, url, clipNames: { idle: "Idle" }, source, manifest });
     setAvatarMessage(manifest ? "Avatar loaded with its canonical rig." : "This avatar is missing its canonical manifest, so rig adjustment is unavailable.");
   };
 
   const reskin = async () => {
     if (!profile || !model || avatarBusy) return;
     setAvatarBusy(true);
-    setAvatarMessage("Preparing canonical reskin...");
+    setReskinMessage("Preparing canonical reskin...");
     try {
-      const mesh = modelFile ?? await fileFromUrl(model.url, "avatar.glb", "model/gltf-binary");
-      const manifestValue = { ...(model.manifest ?? {}), schemaVersion: 1, modelId: model.manifest?.modelId ?? model.id, label: model.manifest?.label ?? model.label, skeletonId: "humanoid-v1", modelFile: mesh.name, bones: model.manifest?.bones ?? {}, requiredBones: model.manifest?.requiredBones ?? [], canonicalProfile: profile };
-      const manifestFile = new File([JSON.stringify(manifestValue)], "canonical-profile.json", { type: "application/json" });
+      const existingItem = avatarWorkspaceItemRef.current?.id === model.id
+        ? avatarWorkspaceItemRef.current
+        : workspaceItems.find((item) => item.kind === "avatar" && item.id === model.id) ?? null;
+      const sourceRecord = existingItem
+        ? workspaceFileRecords(existingItem).find((file) => file.role === "reskin_source")
+        : null;
+      const sourceObjectPath = typeof sourceRecord?.objectPath === "string" ? sourceRecord.objectPath : "";
+      const sourcePublicUrl = typeof sourceRecord?.publicUrl === "string" ? sourceRecord.publicUrl : "";
+      const sourceFetchUrl = sourceObjectPath ? remoteArtifactProxyUrl(sourceObjectPath) : sourcePublicUrl;
+      const sourceFile = sourceRecord?.blob instanceof Blob
+        ? new File([sourceRecord.blob], typeof sourceRecord.fileName === "string" ? sourceRecord.fileName : "source-mesh.glb", { type: typeof sourceRecord.mimeType === "string" ? sourceRecord.mimeType : "model/gltf-binary" })
+        : sourceFetchUrl
+          ? await fileFromUrl(sourceFetchUrl, typeof sourceRecord?.fileName === "string" ? sourceRecord.fileName : "source-mesh.glb", typeof sourceRecord?.mimeType === "string" ? sourceRecord.mimeType : "model/gltf-binary")
+          : null;
+      if (!sourceFile) {
+        throw new Error("This avatar does not have its original source mesh available for reskinning. Generate a fresh avatar before adjusting and reskinning it.");
+      }
+      const mesh = sourceFile;
+      const orientationYawRadians = model.manifest?.orientation?.yawRadians ?? 0;
+      const profileValue = { ...profile, modelFile: mesh.name, orientation: { yawRadians: orientationYawRadians } };
+      const manifestFile = new File([JSON.stringify(profileValue)], "canonical-profile.json", { type: "application/json" });
       const meshInput = (await api.uploadRemoteGenerationAvatarSource(mesh, "mesh")).input;
-      const manifestInput = (await api.uploadRemoteGenerationAvatarSource(manifestFile, "manifest")).input;
+      const manifestInput = {
+        ...(await api.uploadRemoteGenerationAvatarSource(manifestFile, "manifest")).input,
+        role: "canonical-profile",
+      };
       const job = await submitAvatarRequest({
         ...avatarRequest,
         inputs: [meshInput, manifestInput],
@@ -346,22 +597,115 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
         parameters: { task_type: "avatar_reskin", quality: "runtime", max_attempts: 2 },
       });
       if (job.status !== "succeeded") throw new Error(job.errorMessage || "The avatar reskin could not complete.");
-      await applyAvatarArtifacts(job);
+      await applyAvatarArtifacts(job, orientationYawRadians, existingItem, undefined, profile);
+      setReskinMessage("Reskin complete. The updated avatar is selected and saved to Private Assets.");
     } catch (error: unknown) {
-      setAvatarMessage(error instanceof Error ? error.message : "Avatar reskin failed.");
+      setReskinMessage(error instanceof Error ? error.message : "Avatar reskin failed.");
     } finally {
       setAvatarBusy(false);
     }
   };
 
-  const addCaptureToTrack = () => {
-    if (!captureClip) return;
-    const offset = segments.reduce((end, segment) => Math.max(end, segment.offsetSeconds + segment.trimEndSeconds - segment.trimStartSeconds), 0);
-    const next = createCompositionSegment(captureClip, captureJob?.originalFileName ?? "Captured dance", captureJob?.id, offset);
-    setSegments((current) => [...current, next]);
-    setSelectedSegmentId(next.id);
-    setMotionEnabled(true);
-    setCompositionMessage("Capture added to the motion track.");
+  const updateAvatarOrientation = (yawRadians: number) => {
+    setModel((current) => current?.manifest
+      ? { ...current, manifest: { ...current.manifest, orientation: { yawRadians } } }
+      : current);
+  };
+
+  const saveAvatarAdjustments = async (nextManifest: DanceModelManifest): Promise<void> => {
+    if (!model || !profile) return;
+    const existingItem = avatarWorkspaceItemRef.current?.id === model.id
+      ? avatarWorkspaceItemRef.current
+      : workspaceItems.find((item) => item.kind === "avatar" && item.id === model.id);
+    if (!existingItem) throw new Error("Save this avatar from a private asset before adjusting its rig.");
+    const files = Array.isArray(existingItem.metadata.files)
+      ? existingItem.metadata.files.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object"))
+      : [];
+    const modelRecord = files.find((file) => file.role === "model");
+    const modelFileName = typeof modelRecord?.fileName === "string" ? modelRecord.fileName : "avatar.glb";
+    const savedManifest = { ...nextManifest, modelFile: modelFileName };
+    const manifestBlob = new Blob([JSON.stringify(savedManifest, null, 2)], { type: "application/json" });
+    const manifestRecord = {
+      ...(files.find((file) => file.role === "rig_manifest") ?? {}),
+      role: "rig_manifest",
+      fileName: "manifest.json",
+      blob: manifestBlob,
+      mimeType: "application/json",
+      sizeBytes: manifestBlob.size,
+    };
+    if (!modelRecord) throw new Error("This avatar asset is missing its active model record.");
+    const nextFiles = [
+      { ...modelRecord, role: "model", fileName: "avatar.glb" },
+      manifestRecord,
+      ...files.filter((file) => !["model", "rig_manifest"].includes(String(file.role))),
+    ];
+    const nextItem = {
+      ...existingItem,
+      updatedAt: new Date().toISOString(),
+      metadata: {
+        ...normalizeRemoteAvatarMetadata(existingItem.metadata, nextFiles),
+        avatarTitle: existingItem.title,
+        remoteJobId: typeof existingItem.metadata.remoteJobId === "string" ? existingItem.metadata.remoteJobId : undefined,
+      },
+    };
+    await saveWorkspaceItem(nextItem);
+    avatarWorkspaceItemRef.current = nextItem;
+    setModel((current) => current?.id === model.id ? { ...current, manifest: savedManifest } : current);
+    setOriginalProfile(savedManifest.canonicalProfile ?? profile);
+    setOriginalOrientationYawRadians(savedManifest.orientation?.yawRadians ?? 0);
+    onWorkspaceChanged?.();
+    setAvatarMessage("Avatar rig and facing rotation saved to Private Assets.");
+  };
+
+  const handleCaptureClip = (clip: DanceMotionClip | null) => {
+    setCaptureClip(clip);
+    if (clip && !segments.length) {
+      setMotionEnabled(true);
+      setCursorSeconds(0);
+    }
+  };
+
+  const saveCaptureAsset = async () => {
+    if (!captureClip) {
+      setCompositionMessage("Complete a pose capture before saving it.");
+      return;
+    }
+    const title = captureTitle.trim();
+    if (!title) {
+      setCompositionMessage("Enter a name for this dance asset.");
+      return;
+    }
+    setCaptureSaveBusy(true);
+    try {
+      const now = new Date().toISOString();
+      const segment = createCompositionSegment(captureClip, title, captureJob?.id, 0);
+      const captureComposition: DanceMotionComposition = {
+        format: "faceless-dance-composition",
+        version: 1,
+        title,
+        durationSeconds: captureClip.durationSeconds,
+        segments: [segment],
+        createdAt: now,
+        updatedAt: now,
+      };
+      const item: BrowserWorkspaceItem = {
+        id: `private-dance-motion-${crypto.randomUUID()}`,
+        title,
+        kind: "dance_motion",
+        source: "private",
+        createdAt: now,
+        updatedAt: now,
+        metadata: { storage: "browser", sourceTool: "dance-capture", composition: captureComposition },
+      };
+      await saveWorkspaceItem(item);
+      setCaptureTitle(title);
+      setCompositionMessage(`${title} saved as a dance asset. It is available in the dance asset list.`);
+      onWorkspaceChanged?.();
+    } catch (error: unknown) {
+      setCompositionMessage(error instanceof Error ? error.message : "The captured dance could not be saved.");
+    } finally {
+      setCaptureSaveBusy(false);
+    }
   };
 
   const compositionForId = (id: string): DanceMotionComposition | null => {
@@ -387,14 +731,77 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
     setCompositionMessage("Saved dance appended to the motion track.");
   };
 
-  const updateSelectedSegment = (change: Partial<Pick<DanceMotionCompositionSegment, "offsetSeconds" | "trimStartSeconds" | "trimEndSeconds">>) => {
-    if (!selectedSegmentId) return;
-    setSegments((current) => current.map((segment) => segment.id === selectedSegmentId ? { ...segment, ...change } : segment));
+  const openAssembly = (id: string) => {
+    setAssemblyOpenId(id);
+    setSelectedSegmentId(null);
+    setCompositionMessage(null);
+    if (!id) {
+      setSavedItem(null);
+      setCompositionTitle("My Dance Motion");
+      setSegments([]);
+      setMotionEnabled(false);
+      return;
+    }
+    const workspaceItem = workspaceItems.find((item) => item.kind === "dance_motion" && item.id === id);
+    const publicItem = publicItems.find((item) => item.kind === "dance_motion" && item.id === id);
+    const sourceItem = workspaceItem ?? publicItem;
+    const composition = sourceItem ? compositionFromItem(sourceItem) : null;
+    if (!sourceItem || !composition) {
+      setCompositionMessage("This dance asset does not contain editable motion clips.");
+      return;
+    }
+    const loadedSegments = composition.segments.map((segment) => ({ ...segment }));
+    setSegments(loadedSegments);
+    setMotionEnabled(loadedSegments.length > 0);
+    if (workspaceItem) {
+      setSavedItem(workspaceItem);
+      setCompositionTitle(workspaceItem.title);
+      setCompositionMessage("Private dance opened. Save changes to update this asset.");
+    } else {
+      setSavedItem(null);
+      setCompositionTitle(`${composition.title} Copy`);
+      setCompositionMessage("Public dance opened as a new private copy. Save it to create your own asset.");
+    }
+  };
+
+  const updateSegment = (id: string, change: Partial<Pick<DanceMotionCompositionSegment, "offsetSeconds" | "trimStartSeconds" | "trimEndSeconds">>) => {
+    setSegments((current) => current.map((segment) => segment.id === id ? { ...segment, ...change } : segment));
+  };
+
+  const removeSegment = (id: string) => {
+    setSegments((current) => current.filter((segment) => segment.id !== id));
+    setSelectedSegmentId((current) => current === id ? null : current);
+  };
+
+  const cutSelectedAtCursor = () => {
+    if (!selectedSegment) return;
+    const duration = selectedSegment.trimEndSeconds - selectedSegment.trimStartSeconds;
+    const localOffset = cursorSeconds - selectedSegment.offsetSeconds;
+    if (localOffset <= 0.08 || localOffset >= duration - 0.08) {
+      setCompositionMessage("Move the playhead inside the selected clip to cut it.");
+      return;
+    }
+    const splitSourceTime = selectedSegment.trimStartSeconds + localOffset;
+    const first: DanceMotionCompositionSegment = {
+      ...selectedSegment,
+      id: `motion-segment-${crypto.randomUUID()}`,
+      trimEndSeconds: splitSourceTime,
+    };
+    const second: DanceMotionCompositionSegment = {
+      ...selectedSegment,
+      id: `motion-segment-${crypto.randomUUID()}`,
+      title: `${selectedSegment.title} · 2`,
+      offsetSeconds: cursorSeconds,
+      trimStartSeconds: splitSourceTime,
+    };
+    setSegments((current) => current.flatMap((segment) => segment.id === selectedSegment.id ? [first, second] : [segment]));
+    setSelectedSegmentId(second.id);
+    setCompositionMessage("Clip cut at the playhead.");
   };
 
   const saveComposition = async () => {
     if (!segments.length) {
-      setCompositionMessage("Add at least one captured dance before saving.");
+      setCompositionMessage("Add at least one saved dance asset before saving the assembly.");
       return;
     }
     const now = new Date().toISOString();
@@ -405,11 +812,17 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
       source: "private",
       createdAt: savedItem?.createdAt ?? now,
       updatedAt: now,
-      metadata: { storage: "browser", sourceTool: "dance-creation", composition: composed },
+      metadata: {
+        ...(savedItem?.metadata ?? {}),
+        storage: "browser",
+        sourceTool: savedItem?.metadata.sourceTool ?? "dance-creation",
+        composition: composed,
+      },
     };
     await saveWorkspaceItem(item);
     setSavedItem(item);
-    setCompositionMessage("Dance motion saved to Private Assets.");
+    setAssemblyOpenId(item.id);
+    setCompositionMessage(savedItem ? "Dance Assembly updated in Private Assets." : "Dance Assembly saved to Private Assets.");
     onWorkspaceChanged?.();
   };
 
@@ -427,27 +840,39 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
   };
 
   const preview = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
     if (previewPlaying) {
-      audio.pause();
       setPreviewPlaying(false);
     } else {
-      audio.currentTime = 0;
-      void audio.play().then(() => setPreviewPlaying(true)).catch(() => setCompositionMessage("Preview audio could not be started."));
+      setCursorSeconds(0);
+      setPreviewPlaying(true);
     }
   };
 
   const loadWorkspaceAvatar = async (item: BrowserWorkspaceItem) => {
-    const mesh = inputFromWorkspace(item, "mesh");
-    const manifest = inputFromWorkspace(item, "manifest");
+    let effectiveItem = item;
+    let repaired = false;
+    try {
+      const repairedItem = await repairLegacyRemoteAvatarItem(item);
+      if (repairedItem) {
+        effectiveItem = repairedItem;
+        repaired = true;
+        onWorkspaceChanged?.();
+      }
+    } catch (error: unknown) {
+      setAvatarMessage(error instanceof Error ? error.message : "This avatar's finalized rigged model could not be loaded.");
+      return;
+    }
+    const mesh = inputFromWorkspace(effectiveItem, "mesh");
+    const manifest = inputFromWorkspace(effectiveItem, "manifest");
     const meshFile = mesh.file ?? (mesh.url ? await fileFromUrl(mesh.url, `${item.title}.glb`, "model/gltf-binary") : null);
     if (!meshFile) {
       setAvatarMessage("This avatar asset is missing its model file.");
       return;
     }
+    avatarWorkspaceItemRef.current = effectiveItem;
     const manifestFile = manifest.file ?? (manifest.url ? await fileFromUrl(manifest.url, "manifest.json", "application/json") : undefined);
-    await loadModelFile(meshFile, manifestFile, item.title, "Private avatar asset");
+    await loadModelFile(meshFile, manifestFile, effectiveItem.title, "Private avatar asset", effectiveItem.id);
+    if (repaired) setAvatarMessage("Loaded the finalized rigged avatar and repaired this private asset in place.");
   };
 
   const loadPublicAvatar = async (item: LibraryItem) => {
@@ -457,6 +882,7 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
       setAvatarMessage("This avatar asset is missing its model file.");
       return;
     }
+    avatarWorkspaceItemRef.current = null;
     const meshFile = await fileFromUrl(mesh.url, `${item.title}.glb`, "model/gltf-binary");
     const manifestFile = manifest.url && !manifest.url.endsWith("/")
       ? await fileFromUrl(manifest.url, "manifest.json", "application/json")
@@ -471,7 +897,6 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
     ...publicItems.filter((item) => item.kind === "avatar").map((item) => ({ id: `public:${item.id}`, label: `Public · ${item.title}`, source: "public" as const, item })),
   ];
   const options = DEFAULT_OPTIONS;
-  const sourceVideo = captureJob?.artifacts.find((artifact) => artifact.kind === "source-video");
   const currencyLabel = paymentCurrency === "FACELESS" ? "$FACELESS" : "SOL";
   const currentPricing = pricing?.currency === paymentCurrency ? pricing : null;
   const holderBaseOnlyFree = holderFreeAvailable && (!currentPricing || currentPricing.priceUsd === 0);
@@ -493,14 +918,15 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
   return (
     <div className="dance-creation-workspace">
       <header className="dance-creation-header">
-        <div><p className="home-v2-kicker">Dance Creation</p><h2>Build a dance asset from avatars and captured motion</h2><p>Generate or load a humanoid, preview a motion clip, then assemble captures into a reusable private dance asset.</p></div>
+        <div><p className="home-v2-kicker">Dance Creation</p><p>Generate Dancers and Extract Dances</p></div>
         <span className="dance-creation-badge"><Sparkles size={14} aria-hidden="true" /> Canonical motion</span>
       </header>
 
       <section className="dance-creation-upper-grid">
         <div className="dance-creation-card dance-creation-avatar-form">
           <div className="dance-creation-card-heading"><div><span className="dance-engine-eyebrow"><WandSparkles size={14} aria-hidden="true" /> Avatar generation</span><h3>Create a dancer</h3></div><span className="dance-creation-step">01</span></div>
-          <label className="dance-creation-field"><span>Character description</span><textarea value={prompt} onInput={(event) => setPrompt(event.currentTarget.value)} placeholder="A purple horse wearing a baseball cap" rows={3} /></label>
+          <label className="dance-creation-field"><span>Avatar title</span><input value={avatarTitle} onInput={(event) => setAvatarTitle(event.currentTarget.value)} placeholder="Purple cowboy frog" maxLength={120} required /></label>
+          <label className="dance-creation-field"><span>Character description</span><textarea value={prompt} onInput={(event) => setPrompt(event.currentTarget.value)} placeholder="A purple horse wearing a baseball cap" rows={3} required /></label>
           <label className="dance-creation-file rhythm-beats-secondary-button"><Upload size={15} aria-hidden="true" /><span>{referenceImage ? referenceImage.name : "Optional reference image"}</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setReferenceImage(event.currentTarget.files?.[0] ?? null)} /></label>
           <div className="dance-creation-payment" aria-label="Avatar generation payment">
             <div className="dance-creation-payment-heading">
@@ -520,7 +946,7 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
             </div>
             <div className="dance-creation-price-row"><span>Avatar generation</span><strong>{costLabel}</strong></div>
           </div>
-          <button type="button" className="rhythm-beats-submit" disabled={avatarBusy || !prompt.trim() || !currentPricing} onClick={() => void generateAvatar()}>{avatarBusy ? <><LoaderCircle size={15} className="is-spinning" aria-hidden="true" /> Working</> : <><WandSparkles size={15} aria-hidden="true" /> Generate avatar</>}</button>
+          <button type="button" className="rhythm-beats-submit" disabled={avatarBusy || !avatarTitle.trim() || !prompt.trim() || !currentPricing} onClick={() => void generateAvatar()}>{avatarBusy ? <><LoaderCircle size={15} className="is-spinning" aria-hidden="true" /> Working</> : <><WandSparkles size={15} aria-hidden="true" /> Generate avatar</>}</button>
           {pricingError ? <p className="dance-creation-status dance-creation-status--error" role="status">{pricingError}</p> : null}
           {avatarMessage ? <p className="dance-creation-status" role="status">{avatarMessage}</p> : null}
           {avatarJob ? <small className="dance-creation-job">{avatarJob.status} · {avatarJob.id.slice(0, 8)}</small> : null}
@@ -529,21 +955,83 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
         <div className="dance-creation-card dance-creation-model-card">
           <div className="dance-creation-card-heading"><div><span className="dance-engine-eyebrow"><RotateCcw size={14} aria-hidden="true" /> Avatar and rig</span><h3>{model?.label ?? "No avatar selected"}</h3></div><span className="dance-creation-step">02</span></div>
           <label className="dance-creation-field"><span>Dance avatar</span><select value={selectedAvatarId} onChange={(event) => { const value = event.currentTarget.value; setSelectedAvatarId(value); const option = avatarOptions.find((candidate) => candidate.id === value); if (!option) return; if (option.source === "private") void loadWorkspaceAvatar(option.item); else void loadPublicAvatar(option.item); }}><option value="">Choose an avatar asset</option>{avatarOptions.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label>
-          {profile && model ? <><RigAdjustmentPanel model={model} profile={profile} originalProfile={originalProfile} onProfileChange={setProfile} onLoadProfile={(next) => { setProfile(next); setOriginalProfile(next); }} /><button type="button" className="rhythm-beats-secondary-button rhythm-beats-secondary-button--primary dance-creation-reskin" disabled={avatarBusy || !currentPricing} onClick={() => void reskin()}><RefreshCw size={15} aria-hidden="true" /> Reskin with adjusted rig</button></> : <p className="dance-creation-empty">Generate or load an avatar model and its canonical manifest to adjust the rig.</p>}
+          {profile && model ? <><RigAdjustmentPanel model={model} profile={profile} originalProfile={originalProfile} orientationYawRadians={model.manifest?.orientation?.yawRadians ?? 0} originalOrientationYawRadians={originalOrientationYawRadians} onProfileChange={setProfile} onOrientationChange={updateAvatarOrientation} onSave={saveAvatarAdjustments} onReskin={reskin} reskinBusy={avatarBusy} reskinDisabled={!currentPricing} reskinDisabledReason="Waiting for avatar reskin pricing" onLoadProfile={(next) => { setProfile(next); setOriginalProfile(next); }} />{!currentPricing ? <p className="dance-creation-status">Waiting for avatar reskin pricing.</p> : null}{reskinMessage ? <p className={`dance-creation-status${reskinMessage.toLowerCase().includes("failed") || reskinMessage.toLowerCase().includes("error") ? " dance-creation-status--error" : ""}`} role="status">{reskinMessage}</p> : null}</> : <p className="dance-creation-empty">Generate or load an avatar model and its canonical manifest to adjust the rig.</p>}
         </div>
 
           <div className="dance-creation-card dance-creation-preview-card">
             <div className="dance-creation-card-heading"><div><span className="dance-engine-eyebrow"><Play size={14} aria-hidden="true" /> Preview</span><h3>Model performance</h3></div><span className="dance-creation-step">03</span></div>
-          <label className="dance-creation-field dance-creation-preview-select"><span>Preview a saved dance</span><select value={loadedCompositionId} onChange={(event) => setLoadedCompositionId(event.currentTarget.value)}><option value="">Current motion track</option>{motionItems.map((item) => <option value={item.id} key={item.id}>Private · {item.title}</option>)}{publicMotionItems.map((item) => <option value={item.id} key={item.id}>Public · {item.title}</option>)}</select></label>
-          {sourceVideo ? <audio ref={audioRef} src={sourceVideo.url} onEnded={() => setPreviewPlaying(false)} /> : <audio ref={audioRef} onEnded={() => setPreviewPlaying(false)} />}
-          {model ? <DanceEngineCanvas audioRef={audioRef} beats={[]} bpm={120} model={model} options={options} capturedMotion={composedClip} capturedMotionEnabled={motionEnabled && Boolean(composedClip)} onSnapshot={setSnapshot} onError={setAvatarMessage} /> : <div className="dance-creation-preview-empty"><Upload size={22} aria-hidden="true" /><strong>Avatar preview</strong><span>Generate an avatar or load a model to begin.</span></div>}
-          <div className="dance-creation-preview-actions"><button type="button" className="rhythm-beats-secondary-button rhythm-beats-secondary-button--primary" disabled={!model || !composedClip} onClick={preview}>{previewPlaying ? "Pause preview" : "Play preview"}</button><span>{snapshot ? `${snapshot.rigCoverage * 100 | 0}% rig · ${snapshot.fps.toFixed(0)} fps` : "Waiting for an avatar model"}</span></div>
+          <label className="dance-creation-field dance-creation-preview-select"><span>Preview a saved dance</span><select value={previewCompositionId} onChange={(event) => { setPreviewCompositionId(event.currentTarget.value); setPreviewPlaying(false); setCursorSeconds(0); }}><option value="">Current motion track</option>{motionItems.map((item) => <option value={item.id} key={item.id}>Private · {item.title}</option>)}{publicMotionItems.map((item) => <option value={item.id} key={item.id}>Public · {item.title}</option>)}</select></label>
+          <audio ref={audioRef} />
+          {model ? <DanceEngineCanvas audioRef={audioRef} beats={[]} bpm={120} model={model} options={options} capturedMotion={previewClip} capturedMotionEnabled={Boolean(previewClip) && (Boolean(previewComposition) || motionEnabled)} motionPlaybackPlaying={previewPlaying} onSnapshot={setSnapshot} onError={setAvatarMessage} /> : <div className="dance-creation-preview-empty"><Upload size={22} aria-hidden="true" /><strong>Avatar preview</strong><span>Generate an avatar or load a model to begin.</span></div>}
+          <div className="dance-creation-preview-actions"><button type="button" className="rhythm-beats-secondary-button rhythm-beats-secondary-button--primary" disabled={!model || !previewClip} onClick={preview}>{previewPlaying ? "Pause preview" : "Play preview"}</button><span>{snapshot ? `${snapshot.rigCoverage * 100 | 0}% rig · ${snapshot.fps.toFixed(0)} fps` : "Waiting for an avatar model"}</span></div>
         </div>
       </section>
 
       <section className="dance-creation-lower-grid">
-        <div className="dance-creation-card dance-creation-capture-card"><div className="dance-creation-card-heading"><div><span className="dance-engine-eyebrow"><FileVideo size={14} aria-hidden="true" /> Pose extraction</span><h3>Capture a dance video</h3></div><span className="dance-creation-step">04</span></div><DanceMotionCapturePanel motionApplied={motionEnabled} onMotionClip={setCaptureClip} onApplyMotion={() => { if (captureClip) setMotionEnabled(true); }} onUseProcedural={() => setMotionEnabled(false)} onJob={setCaptureJob} /><button type="button" className="rhythm-beats-secondary-button dance-creation-add-capture" disabled={!captureClip} onClick={addCaptureToTrack}><Plus size={15} aria-hidden="true" /> Add current capture to track</button></div>
-        <div className="dance-creation-card dance-creation-track-card"><div className="dance-creation-card-heading"><div><span className="dance-engine-eyebrow"><AudioLines size={14} aria-hidden="true" /> Motion composition</span><h3>Assemble the full dance</h3></div><span className="dance-creation-step">05</span></div><p className="dance-creation-help">Add captures, set their order and timing, then preview the combined wireframe or avatar movement.</p><div className="dance-creation-track">{segments.length ? segments.map((segment, index) => <button type="button" key={segment.id} className={`dance-creation-track-segment${selectedSegmentId === segment.id ? " is-selected" : ""}`} style={{ left: `${Math.max(0, segment.offsetSeconds) * 30}px`, width: `${Math.max(72, (segment.trimEndSeconds - segment.trimStartSeconds) * 30)}px` }} title={`${segment.title} · ${(segment.trimEndSeconds - segment.trimStartSeconds).toFixed(2)} seconds`} onClick={() => setSelectedSegmentId(segment.id)}><strong>{index + 1}</strong><span>{segment.title}</span></button>) : <span className="dance-creation-track-empty">Your motion clips will appear here.</span>}</div>{selectedSegment ? <div className="dance-creation-segment-controls"><label><span>Start</span><input type="number" min="0" step="0.01" value={selectedSegment.offsetSeconds} onInput={(event) => updateSelectedSegment({ offsetSeconds: Number(event.currentTarget.value) })} /></label><label><span>Trim in</span><input type="number" min="0" step="0.01" value={selectedSegment.trimStartSeconds} onInput={(event) => updateSelectedSegment({ trimStartSeconds: Number(event.currentTarget.value) })} /></label><label><span>Trim out</span><input type="number" min={selectedSegment.trimStartSeconds + 0.01} step="0.01" value={selectedSegment.trimEndSeconds} onInput={(event) => updateSelectedSegment({ trimEndSeconds: Number(event.currentTarget.value) })} /></label><button type="button" className="icon-button" title="Remove selected capture" aria-label="Remove selected capture" onClick={() => { setSegments((current) => current.filter((segment) => segment.id !== selectedSegment.id)); setSelectedSegmentId(null); }}><Trash2 size={15} aria-hidden="true" /></button></div> : null}<div className="dance-creation-track-library"><select value={trackAssetId} onChange={(event) => setTrackAssetId(event.currentTarget.value)}><option value="">Append a saved dance asset</option>{motionItems.map((item) => <option value={item.id} key={item.id}>Private · {item.title}</option>)}{publicMotionItems.map((item) => <option value={item.id} key={item.id}>Public · {item.title}</option>)}</select><button type="button" className="rhythm-beats-secondary-button" disabled={!trackAssetId} onClick={addLibraryDanceToTrack}><Plus size={15} aria-hidden="true" /> Add to track</button></div><div className="dance-creation-track-footer"><label className="dance-creation-title-field"><span>Asset name</span><input value={compositionTitle} onInput={(event) => setCompositionTitle(event.currentTarget.value)} /></label><span>{segments.length} clips · {composed.durationSeconds.toFixed(2)} seconds</span><button type="button" className="rhythm-beats-secondary-button rhythm-beats-secondary-button--primary" disabled={!segments.length} onClick={() => void saveComposition()}><Save size={15} aria-hidden="true" /> Save private</button><button type="button" className="rhythm-beats-secondary-button rhythm-beats-secondary-button--publish" disabled={!savedItem} onClick={() => void publishComposition()}><CheckCircle2 size={15} aria-hidden="true" /> Publish</button></div>{compositionMessage ? <p className="dance-creation-status" role="status">{compositionMessage}</p> : null}</div>
+        <div className="dance-creation-card dance-creation-capture-card">
+          <div className="dance-creation-card-heading">
+            <div><span className="dance-engine-eyebrow"><FileVideo size={14} aria-hidden="true" /> Pose extraction</span><h3>Capture a dance video</h3></div>
+            <span className="dance-creation-step">04</span>
+          </div>
+          <DanceMotionCapturePanel
+            showPlaybackActions={false}
+            onMotionClip={handleCaptureClip}
+            onJob={setCaptureJob}
+            captureTitle={captureTitle}
+            onCaptureTitleChange={setCaptureTitle}
+            onSaveCapture={saveCaptureAsset}
+            captureSaveBusy={captureSaveBusy}
+          />
+        </div>
+        <div className="dance-creation-card dance-creation-track-card">
+          <div className="dance-creation-card-heading">
+            <div><span className="dance-engine-eyebrow"><AudioLines size={14} aria-hidden="true" /> Motion editing</span><h3>Dance Assembly</h3></div>
+            <span className="dance-creation-step">05</span>
+          </div>
+          <p className="dance-creation-help">Add saved dance assets to the track, then arrange, trim, and cut them into a new dance. Empty time between clips is an intentional pose transition.</p>
+          <div className="dance-creation-assembly-open">
+            <label className="dance-creation-field">
+              <span>Open dance for editing</span>
+              <select value={assemblyOpenId} onChange={(event) => openAssembly(event.currentTarget.value)}>
+                <option value="">New dance assembly</option>
+                {motionItems.map((item) => <option value={item.id} key={item.id}>Private · {item.title}</option>)}
+                {publicMotionItems.map((item) => <option value={item.id} key={item.id}>Public · {item.title}</option>)}
+              </select>
+            </label>
+            <span className="dance-creation-assembly-open__hint">{savedItem ? "Saving updates this private asset." : "Saving creates a new private asset."}</span>
+          </div>
+          <DanceMotionCompositionTrack
+            segments={segments}
+            selectedSegmentId={selectedSegmentId}
+            durationSeconds={composed.durationSeconds}
+            cursorSeconds={cursorSeconds}
+            onCursorChange={setCursorSeconds}
+            onSelectSegment={setSelectedSegmentId}
+            onUpdateSegment={updateSegment}
+            onRemoveSegment={removeSegment}
+            onCutAtCursor={cutSelectedAtCursor}
+          />
+          {selectedSegment ? <div className="dance-creation-segment-controls">
+            <label><span>Start</span><input type="number" min="0" step="0.01" value={selectedSegment.offsetSeconds} onInput={(event) => updateSegment(selectedSegment.id, { offsetSeconds: Math.max(0, Number(event.currentTarget.value) || 0) })} /></label>
+            <label><span>Trim in</span><input type="number" min="0" step="0.01" value={selectedSegment.trimStartSeconds} onInput={(event) => updateSegment(selectedSegment.id, { trimStartSeconds: Math.max(0, Math.min(selectedSegment.trimEndSeconds - 0.01, Number(event.currentTarget.value) || 0)) })} /></label>
+            <label><span>Trim out</span><input type="number" min={selectedSegment.trimStartSeconds + 0.01} step="0.01" value={selectedSegment.trimEndSeconds} onInput={(event) => updateSegment(selectedSegment.id, { trimEndSeconds: Math.max(selectedSegment.trimStartSeconds + 0.01, Math.min(selectedSegment.clip.durationSeconds, Number(event.currentTarget.value) || selectedSegment.trimEndSeconds)) })} /></label>
+          </div> : null}
+          <div className="dance-creation-track-library">
+            <select value={trackAssetId} onChange={(event) => setTrackAssetId(event.currentTarget.value)}>
+              <option value="">Add a saved dance asset</option>
+              {motionItems.map((item) => <option value={item.id} key={item.id}>Private · {item.title}</option>)}
+              {publicMotionItems.map((item) => <option value={item.id} key={item.id}>Public · {item.title}</option>)}
+            </select>
+            <button type="button" className="rhythm-beats-secondary-button" disabled={!trackAssetId} onClick={addLibraryDanceToTrack}>Add to track</button>
+          </div>
+          <div className="dance-creation-track-footer">
+            <label className="dance-creation-title-field"><span>Asset name</span><input value={compositionTitle} onInput={(event) => setCompositionTitle(event.currentTarget.value)} /></label>
+            <span>{segments.length} clips · {composed.durationSeconds.toFixed(2)} seconds</span>
+            <button type="button" className="rhythm-beats-secondary-button rhythm-beats-secondary-button--primary" disabled={!segments.length} onClick={() => void saveComposition()}><Save size={15} aria-hidden="true" /> {savedItem ? "Update private" : "Save private"}</button>
+            <button type="button" className="rhythm-beats-secondary-button rhythm-beats-secondary-button--publish" disabled={!savedItem} onClick={() => void publishComposition()}><CheckCircle2 size={15} aria-hidden="true" /> Publish</button>
+          </div>
+          {compositionMessage ? <p className="dance-creation-status" role="status">{compositionMessage}</p> : null}
+        </div>
       </section>
     </div>
   );

@@ -53,7 +53,8 @@ export const remoteGenerationRequestSchema = z.object({
     }
     if (taskType === "avatar_reskin" || taskType === "reskin") {
       const roles = new Set(value.inputs.map((input) => input.role));
-      if (!roles.has("mesh") || !roles.has("manifest")) context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "Avatar reskin requires mesh and manifest inputs." });
+      const hasCanonicalProfile = ["manifest", "profile", "canonical_profile", "canonical-profile"].some((role) => roles.has(role));
+      if (!roles.has("mesh") || !hasCanonicalProfile) context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "Avatar reskin requires mesh and canonical profile inputs." });
     }
   }
 });

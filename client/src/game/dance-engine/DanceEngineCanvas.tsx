@@ -11,6 +11,7 @@ interface DanceEngineCanvasProps {
   options: DanceRuntimeOptions;
   capturedMotion: DanceMotionClip | null;
   capturedMotionEnabled: boolean;
+  motionPlaybackPlaying?: boolean;
   onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
   onSnapshot: (snapshot: DanceRuntimeSnapshot) => void;
   onError: (message: string | null) => void;
@@ -24,6 +25,7 @@ export function DanceEngineCanvas({
   options,
   capturedMotion,
   capturedMotionEnabled,
+  motionPlaybackPlaying = false,
   onCanvasReady,
   onSnapshot,
   onError
@@ -36,12 +38,27 @@ export function DanceEngineCanvas({
   const optionsRef = useRef(options);
   const onSnapshotRef = useRef(onSnapshot);
   const onErrorRef = useRef(onError);
+  const capturedMotionRef = useRef(capturedMotion);
+  const capturedMotionEnabledRef = useRef(capturedMotionEnabled);
+  const motionPlaybackPlayingRef = useRef(motionPlaybackPlaying);
+  const motionPlaybackStartedAtRef = useRef<number | null>(null);
 
   useEffect(() => { beatsRef.current = beats; }, [beats]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
   useEffect(() => { optionsRef.current = options; }, [options]);
   useEffect(() => { onSnapshotRef.current = onSnapshot; }, [onSnapshot]);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
+  useEffect(() => {
+    if (capturedMotionRef.current !== capturedMotion) {
+      motionPlaybackStartedAtRef.current = null;
+    }
+    capturedMotionRef.current = capturedMotion;
+  }, [capturedMotion]);
+  useEffect(() => { capturedMotionEnabledRef.current = capturedMotionEnabled; }, [capturedMotionEnabled]);
+  useEffect(() => {
+    motionPlaybackPlayingRef.current = motionPlaybackPlaying;
+    if (!motionPlaybackPlaying) motionPlaybackStartedAtRef.current = null;
+  }, [motionPlaybackPlaying]);
 
   useEffect(() => {
     onCanvasReady?.(canvasRef.current);
@@ -60,7 +77,12 @@ export function DanceEngineCanvas({
     const resizeObserver = new ResizeObserver(() => renderer.resize());
     resizeObserver.observe(canvas);
 
-    void renderer.loadModel(modelRef.current).catch((error: unknown) => {
+    void renderer.loadModel(modelRef.current).then(() => {
+      // Model loading is asynchronous. Reapply motion props here because the
+      // React effects can run before DanceRenderer has created its retargeter.
+      renderer.setCapturedMotion(capturedMotionRef.current);
+      renderer.setCapturedMotionEnabled(capturedMotionEnabledRef.current);
+    }).catch((error: unknown) => {
       if (!disposed) onErrorRef.current(error instanceof Error ? error.message : "Unable to load the dance model.");
     });
 
@@ -71,8 +93,15 @@ export function DanceEngineCanvas({
         return;
       }
       const audio = audioRef.current;
-      const songTime = audio?.currentTime ?? 0;
-      const isPlaying = Boolean(audio && !audio.paused && !audio.ended);
+      const motionClip = capturedMotionRef.current;
+      let songTime = audio?.currentTime ?? 0;
+      let isPlaying = Boolean(audio && !audio.paused && !audio.ended);
+      if (motionPlaybackPlayingRef.current && motionClip) {
+        motionPlaybackStartedAtRef.current ??= now;
+        const elapsed = (now - motionPlaybackStartedAtRef.current) / 1000;
+        songTime = motionClip.durationSeconds > 0 ? elapsed % motionClip.durationSeconds : 0;
+        isPlaying = true;
+      }
       const snapshot = renderer.update(
         songTime,
         isPlaying,
@@ -109,10 +138,15 @@ export function DanceEngineCanvas({
 
   useEffect(() => {
     const renderer = rendererRef.current;
-    if (!renderer || model.id === modelRef.current.id) return;
+    const currentYaw = model.manifest?.orientation?.yawRadians ?? 0;
+    const loadedYaw = modelRef.current.manifest?.orientation?.yawRadians ?? 0;
+    if (!renderer || (model.id === modelRef.current.id && model.url === modelRef.current.url && currentYaw === loadedYaw)) return;
     modelRef.current = model;
     onErrorRef.current(null);
-    void renderer.loadModel(model).catch((error: unknown) => {
+    void renderer.loadModel(model).then(() => {
+      renderer.setCapturedMotion(capturedMotionRef.current);
+      renderer.setCapturedMotionEnabled(capturedMotionEnabledRef.current);
+    }).catch((error: unknown) => {
       onErrorRef.current(error instanceof Error ? error.message : "Unable to load the dance model.");
     });
   }, [model]);

@@ -1,6 +1,6 @@
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { AudioWaveform, Check, CircleHelp, FileUp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Search, Settings2, SlidersHorizontal, Sparkles, Upload, Waves, X as XIcon, type LucideIcon } from "lucide-preact";
+import { AudioWaveform, Check, CircleHelp, Eye, EyeOff, FileUp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Search, Settings2, SlidersHorizontal, Sparkles, Upload, Waves, X as XIcon, type LucideIcon } from "lucide-preact";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
 import { RemoteGenerationPanel } from "../components/danceStation/RemoteGenerationPanel";
@@ -21,6 +21,8 @@ import {
   type BrowserWorkspaceItem,
   type BrowserWorkspaceStatus,
 } from "../lib/danceStationWorkspace";
+import { captureAvatarPreview } from "../lib/avatarPreviewCapture";
+import danceMotionWireframeDefault from "../assets/library/dance-motion-wireframe-default.png";
 
 interface Props {
   session: SessionState;
@@ -262,6 +264,20 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     await refreshWorkspace();
   };
 
+  const setDanceStageVisibility = async (item: BrowserWorkspaceItem, enabled: boolean) => {
+    if (!isDanceStageAsset(item.kind)) return;
+    await saveWorkspaceItem({
+      ...item,
+      updatedAt: new Date().toISOString(),
+      metadata: {
+        ...item.metadata,
+        danceStageEnabled: enabled,
+      },
+    });
+    setWorkspaceMessage(`${item.title} ${enabled ? "will appear in" : "hidden from"} Dance Stage.`);
+    await refreshWorkspace();
+  };
+
   const importPublicItem = async (item: LibraryItem) => {
     if (!session.authenticated) {
       throw new Error("Login to import public items.");
@@ -283,6 +299,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         description: item.description,
         tags: item.tags,
         files: item.files,
+        ...(isDanceStageAsset(item.kind) ? { danceStageEnabled: isDanceStageEnabled(item.metadata) } : {}),
         ...(item.kind === "instrument" && item.metadata.instrumentDefinition
           ? { instrumentDefinition: item.metadata.instrumentDefinition }
           : {}),
@@ -426,7 +443,11 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         title: item.title,
         description: "Canonical dance motion composition for avatar playback.",
         tags: ["dance", "motion", "avatar"],
-        metadata: { sourceTool: "dance-creation", composition },
+        metadata: {
+          sourceTool: "dance-creation",
+          composition,
+          danceStageEnabled: isDanceStageEnabled(item.metadata),
+        },
         sourceLineage: { localId: item.id, source: "dance-station-site" },
         localId: item.id,
       });
@@ -442,6 +463,74 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
         creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || published.item.creator?.publicKey || item.creatorName,
         updatedAt: new Date().toISOString(),
         metadata: { ...item.metadata, publicLibrary: published.item, libraryItemId: published.item.id, publicLibraryStatus: "published", files: published.item.files },
+      });
+      setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
+      await refreshWorkspace();
+      return;
+    }
+    if (item.kind === "avatar") {
+      const files = Array.isArray(item.metadata.files)
+        ? item.metadata.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+        : [];
+      const modelFile = files.find((file) => file.role === "model");
+      const manifestFile = files.find((file) => file.role === "rig_manifest");
+      const modelObjectPath = typeof modelFile?.objectPath === "string"
+        ? modelFile.objectPath.trim()
+        : typeof modelFile?.path === "string"
+          ? modelFile.path.trim()
+          : "";
+      const manifestObjectPath = typeof manifestFile?.objectPath === "string"
+        ? manifestFile.objectPath.trim()
+        : typeof manifestFile?.path === "string"
+          ? manifestFile.path.trim()
+          : "";
+      if (!modelObjectPath) throw new Error("This avatar is missing its model file.");
+      if (!manifestObjectPath) throw new Error("This avatar is missing its canonical rig manifest.");
+      const currentlyPublished = isPublishedLibraryMetadata(item.metadata);
+      setWorkspaceMessage(`${currentlyPublished ? "Updating" : "Publishing"} ${item.title}...`);
+      const managed = await api.upsertOwnedLibraryItem({
+        visibility: "public",
+        kind: "avatar",
+        title: item.title,
+        description: "Rigged avatar model for dance playback.",
+        tags: ["avatar", "dance"],
+        metadata: {
+          sourceTool: item.metadata.sourceTool ?? "avatar-generation",
+          remoteJobId: item.metadata.remoteJobId,
+          danceStageEnabled: isDanceStageEnabled(item.metadata),
+        },
+        sourceLineage: { localId: item.id, source: "dance-station-site", runtime: "avatar" },
+        localId: item.id,
+      });
+      await api.clearOwnedLibraryItemFiles(managed.item.id);
+      await api.copyDraftLibraryFileFromStorage(managed.item.id, {
+        role: "model",
+        metadata: { originalTitle: typeof modelFile?.fileName === "string" ? modelFile.fileName : `${item.title}.glb`, source: "avatar-generation" },
+        sourceObjectPath: modelObjectPath,
+        mimeType: typeof modelFile?.mimeType === "string" ? modelFile.mimeType : "model/gltf-binary",
+        fileName: typeof modelFile?.fileName === "string" ? modelFile.fileName : `${item.title}.glb`,
+      });
+      await api.copyDraftLibraryFileFromStorage(managed.item.id, {
+        role: "rig_manifest",
+        metadata: { originalTitle: typeof manifestFile?.fileName === "string" ? manifestFile.fileName : "manifest.json", source: "avatar-generation" },
+        sourceObjectPath: manifestObjectPath,
+        mimeType: typeof manifestFile?.mimeType === "string" ? manifestFile.mimeType : "application/json",
+        fileName: typeof manifestFile?.fileName === "string" ? manifestFile.fileName : "manifest.json",
+      });
+      const coverFile = workspaceMetadataFile(item.metadata.cardImageBlob, item.metadata.cardImageFileName, item.metadata.cardImageMimeType);
+      if (coverFile) {
+        await api.uploadDraftLibraryFile(managed.item.id, {
+          role: "cover",
+          metadata: { originalTitle: coverFile.name, source: "avatar-front-preview" },
+          file: coverFile,
+        });
+      }
+      const published = await api.publishDraftLibraryItem(managed.item.id);
+      await saveWorkspaceItem({
+        ...item,
+        creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || published.item.creator?.publicKey || item.creatorName,
+        updatedAt: new Date().toISOString(),
+        metadata: { ...item.metadata, publicLibrary: published.item, libraryItemId: published.item.id, publicLibraryStatus: "published" },
       });
       setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
       await refreshWorkspace();
@@ -747,6 +836,43 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       },
     });
     setWorkspaceMessage(`${item.title} card image updated.`);
+    await refreshWorkspace();
+  };
+
+  const extractAvatarCardImage = async (item: BrowserWorkspaceItem) => {
+    if (item.kind !== "avatar") return;
+    const files = Array.isArray(item.metadata.files)
+      ? item.metadata.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+      : [];
+    const modelFile = files.find((file) => file.role === "model");
+    const manifestFile = files.find((file) => file.role === "rig_manifest");
+    const modelUrl = typeof modelFile?.publicUrl === "string"
+      ? modelFile.publicUrl.trim()
+      : typeof modelFile?.objectPath === "string"
+        ? `/api/remote-generation/assets/file?path=${encodeURIComponent(modelFile.objectPath)}`
+        : "";
+    let manifest: Record<string, unknown> = {};
+    if (manifestFile?.blob instanceof Blob) {
+      manifest = recordMetadata(JSON.parse(await manifestFile.blob.text()));
+    } else if (typeof manifestFile?.publicUrl === "string" && manifestFile.publicUrl.trim()) {
+      const response = await fetch(manifestFile.publicUrl, { credentials: "include" });
+      if (response.ok) manifest = recordMetadata(await response.json());
+    }
+    const orientation = recordMetadata(manifest.orientation ?? item.metadata.orientation);
+    const yawRadians = typeof orientation.yawRadians === "number" ? orientation.yawRadians : 0;
+    setWorkspaceMessage(`Extracting a front preview for ${item.title}...`);
+    const blob = await captureAvatarPreview({ url: modelUrl, yawRadians });
+    await saveWorkspaceItem({
+      ...item,
+      updatedAt: new Date().toISOString(),
+      metadata: {
+        ...item.metadata,
+        cardImageBlob: blob,
+        cardImageFileName: `${item.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "avatar"}-front.png`,
+        cardImageMimeType: "image/png",
+      },
+    });
+    setWorkspaceMessage(`${item.title} front preview updated.`);
     await refreshWorkspace();
   };
 
@@ -1339,6 +1465,8 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                   importPublicItem={importPublicItem}
                   publishWorkspaceItem={publishWorkspaceItem}
                   renameWorkspaceItem={renameWorkspaceItem}
+                  setDanceStageVisibility={setDanceStageVisibility}
+                  extractAvatarCardImage={extractAvatarCardImage}
                   revokeWorkspaceItem={revokeWorkspaceItem}
                   setWorkspaceCardImage={setWorkspaceCardImage}
                   workspaceCardObjectUrlsRef={workspaceCardObjectUrlsRef}
@@ -1422,6 +1550,8 @@ function LibraryWorkspacePanel({
   importPublicItem,
   publishWorkspaceItem,
   renameWorkspaceItem,
+  setDanceStageVisibility,
+  extractAvatarCardImage,
   revokeWorkspaceItem,
   setWorkspaceCardImage,
   workspaceCardObjectUrlsRef,
@@ -1442,6 +1572,8 @@ function LibraryWorkspacePanel({
   importPublicItem: (item: LibraryItem) => Promise<void>;
   publishWorkspaceItem: (item: BrowserWorkspaceItem) => Promise<void>;
   renameWorkspaceItem: (item: BrowserWorkspaceItem, nextTitle: string) => Promise<void>;
+  setDanceStageVisibility: (item: BrowserWorkspaceItem, enabled: boolean) => Promise<void>;
+  extractAvatarCardImage: (item: BrowserWorkspaceItem) => Promise<void>;
   revokeWorkspaceItem: (item: BrowserWorkspaceItem) => Promise<void>;
   setWorkspaceCardImage: (item: BrowserWorkspaceItem, fileList: FileList | null) => Promise<void>;
   workspaceCardObjectUrlsRef: { current: Map<string, string> };
@@ -1493,10 +1625,12 @@ function LibraryWorkspacePanel({
               key={item.id}
               item={item}
               linkedPublicItem={publicLibraryItemForWorkspaceItem(item, publicItems)}
-              canPublish={session.authenticated && item.source === "private" && hasWorkspaceFile(item.metadata)}
+              canPublish={session.authenticated && item.source === "private" && hasPublishableWorkspaceItem(item)}
               isAuthenticated={session.authenticated}
               onPublish={publishWorkspaceItem}
               onRename={renameWorkspaceItem}
+              onSetDanceStageVisibility={setDanceStageVisibility}
+              onExtractAvatarCardImage={extractAvatarCardImage}
               onRevoke={revokeWorkspaceItem}
               onSetCardImage={setWorkspaceCardImage}
               workspaceCardObjectUrlsRef={workspaceCardObjectUrlsRef}
@@ -1556,6 +1690,8 @@ function PrivateAssetRow({
   isAuthenticated,
   onPublish,
   onRename,
+  onSetDanceStageVisibility,
+  onExtractAvatarCardImage,
   onRevoke,
   onSetCardImage,
   workspaceCardObjectUrlsRef,
@@ -1567,6 +1703,8 @@ function PrivateAssetRow({
   isAuthenticated: boolean;
   onPublish: (item: BrowserWorkspaceItem) => Promise<void>;
   onRename: (item: BrowserWorkspaceItem, nextTitle: string) => Promise<void>;
+  onSetDanceStageVisibility: (item: BrowserWorkspaceItem, enabled: boolean) => Promise<void>;
+  onExtractAvatarCardImage: (item: BrowserWorkspaceItem) => Promise<void>;
   onRevoke: (item: BrowserWorkspaceItem) => Promise<void>;
   onSetCardImage: (item: BrowserWorkspaceItem, fileList: FileList | null) => Promise<void>;
   workspaceCardObjectUrlsRef: { current: Map<string, string> };
@@ -1579,7 +1717,10 @@ function PrivateAssetRow({
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(item.title);
   const [renameSaving, setRenameSaving] = useState(false);
+  const [previewExtracting, setPreviewExtracting] = useState(false);
   const metadata = item.metadata;
+  const danceStageAsset = isDanceStageAsset(item.kind);
+  const danceStageEnabled = isDanceStageEnabled(metadata);
   const size = typeof metadata.sizeBytes === "number" ? formatBytes(metadata.sizeBytes) : "";
   const mime = typeof metadata.mimeType === "string" ? metadata.mimeType : item.source === "public-library" ? "public library item" : "";
   const updated = new Date(item.updatedAt);
@@ -1639,6 +1780,18 @@ function PrivateAssetRow({
       setWorkspaceMessage(error instanceof Error ? error.message : "Could not rename this private asset.");
     } finally {
       setRenameSaving(false);
+    }
+  };
+
+  const extractPreview = async () => {
+    setMenuOpen(false);
+    setPreviewExtracting(true);
+    try {
+      await onExtractAvatarCardImage(item);
+    } catch (error) {
+      setWorkspaceMessage(error instanceof Error ? error.message : "Could not extract the avatar preview.");
+    } finally {
+      setPreviewExtracting(false);
     }
   };
 
@@ -1727,6 +1880,21 @@ function PrivateAssetRow({
             </button>
             {menuOpen ? (
               <div className="library-card__options-menu">
+                {danceStageAsset ? (
+                  <label className="library-card__visibility-toggle">
+                    <input
+                      type="checkbox"
+                      checked={danceStageEnabled}
+                      aria-label={`${danceStageEnabled ? "Hide" : "Show"} ${item.title} in Dance Stage`}
+                      onChange={(event) => {
+                        setMenuOpen(false);
+                        onSetDanceStageVisibility(item, (event.currentTarget as HTMLInputElement).checked).catch((error) => setWorkspaceMessage(error.message));
+                      }}
+                    />
+                    {danceStageEnabled ? <Eye aria-hidden="true" size={14} /> : <EyeOff aria-hidden="true" size={14} />}
+                    <span>Show in Dance Stage</span>
+                  </label>
+                ) : null}
                 {item.source === "private" ? (
                   <>
                     <button type="button" onClick={beginRename}><Pencil aria-hidden="true" size={14} /> Rename</button>
@@ -1742,6 +1910,11 @@ function PrivateAssetRow({
                     />
                     <button type="button" onClick={() => cardImageInputRef.current?.click()}><ImagePlus aria-hidden="true" size={14} /> Set Card Image</button>
                   </>
+                ) : null}
+                {item.kind === "avatar" ? (
+                  <button type="button" disabled={previewExtracting} onClick={() => void extractPreview()}>
+                    <ImagePlus aria-hidden="true" size={14} /> {previewExtracting ? "Extracting Preview..." : "Extract Front Preview"}
+                  </button>
                 ) : null}
                 {published ? <button type="button" onClick={() => { setMenuOpen(false); onRevoke(item).catch((error) => setWorkspaceMessage(error.message)); }}><RotateCcw aria-hidden="true" size={14} /> Revoke</button> : null}
                 {item.source !== "private" && !published ? <span>No additional options</span> : null}
@@ -2745,6 +2918,10 @@ function workspaceItemCardImageUrl(
     objectUrlsRef.current.set(key, url);
     return url;
   }
+  // Dance motions use the project-owned canonical wireframe artwork by default.
+  // Older workspace records may contain a generic cover reference from before
+  // dance-motion artwork was defined; do not let that stale reference win.
+  if (isDanceMotionWorkspaceItem(item)) return danceMotionWireframeDefault;
   const publicLibrary = item.metadata?.publicLibrary;
   if (publicLibrary && typeof publicLibrary === "object") {
     const files = (publicLibrary as { files?: Array<{ role?: string; publicUrl?: string | null }> }).files;
@@ -2792,6 +2969,24 @@ function recordMetadata(value: unknown): Record<string, unknown> {
 
 function metadataText(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function isDanceStageAsset(kind: string): boolean {
+  return kind === "avatar" || kind === "dance_motion";
+}
+
+function isDanceMotionWorkspaceItem(item: BrowserWorkspaceItem): boolean {
+  if (item.kind === "dance_motion") return true;
+  const composition = item.metadata?.composition;
+  return Boolean(
+    composition
+    && typeof composition === "object"
+    && (composition as { format?: unknown }).format === "faceless-dance-composition",
+  );
+}
+
+function isDanceStageEnabled(metadata: Record<string, unknown>): boolean {
+  return metadata.danceStageEnabled !== false;
 }
 
 function jsonDownloadFile(name: string, value: unknown): File {
@@ -2850,6 +3045,25 @@ function hasWorkspaceFile(metadata: Record<string, unknown>): boolean {
   return isWorkspaceBlob(metadata.blob)
     || typeof metadata.libraryItemId === "string"
     || (typeof metadata.publicUrl === "string" && metadata.publicUrl.trim().length > 0);
+}
+
+function hasPublishableWorkspaceItem(item: BrowserWorkspaceItem): boolean {
+  if (item.kind === "dance_motion") {
+    return Boolean(item.metadata.composition && typeof item.metadata.composition === "object");
+  }
+  if (item.kind === "avatar") {
+    const files = Array.isArray(item.metadata.files)
+      ? item.metadata.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+      : [];
+    const hasStoragePath = (role: string) => files.some((file) => {
+      if (file.role !== role) return false;
+      const objectPath = typeof file.objectPath === "string" ? file.objectPath.trim() : "";
+      const path = typeof file.path === "string" ? file.path.trim() : "";
+      return Boolean(objectPath || path);
+    });
+    return hasStoragePath("model") && hasStoragePath("rig_manifest");
+  }
+  return hasWorkspaceFile(item.metadata);
 }
 
 function workspaceMetadataFile(value: unknown, nameValue: unknown, mimeValue: unknown): File | null {

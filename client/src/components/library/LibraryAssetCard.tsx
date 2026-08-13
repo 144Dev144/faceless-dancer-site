@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { AudioWaveform, Download, MoreHorizontal } from "lucide-preact";
 import type { LibraryItem } from "../../lib/api";
 import { AudioPlayButton, useSiteAudioPlayer } from "../audio/SiteAudioPlayer";
+import danceMotionWireframeDefault from "../../assets/library/dance-motion-wireframe-default.png";
 
 interface Props {
   item: LibraryItem;
@@ -29,7 +30,7 @@ export function LibraryAssetCard({
   const fileCount = item.files.length;
   const updated = new Date(item.updatedAt);
   const creatorName = item.creator?.displayName || item.creator?.creatorSlug || item.creator?.publicKey || "Faceless creator";
-  const cardImage = coverFile?.publicUrl || item.creator?.bannerUrl || item.creator?.avatarUrl || "";
+  const cardImage = coverFile?.publicUrl || (item.kind === "dance_motion" ? danceMotionWireframeDefault : item.creator?.bannerUrl || item.creator?.avatarUrl || "");
   const kindClass = item.kind.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   const factTags = [
     ...(item.license ? [item.license] : []),

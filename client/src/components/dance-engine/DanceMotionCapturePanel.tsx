@@ -25,11 +25,16 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 interface DanceMotionCapturePanelProps {
-  motionApplied: boolean;
+  motionApplied?: boolean;
   onMotionClip: (clip: DanceMotionClip | null) => void;
   onJob?: (job: DanceMotionJob | null) => void;
-  onApplyMotion: () => void;
-  onUseProcedural: () => void;
+  onApplyMotion?: () => void;
+  onUseProcedural?: () => void;
+  showPlaybackActions?: boolean;
+  captureTitle?: string;
+  onCaptureTitleChange?: (title: string) => void;
+  onSaveCapture?: () => void | Promise<void>;
+  captureSaveBusy?: boolean;
 }
 
 export function DanceMotionCapturePanel({
@@ -37,7 +42,12 @@ export function DanceMotionCapturePanel({
   onMotionClip,
   onJob,
   onApplyMotion,
-  onUseProcedural
+  onUseProcedural,
+  showPlaybackActions = true,
+  captureTitle = "",
+  onCaptureTitleChange,
+  onSaveCapture,
+  captureSaveBusy = false,
 }: DanceMotionCapturePanelProps): JSX.Element {
   const [file, setFile] = useState<File | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
@@ -87,7 +97,7 @@ export function DanceMotionCapturePanel({
     setJob(null);
     onJob?.(null);
     onMotionClip(null);
-    onUseProcedural();
+    onUseProcedural?.();
   };
 
   const updateJob = async (jobId: string, update: Record<string, unknown>) => {
@@ -206,7 +216,8 @@ export function DanceMotionCapturePanel({
       </div>
       {job ? <div className="dance-motion-job-row"><div><strong>{job.status === "completed" ? "Motion review ready" : job.stage}</strong><span>{job.originalFileName} · {Math.round(job.progress)}%</span></div><div className="dance-motion-progress"><span style={{ width: `${job.progress}%` }} /></div><div className="dance-motion-artifacts">{wireframeArtifact ? <a href={wireframeArtifact.url} download><Download size={14} aria-hidden="true" /> Wireframe video</a> : null}{canonicalArtifact ? <a href={canonicalArtifact.url} download><Download size={14} aria-hidden="true" /> Canonical clip</a> : null}{rawArtifact ? <a href={rawArtifact.url} download><Download size={14} aria-hidden="true" /> Raw pose</a> : null}{filteredArtifact ? <a href={filteredArtifact.url} download><Download size={14} aria-hidden="true" /> Filtered pose</a> : null}{depthResolvedArtifact ? <a href={depthResolvedArtifact.url} download><Download size={14} aria-hidden="true" /> Resolved depth</a> : null}{diagnosticsArtifact ? <a href={diagnosticsArtifact.url} download><Download size={14} aria-hidden="true" /> Diagnostics</a> : null}</div></div> : null}
       {wireframeArtifact ? <div className="dance-motion-result-video"><div><strong>Rendered wireframe review</strong><span>Use this to check tracking, missing joints, facing direction, and foot stability before using the motion clip.</span></div><video src={wireframeArtifact.url} controls playsInline preload="metadata" /></div> : null}
-      {job?.status === "completed" && canonicalArtifact ? <div className="dance-motion-apply-row"><div><strong>Avatar playback</strong><span>Preview this canonical motion on the selected model in the engine below.</span></div><div>{motionApplied ? <button type="button" className="secondary" onClick={onUseProcedural}><RotateCcw size={14} aria-hidden="true" /> Use procedural motion</button> : <button type="button" className="primary" onClick={onApplyMotion}><Play size={14} aria-hidden="true" /> Apply to model</button>}</div></div> : null}
+      {job?.status === "completed" && canonicalArtifact && showPlaybackActions && onApplyMotion && onUseProcedural ? <div className="dance-motion-apply-row"><div><strong>Avatar playback</strong><span>Preview this canonical motion on the selected model in the engine below.</span></div><div>{motionApplied ? <button type="button" className="secondary" onClick={onUseProcedural}><RotateCcw size={14} aria-hidden="true" /> Use procedural motion</button> : <button type="button" className="primary" onClick={onApplyMotion}><Play size={14} aria-hidden="true" /> Apply to model</button>}</div></div> : null}
+      {job?.status === "completed" && canonicalArtifact && onSaveCapture ? <div className="dance-motion-save-row"><label><span>Dance asset name</span><input value={captureTitle} onInput={(event) => onCaptureTitleChange?.(event.currentTarget.value)} placeholder="My captured dance" maxLength={120} /></label><button type="button" className="rhythm-beats-secondary-button rhythm-beats-secondary-button--primary" disabled={captureSaveBusy || !captureTitle.trim()} onClick={() => void onSaveCapture()}><Database size={14} aria-hidden="true" /> {captureSaveBusy ? "Saving..." : "Save as dance asset"}</button></div> : null}
       {sourceArtifact ? <span className="dance-motion-source-note">Source persisted as job {job?.id.slice(0, 8)} · {sourceArtifact.fileName}</span> : null}
     </section>
   );
