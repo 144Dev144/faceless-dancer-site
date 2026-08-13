@@ -67,10 +67,12 @@ function fileRecord(item: CatalogItem, role: string): Record<string, unknown> | 
 function fileUrl(item: CatalogItem, role: string): string {
   const file = fileRecord(item, role);
   if (!file) return "";
-  if (typeof file.publicUrl === "string" && file.publicUrl.trim()) return file.publicUrl.trim();
   if ("files" in item && typeof file.id === "string") {
+    // Public Bunny URLs do not expose CORS headers. Keep browser reads on the
+    // site origin so unauthenticated Dance Stage visitors can load assets.
     return `/api/library/${encodeURIComponent(item.id)}/files/${encodeURIComponent(file.id)}`;
   }
+  if (typeof file.publicUrl === "string" && file.publicUrl.trim()) return file.publicUrl.trim();
   return "";
 }
 
