@@ -432,6 +432,99 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       await publishRhythmGameWorkspaceItem(item);
       return;
     }
+    if (item.kind === "dance_motion" && item.metadata.danceMode === "generative-video") {
+      const files = Array.isArray(item.metadata.files)
+        ? item.metadata.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+        : [];
+      const videoFile = files.find((file) => file.role === "generative-video" || (typeof file.mimeType === "string" && file.mimeType.startsWith("video/")));
+      const objectPath = typeof videoFile?.objectPath === "string"
+        ? videoFile.objectPath.trim()
+        : typeof videoFile?.path === "string"
+          ? videoFile.path.trim()
+          : "";
+      if (!objectPath) throw new Error("This generative dance is missing its video artifact.");
+      const currentlyPublished = isPublishedLibraryMetadata(item.metadata);
+      setWorkspaceMessage(`${currentlyPublished ? "Updating" : "Publishing"} ${item.title}...`);
+      const managed = await api.upsertOwnedLibraryItem({
+        visibility: "public",
+        kind: "dance_motion",
+        title: item.title,
+        description: "Generated dance video for generative avatar workflows.",
+        tags: ["dance", "generative", "wan-animate"],
+        metadata: {
+          sourceTool: "wan-animate",
+          danceMode: "generative-video",
+          sequence: item.metadata.sequence,
+          danceStageEnabled: false,
+        },
+        sourceLineage: { localId: item.id, source: "dance-station-site", runtime: "wan-animate" },
+        localId: item.id,
+      });
+      await api.clearOwnedLibraryItemFiles(managed.item.id);
+      await api.copyDraftLibraryFileFromStorage(managed.item.id, {
+        role: "preview",
+        metadata: { originalTitle: typeof videoFile?.fileName === "string" ? videoFile.fileName : `${item.title}.mp4`, source: "wan-animate" },
+        sourceObjectPath: objectPath,
+        mimeType: typeof videoFile?.mimeType === "string" ? videoFile.mimeType : "video/mp4",
+        fileName: typeof videoFile?.fileName === "string" ? videoFile.fileName : `${item.title}.mp4`,
+      });
+      const published = await api.publishDraftLibraryItem(managed.item.id);
+      await saveWorkspaceItem({
+        ...item,
+        creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || published.item.creator?.publicKey || item.creatorName,
+        updatedAt: new Date().toISOString(),
+        metadata: { ...item.metadata, publicLibrary: published.item, libraryItemId: published.item.id, publicLibraryStatus: "published", files: published.item.files },
+      });
+      setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
+      await refreshWorkspace();
+      return;
+    }
+    if (item.kind === "avatar" && item.metadata.avatarMode === "generative-image") {
+      const files = Array.isArray(item.metadata.files)
+        ? item.metadata.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+        : [];
+      const imageFile = files.find((file) => file.role === "reference-image" || file.role === "image" || (typeof file.mimeType === "string" && file.mimeType.startsWith("image/")));
+      const objectPath = typeof imageFile?.objectPath === "string"
+        ? imageFile.objectPath.trim()
+        : typeof imageFile?.path === "string"
+          ? imageFile.path.trim()
+          : "";
+      if (!objectPath) throw new Error("This generated avatar is missing its image artifact.");
+      const currentlyPublished = isPublishedLibraryMetadata(item.metadata);
+      setWorkspaceMessage(`${currentlyPublished ? "Updating" : "Publishing"} ${item.title}...`);
+      const managed = await api.upsertOwnedLibraryItem({
+        visibility: "public",
+        kind: "avatar",
+        title: item.title,
+        description: "Generated avatar image for generative dance workflows.",
+        tags: ["avatar", "generative", "flux-image"],
+        metadata: {
+          sourceTool: "flux-image",
+          avatarMode: "generative-image",
+          danceStageEnabled: false,
+        },
+        sourceLineage: { localId: item.id, source: "dance-station-site", runtime: "flux-image" },
+        localId: item.id,
+      });
+      await api.clearOwnedLibraryItemFiles(managed.item.id);
+      await api.copyDraftLibraryFileFromStorage(managed.item.id, {
+        role: "cover",
+        metadata: { originalTitle: typeof imageFile?.fileName === "string" ? imageFile.fileName : `${item.title}.png`, source: "flux-image" },
+        sourceObjectPath: objectPath,
+        mimeType: typeof imageFile?.mimeType === "string" ? imageFile.mimeType : "image/png",
+        fileName: typeof imageFile?.fileName === "string" ? imageFile.fileName : `${item.title}.png`,
+      });
+      const published = await api.publishDraftLibraryItem(managed.item.id);
+      await saveWorkspaceItem({
+        ...item,
+        creatorName: published.item.creator?.displayName || published.item.creator?.creatorSlug || published.item.creator?.publicKey || item.creatorName,
+        updatedAt: new Date().toISOString(),
+        metadata: { ...item.metadata, publicLibrary: published.item, libraryItemId: published.item.id, publicLibraryStatus: "published", files: published.item.files },
+      });
+      setWorkspaceMessage(`${item.title} ${currentlyPublished ? "updated in" : "published to"} the public library.`);
+      await refreshWorkspace();
+      return;
+    }
     if (item.kind === "dance_motion") {
       const composition = item.metadata.composition;
       if (!composition || typeof composition !== "object") throw new Error("This dance motion is missing its composition data.");
@@ -3049,12 +3142,26 @@ function hasWorkspaceFile(metadata: Record<string, unknown>): boolean {
 
 function hasPublishableWorkspaceItem(item: BrowserWorkspaceItem): boolean {
   if (item.kind === "dance_motion") {
+    if (item.metadata.danceMode === "generative-video") {
+      return Array.isArray(item.metadata.files) && item.metadata.files.some((file) => {
+        if (!file || typeof file !== "object") return false;
+        const candidate = file as Record<string, unknown>;
+        if (candidate.role !== "generative-video" && !(typeof candidate.mimeType === "string" && candidate.mimeType.startsWith("video/"))) return false;
+        return Boolean((typeof candidate.objectPath === "string" && candidate.objectPath.trim()) || (typeof candidate.path === "string" && candidate.path.trim()));
+      });
+    }
     return Boolean(item.metadata.composition && typeof item.metadata.composition === "object");
   }
   if (item.kind === "avatar") {
     const files = Array.isArray(item.metadata.files)
       ? item.metadata.files.filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
       : [];
+    if (item.metadata.avatarMode === "generative-image") {
+      return files.some((file) => {
+        if (file.role !== "reference-image" && file.role !== "image" && !(typeof file.mimeType === "string" && file.mimeType.startsWith("image/"))) return false;
+        return Boolean((typeof file.objectPath === "string" && file.objectPath.trim()) || (typeof file.path === "string" && file.path.trim()));
+      });
+    }
     const hasStoragePath = (role: string) => files.some((file) => {
       if (file.role !== role) return false;
       const objectPath = typeof file.objectPath === "string" ? file.objectPath.trim() : "";

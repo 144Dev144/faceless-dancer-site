@@ -3906,8 +3906,14 @@ label {
 .dance-creation-model-actions,
 .dance-creation-segment-controls { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .dance-creation-header { padding: 4px 2px 0; }
+.dance-creation-title-block { min-width: 0; }
+.dance-creation-title-tabs { display: flex; align-items: baseline; gap: 20px; min-width: 0; }
+.dance-creation-title-tab { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 2px 0 8px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #8992a5; cursor: pointer; font: inherit; font-size: clamp(1rem, 1.8vw, 1.28rem); font-weight: 700; letter-spacing: 0; line-height: 1.1; transition: color .16s ease, border-color .16s ease; }
+.dance-creation-title-tab:hover { color: #d5dbe5; }
+.dance-creation-title-tab:focus-visible { outline: 2px solid rgba(155,245,210,.78); outline-offset: 4px; border-radius: 2px; }
+.dance-creation-title-tab.is-active { border-bottom-color: #9bf5d2; color: #f1fff9; }
+.dance-creation-title-tab.is-active svg { color: #9bf5d2; }
 .dance-creation-header h2, .dance-creation-card h3, .dance-creation-card p { margin: 0; }
-.dance-creation-header h2 { font-size: clamp(1.35rem, 2.4vw, 2rem); line-height: 1.08; letter-spacing: 0; }
 .dance-creation-header p:not(.home-v2-kicker) { max-width: 760px; margin-top: 8px; color: var(--text-muted, #a6a9b8); }
 .dance-creation-badge, .dance-creation-step, .dance-creation-job { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted, #a6a9b8); font-size: .75rem; white-space: nowrap; }
 .dance-creation-badge { padding: 7px 10px; border: 1px solid rgba(151,245,208,.3); color: #9bf5d2; border-radius: 999px; }
@@ -4015,6 +4021,83 @@ label {
 .dance-motion-composition-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-muted,#a6a9b8); font-size: .78rem; }
 .dance-motion-composition-selection { justify-content: space-between; flex-wrap: wrap; margin-top: 7px; }
 .dance-motion-composition-selection strong { font-weight: 600; }
+
+/* Generative Dance workflow */
+.generative-dance-panel { display: grid; gap: 16px; min-width: 0; }
+.generative-dance-panel__header, .generative-dance-card__heading, .generative-dance-track-toolbar, .generative-dance-clip__top, .generative-dance-payment > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.generative-dance-panel__header { padding: 2px 2px 0; }
+.generative-dance-panel__header h2 { margin: 4px 0 0; font-size: clamp(1.25rem, 2.1vw, 1.8rem); line-height: 1.1; }
+.generative-dance-panel__header p { margin: 7px 0 0; color: var(--text-muted,#a6a9b8); font-size: .82rem; }
+.generative-dance-panel__window { flex: 0 0 auto; padding: 7px 10px; border: 1px solid rgba(155,245,210,.22); border-radius: 5px; color: #9bf5d2; font-size: .72rem; font-variant-numeric: tabular-nums; }
+.generative-dance-panel__grid { display: grid; grid-template-columns: minmax(280px,.72fr) minmax(0,1.5fr); gap: 14px; align-items: start; }
+.generative-dance-card { min-width: 0; padding: 16px; border: 1px solid rgba(255,255,255,.09); border-radius: 8px; background: rgba(13,15,21,.82); }
+.generative-dance-card__heading { align-items: flex-start; margin-bottom: 14px; }
+.generative-dance-card__heading h3 { margin: 3px 0 0; font-size: 1rem; }
+.generative-dance-title-input { display: grid; gap: 5px; min-width: 180px; color: var(--text-muted,#a6a9b8); font-size: .7rem; }
+.generative-dance-title-input input, .generative-dance-sequence-settings input, .generative-dance-sequence-settings select, .generative-dance-clip input { min-width: 0; border: 1px solid rgba(255,255,255,.12); border-radius: 5px; background: rgba(0,0,0,.24); color: #f4f5f8; padding: 8px 9px; font: inherit; font-size: .75rem; }
+.generative-dance-avatar-card .dance-creation-file { width: 100%; box-sizing: border-box; margin-top: 12px; }
+.generative-dance-payment { display: grid; gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid #203452; border-radius: 7px; background: #091020; }
+.generative-dance-payment > div:first-child { min-height: 29px; color: #8da6ca; font-size: .68rem; }
+.generative-dance-payment > div:first-child strong { margin-left: auto; color: #cfe0ff; font-size: .8rem; }
+.generative-dance-payment .dance-station-cost-estimator__refresh { position: static; width: 26px; height: 26px; }
+.generative-dance-sequence-settings { display: grid; grid-template-columns: minmax(180px,.55fr) minmax(0,1.45fr); gap: 10px; }
+.generative-dance-postprocess { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 10px; padding: 9px 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; background: rgba(0,0,0,.14); color: var(--text-muted,#a6a9b8); font-size: .72rem; }
+.generative-dance-postprocess__title { color: #dce6f8; font-weight: 700; }
+.generative-dance-postprocess label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.generative-dance-postprocess input { accent-color: #8ab4ff; }
+.generative-dance-track-toolbar { margin-top: 14px; padding: 10px 0; border-top: 1px solid rgba(255,255,255,.08); border-bottom: 1px solid rgba(255,255,255,.08); }
+.generative-dance-track-toolbar > div { display: grid; gap: 3px; min-width: 0; }
+.generative-dance-track-toolbar strong { color: #f0f5ff; font-size: .78rem; }
+.generative-dance-track-toolbar span { color: var(--text-muted,#a6a9b8); font-size: .7rem; }
+.generative-dance-track-toolbar label { flex: 0 0 auto; }
+.generative-dance-track-toolbar__actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
+.generative-dance-track-toolbar__actions select { min-width: 150px; max-width: 220px; border: 1px solid rgba(255,255,255,.12); border-radius: 5px; background: #101219; color: #f4f5f8; padding: 7px 8px; font: inherit; font-size: .72rem; }
+.generative-dance-composition-editor { display: grid; gap: 7px; margin-top: 10px; border: 1px solid rgba(255,255,255,.1); border-radius: 6px; background: rgba(0,0,0,.16); }
+.generative-dance-composition-toolbar, .generative-dance-composition-selection { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; color: #8f9caf; font-size: .68rem; }
+.generative-dance-composition-toolbar { border-bottom: 1px solid rgba(255,255,255,.08); }
+.generative-dance-composition-toolbar > div { display: flex; gap: 6px; }
+.generative-dance-composition-tool { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; }
+.generative-dance-composition-tool.is-active { border-color: #9bf5d2; background: rgba(82,168,137,.18); color: #9bf5d2; }
+.generative-dance-composition-viewport { min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-color: #344253 transparent; }
+.generative-dance-composition-canvas { position: relative; min-width: 100%; height: 108px; }
+.generative-dance-composition-axis { position: absolute; inset: 0 0 auto; height: 25px; border-bottom: 1px solid rgba(255,255,255,.08); color: #748196; font-size: .63rem; font-variant-numeric: tabular-nums; pointer-events: none; }
+.generative-dance-composition-axis span { position: absolute; top: 7px; transform: translateX(-50%); }
+.generative-dance-composition-lane { position: absolute; inset: 25px 0 0; background: repeating-linear-gradient(90deg, transparent 0, transparent 91px, rgba(255,255,255,.055) 92px); }
+.generative-dance-composition-clip { position: absolute; top: 25px; height: 54px; box-sizing: border-box; display: flex; align-items: center; gap: 5px; min-width: 30px; padding: 0 12px; overflow: hidden; border: 1px solid rgba(155,245,210,.38); border-radius: 5px; background: linear-gradient(135deg, rgba(55,117,102,.9), rgba(30,52,65,.94)); color: #edfff8; cursor: grab; user-select: none; touch-action: none; }
+.generative-dance-composition-clip:active { cursor: grabbing; }
+.generative-dance-composition-clip.is-selected { border-color: #9bf5d2; box-shadow: 0 0 0 2px rgba(155,245,210,.15); }
+.generative-dance-composition-clip > span { min-width: 0; overflow: hidden; font-size: .69rem; text-overflow: ellipsis; white-space: nowrap; }
+.generative-dance-composition-clip small { flex: 0 0 auto; color: #c1eadd; font-size: .62rem; font-variant-numeric: tabular-nums; }
+.generative-dance-composition-handle { position: absolute; top: 8px; bottom: 8px; z-index: 2; width: 5px; padding: 0; border: 0; border-radius: 3px; background: rgba(230,255,247,.78); cursor: ew-resize; }
+.generative-dance-composition-handle.is-left { left: 4px; }
+.generative-dance-composition-handle.is-right { right: 4px; }
+.generative-dance-composition-playhead { position: absolute; top: 0; bottom: 0; z-index: 3; width: 1px; background: #f5f7fb; box-shadow: 0 0 7px rgba(255,255,255,.7); pointer-events: none; }
+.generative-dance-composition-playhead::before { content: ""; position: absolute; top: 0; left: -4px; width: 9px; height: 8px; clip-path: polygon(0 0, 100% 0, 50% 100%); background: #f5f7fb; }
+.generative-dance-composition-empty { position: absolute; inset: 22px 0 0; display: grid; place-items: center; color: #778499; font-size: .7rem; pointer-events: none; }
+.generative-dance-composition-selection { min-height: 29px; border-top: 1px solid rgba(255,255,255,.08); font-variant-numeric: tabular-nums; }
+.generative-dance-composition-selection strong { color: #9bf5d2; font-weight: 600; }
+.generative-dance-track { display: grid; gap: 9px; min-height: 180px; max-height: 560px; margin-top: 10px; overflow: auto; padding-right: 4px; }
+.generative-dance-track__empty { display: grid; place-items: center; gap: 6px; min-height: 170px; border: 1px dashed rgba(255,255,255,.14); border-radius: 6px; color: var(--text-muted,#a6a9b8); text-align: center; font-size: .76rem; }
+.generative-dance-track__empty strong { color: #e7ebf2; }
+.generative-dance-clip { display: grid; gap: 10px; padding: 11px; border: 1px solid rgba(255,255,255,.1); border-left: 3px solid rgba(155,245,210,.38); border-radius: 6px; background: rgba(255,255,255,.025); cursor: pointer; }
+.generative-dance-clip.is-selected { border-color: rgba(155,245,210,.5); border-left-color: #9bf5d2; background: rgba(82,168,137,.09); }
+.generative-dance-clip__top { align-items: flex-start; }
+.generative-dance-clip__top > strong { min-width: 0; overflow: hidden; color: #eafff7; font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.generative-dance-clip__top > span { flex: 0 0 auto; color: #9ca8b8; font-size: .68rem; font-variant-numeric: tabular-nums; }
+.generative-dance-clip__top > div { display: flex; gap: 4px; flex: 0 0 auto; }
+.generative-dance-clip__top button { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 1px solid rgba(255,255,255,.12); border-radius: 4px; background: #171d27; color: #d9e0eb; cursor: pointer; }
+.generative-dance-clip__top button:disabled { opacity: .35; cursor: default; }
+.generative-dance-clip__controls { display: grid; grid-template-columns: 76px 76px 94px minmax(150px,1fr); gap: 8px; }
+.generative-dance-clip__controls label, .generative-dance-clip__placement label { display: grid; gap: 4px; color: #9ca8b8; font-size: .66rem; }
+.generative-dance-clip__controls input, .generative-dance-clip__placement input { width: 100%; box-sizing: border-box; padding: 6px 7px; font-size: .7rem; }
+.generative-dance-clip__placement { display: flex; align-items: end; gap: 9px; flex-wrap: wrap; color: #9ca8b8; font-size: .67rem; }
+.generative-dance-clip__placement > span { margin-right: 3px; color: #9bf5d2; }
+.generative-dance-clip__placement label { grid-template-columns: auto 58px; align-items: center; }
+.generative-dance-clip small { color: #778499; font-size: .66rem; font-variant-numeric: tabular-nums; }
+.generative-dance-message { display: flex; align-items: center; gap: 7px; margin: 10px 0 0; color: #9bf5d2; font-size: .76rem; line-height: 1.35; }
+.generative-dance-message.is-error { color: #f38d8d; }
+@media (max-width: 900px) { .generative-dance-panel__grid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .dance-creation-header, .generative-dance-panel__header, .generative-dance-card__heading, .generative-dance-track-toolbar { align-items: stretch; flex-direction: column; } .dance-creation-title-tabs { gap: 14px; } .generative-dance-panel__window { align-self: flex-start; } .generative-dance-title-input, .generative-dance-sequence-settings { width: 100%; min-width: 0; } .generative-dance-sequence-settings { grid-template-columns: 1fr; } .generative-dance-clip__top { display: grid; grid-template-columns: minmax(0,1fr) auto; } .generative-dance-clip__top > span { grid-column: 1; } .generative-dance-clip__top > div { grid-column: 2; grid-row: 1 / span 2; } .generative-dance-clip__controls { grid-template-columns: 1fr 1fr; } .generative-dance-clip__prompt { grid-column: 1 / -1; } }
 
 /* Keep the shared capture and rig controls consistent with Rhythm Beats inside this workspace. */
 .dance-creation-workspace .dance-motion-capture__actions button.primary,

@@ -17,6 +17,7 @@ import type { DanceModelManifest, DanceModelPreset, DanceRuntimeOptions, DanceRu
 import { DanceMotionCapturePanel } from "../dance-engine/DanceMotionCapturePanel";
 import { RigAdjustmentPanel } from "../dance-engine/RigAdjustmentPanel";
 import { DanceMotionCompositionTrack } from "./DanceMotionCompositionTrack";
+import { GenerativeDancePanel } from "./GenerativeDancePanel";
 
 interface Props {
   session: SessionState;
@@ -272,6 +273,7 @@ function formatPaymentToken(amountAtomic: string, decimals: number): string {
 }
 
 export function DanceCreationPanel({ session, workspaceItems, publicItems, onWorkspaceChanged, onPublishAsset }: Props): JSX.Element {
+  const [creationMode, setCreationMode] = useState<"motion-capture" | "generative-dance">("motion-capture");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const modelObjectUrlRef = useRef<string | null>(null);
   const avatarWorkspaceItemRef = useRef<BrowserWorkspaceItem | null>(null);
@@ -412,8 +414,8 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
   const composedClip = useMemo(() => composeDanceMotion(composed), [composed]);
   const previewComposition = useMemo(() => {
     if (!previewCompositionId) return null;
-    const item = workspaceItems.find((candidate) => candidate.kind === "dance_motion" && candidate.id === previewCompositionId);
-    const publicItem = publicItems.find((candidate) => candidate.kind === "dance_motion" && candidate.id === previewCompositionId);
+    const item = workspaceItems.find((candidate) => candidate.kind === "dance_motion" && candidate.metadata.danceMode !== "generative-video" && candidate.id === previewCompositionId);
+    const publicItem = publicItems.find((candidate) => candidate.kind === "dance_motion" && candidate.metadata.danceMode !== "generative-video" && candidate.id === previewCompositionId);
     return item ? compositionFromItem(item) : publicItem ? compositionFromItem(publicItem) : null;
   }, [previewCompositionId, publicItems, workspaceItems]);
   const previewCompositionClip = useMemo(() => previewComposition ? composeDanceMotion(previewComposition) : null, [previewComposition]);
@@ -890,11 +892,11 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
     await loadModelFile(meshFile, manifestFile, item.title, "Public avatar asset");
   };
 
-  const motionItems = workspaceItems.filter((item) => item.kind === "dance_motion");
-  const publicMotionItems = publicItems.filter((item) => item.kind === "dance_motion");
+  const motionItems = workspaceItems.filter((item) => item.kind === "dance_motion" && item.metadata.danceMode !== "generative-video");
+  const publicMotionItems = publicItems.filter((item) => item.kind === "dance_motion" && item.metadata.danceMode !== "generative-video");
   const avatarOptions = [
-    ...workspaceItems.filter((item) => item.kind === "avatar").map((item) => ({ id: `private:${item.id}`, label: `Private · ${item.title}`, source: "private" as const, item })),
-    ...publicItems.filter((item) => item.kind === "avatar").map((item) => ({ id: `public:${item.id}`, label: `Public · ${item.title}`, source: "public" as const, item })),
+    ...workspaceItems.filter((item) => item.kind === "avatar" && item.metadata.avatarMode !== "generative-image").map((item) => ({ id: `private:${item.id}`, label: `Private · ${item.title}`, source: "private" as const, item })),
+    ...publicItems.filter((item) => item.kind === "avatar" && item.metadata.avatarMode !== "generative-image").map((item) => ({ id: `public:${item.id}`, label: `Public · ${item.title}`, source: "public" as const, item })),
   ];
   const options = DEFAULT_OPTIONS;
   const currencyLabel = paymentCurrency === "FACELESS" ? "$FACELESS" : "SOL";
@@ -918,10 +920,15 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
   return (
     <div className="dance-creation-workspace">
       <header className="dance-creation-header">
-        <div><p className="home-v2-kicker">Dance Creation</p><p>Generate Dancers and Extract Dances</p></div>
-        <span className="dance-creation-badge"><Sparkles size={14} aria-hidden="true" /> Canonical motion</span>
+        <div className="dance-creation-title-block">
+          <div className="dance-creation-title-tabs" role="tablist" aria-label="Dance creation workflow">
+            <button type="button" className={`dance-creation-title-tab${creationMode === "motion-capture" ? " is-active" : ""}`} role="tab" aria-selected={creationMode === "motion-capture"} onClick={() => setCreationMode("motion-capture")}><FileVideo size={16} aria-hidden="true" /> Motion capture</button>
+            <button type="button" className={`dance-creation-title-tab${creationMode === "generative-dance" ? " is-active" : ""}`} role="tab" aria-selected={creationMode === "generative-dance"} onClick={() => setCreationMode("generative-dance")}><Sparkles size={16} aria-hidden="true" /> Generative dance</button>
+          </div>
+          <p>{creationMode === "motion-capture" ? "Generate Dancers and Extract Dances" : "Generate avatar images and Wan Animate dance videos"}</p>
+        </div>
       </header>
-
+      {creationMode === "generative-dance" ? <GenerativeDancePanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={onWorkspaceChanged} /> : <>
       <section className="dance-creation-upper-grid">
         <div className="dance-creation-card dance-creation-avatar-form">
           <div className="dance-creation-card-heading"><div><span className="dance-engine-eyebrow"><WandSparkles size={14} aria-hidden="true" /> Avatar generation</span><h3>Create a dancer</h3></div><span className="dance-creation-step">01</span></div>
@@ -1033,6 +1040,7 @@ export function DanceCreationPanel({ session, workspaceItems, publicItems, onWor
           {compositionMessage ? <p className="dance-creation-status" role="status">{compositionMessage}</p> : null}
         </div>
       </section>
+      </>}
     </div>
   );
 }

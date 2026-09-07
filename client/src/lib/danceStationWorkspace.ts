@@ -273,6 +273,94 @@ export function createRemoteAudioWorkspaceItem(input: {
   };
 }
 
+export function createRemoteImageWorkspaceItem(input: {
+  jobId: string;
+  title: string;
+  publicUrl: string;
+  objectPath: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  createdAt: string;
+  updatedAt: string;
+}): BrowserWorkspaceItem {
+  return {
+    id: `remote-generative-avatar-${input.jobId}`,
+    title: input.title,
+    kind: "avatar",
+    source: "private",
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+    metadata: {
+      storage: "remote-cdn",
+      sourceTool: "flux-image",
+      avatarMode: "generative-image",
+      danceStageEnabled: false,
+      remoteJobId: input.jobId,
+      publicUrl: input.publicUrl,
+      objectPath: input.objectPath,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      sha256: input.sha256,
+      files: [{
+        role: "reference-image",
+        fileName: `${input.title}.png`,
+        objectPath: input.objectPath,
+        publicUrl: `/api/remote-generation/assets/file?path=${encodeURIComponent(input.objectPath)}`,
+        sourcePublicUrl: input.publicUrl,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        sha256: input.sha256,
+      }],
+    },
+  };
+}
+
+export function createRemoteGenerativeDanceWorkspaceItem(input: {
+  jobId: string;
+  title: string;
+  publicUrl: string;
+  objectPath: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  sequence: unknown;
+  createdAt: string;
+  updatedAt: string;
+}): BrowserWorkspaceItem {
+  return {
+    id: `remote-generative-dance-${input.jobId}`,
+    title: input.title,
+    kind: "dance_motion",
+    source: "private",
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+    metadata: {
+      storage: "remote-cdn",
+      sourceTool: "wan-animate",
+      danceMode: "generative-video",
+      danceStageEnabled: false,
+      remoteJobId: input.jobId,
+      publicUrl: input.publicUrl,
+      objectPath: input.objectPath,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      sha256: input.sha256,
+      sequence: input.sequence,
+      files: [{
+        role: "generative-video",
+        fileName: `${input.title}.mp4`,
+        objectPath: input.objectPath,
+        publicUrl: `/api/remote-generation/assets/file?path=${encodeURIComponent(input.objectPath)}`,
+        sourcePublicUrl: input.publicUrl,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        sha256: input.sha256,
+      }],
+    },
+  };
+}
+
 export function normalizeRemoteAvatarMetadata(
   metadata: Record<string, unknown> | undefined,
   files: Array<Record<string, unknown>>,

@@ -18,7 +18,7 @@ export interface RemoteGenerationMetadata {
 }
 
 export interface RemoteGenerationRequest {
-  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate";
   modelRevision: string;
   inputs: RemoteGenerationInput[];
   priority: "low" | "standard" | "high";
@@ -76,12 +76,20 @@ export interface RemotePricingConfig {
     solRhythmBeatsSourceSecondPriceUsdMicros: number;
     facelessAvatarBasePriceUsdMicros: number;
     solAvatarBasePriceUsdMicros: number;
+    facelessFluxImageBasePriceUsdMicros: number;
+    solFluxImageBasePriceUsdMicros: number;
+    facelessWanAnimateBasePriceUsdMicros: number;
+    solWanAnimateBasePriceUsdMicros: number;
+    facelessWanAnimateDurationSecondPriceUsdMicros?: number;
+    solWanAnimateDurationSecondPriceUsdMicros?: number;
     musicFreeForHolders: boolean;
     extractionFreeForHolders: boolean;
     voiceChangeFreeForHolders: boolean;
     transitionFreeForHolders: boolean;
     rhythmBeatsFreeForHolders: boolean;
     avatarFreeForHolders: boolean;
+    fluxImageFreeForHolders: boolean;
+    wanAnimateFreeForHolders: boolean;
     updatedAt: string;
   };
   defaults: {
@@ -120,7 +128,7 @@ export interface PaymentIntent {
   id: string;
   userId: string;
   walletAddress: string;
-  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate";
   requestHash: string;
   currency: RemotePaymentCurrency;
   tokenMint: string;
@@ -199,7 +207,7 @@ export interface RemoteJob {
   id: string;
   userId: string;
   paymentIntentId: string;
-  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate";
   modelRevision: string;
   requestHash: string;
   request: RemoteGenerationRequest;

@@ -36,6 +36,8 @@ const supportedAudioMimeAliases = new Set([
 ]);
 
 const supportedAudioExtensions = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"]);
+const supportedVideoMimeAliases = new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-matroska", "video/ogg"]);
+const supportedVideoExtensions = new Set([".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi"]);
 const browserFallbackMimeTypes = new Set(["", "application/octet-stream", "binary/octet-stream"]);
 const avatarSourceUpload = multer({
   storage: multer.memoryStorage(),
@@ -50,6 +52,13 @@ function isSupportedAudioUpload(file: Express.Multer.File): boolean {
 
   const extension = path.extname(file.originalname || "").toLowerCase();
   return browserFallbackMimeTypes.has(mimeType) && supportedAudioExtensions.has(extension);
+}
+
+function isSupportedSourceUpload(file: Express.Multer.File): boolean {
+  if (isSupportedAudioUpload(file)) return true;
+  const mimeType = String(file.mimetype || "").trim().toLowerCase();
+  const extension = path.extname(file.originalname || "").toLowerCase();
+  return supportedVideoMimeAliases.has(mimeType) || (browserFallbackMimeTypes.has(mimeType) && supportedVideoExtensions.has(extension));
 }
 
 function safeSourceFileName(name: string): string {
@@ -148,7 +157,7 @@ router.post("/availability", async (req, res, next) => {
   try {
     const request = z.object({
       priority: remoteGenerationPrioritySchema,
-      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar"]),
+      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate"]),
     }).parse({
       priority: req.body?.priority ?? "standard",
       runtime: req.body?.runtime ?? "ace-step",
@@ -202,14 +211,14 @@ router.get("/assets/chart", async (req, res) => {
 router.post("/sources", sourceUpload.single("file"), async (req, res, next) => {
   if (!requireEnabled(res)) return;
   try {
-    if (!req.file) return res.status(400).json({ error: "Choose an audio file first" });
-    if (!isSupportedAudioUpload(req.file)) {
+    if (!req.file) return res.status(400).json({ error: "Choose an audio or video file first" });
+    if (!isSupportedSourceUpload(req.file)) {
       console.warn("[remote-generation] rejected source upload", {
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
         extension: path.extname(req.file.originalname || "").toLowerCase(),
       });
-      return res.status(400).json({ error: "Only supported audio files can be uploaded" });
+      return res.status(400).json({ error: "Only supported audio and video files can be uploaded" });
     }
 
     const sourceId = createId();
@@ -230,7 +239,7 @@ router.post("/sources", sourceUpload.single("file"), async (req, res, next) => {
 
     return res.status(201).json({
       input: {
-        role: "source",
+        role: req.file.mimetype.toLowerCase().startsWith("video/") || supportedVideoExtensions.has(extension) ? "driver" : "source",
         sourceUrl: uploadResult.publicUrl,
         mimeType: req.file.mimetype,
         fileName: req.file.originalname || originalName,
@@ -347,7 +356,7 @@ router.get("/jobs", async (req, res, next) => {
     const knownJobIds = typeof req.query.knownIds === "string"
       ? [...new Set(req.query.knownIds.split(",").map((id) => id.trim()).filter(Boolean))].slice(0, 100)
       : undefined;
-    return res.json(await launchServerClient.listJobs(req.session!.userId, { limit, cursor, activeOnly, knownJobIds, runtime: runtime as "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | undefined }));
+    return res.json(await launchServerClient.listJobs(req.session!.userId, { limit, cursor, activeOnly, knownJobIds, runtime: runtime as "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | undefined }));
   } catch (error) {
     return respondRemoteGenerationError(error, res, "Generation history is temporarily unavailable. Please try again shortly.");
   }

@@ -151,6 +151,8 @@ export function holderFreeForRequest(config: RemotePricingConfig, request: Remot
     case "avatar":
     case "avatar_reskin":
     case "reskin": return config.settings.avatarFreeForHolders ?? config.settings.musicFreeForHolders;
+    case "generative_avatar": return config.settings.fluxImageFreeForHolders ?? config.settings.musicFreeForHolders;
+    case "generative_dance": return config.settings.wanAnimateFreeForHolders ?? config.settings.musicFreeForHolders;
     default: return config.settings.musicFreeForHolders;
   }
 }
@@ -162,11 +164,12 @@ export function calculateRemotePricing(
   options: { freeForHolder?: boolean } = {},
 ): RemotePricingQuote {
   const parameters = request.parameters;
-  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : parameters.task_type === "rhythm_beats" ? "rhythm_beats" : ["avatar", "avatar_reskin", "reskin"].includes(String(parameters.task_type)) ? "avatar" : "text2music";
+  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : parameters.task_type === "rhythm_beats" ? "rhythm_beats" : ["avatar", "avatar_reskin", "reskin"].includes(String(parameters.task_type)) ? "avatar" : parameters.task_type === "generative_avatar" ? "generative_avatar" : parameters.task_type === "generative_dance" ? "generative_dance" : "text2music";
   const transitionPlan = taskType === "transition_chain" && parameters.transition_plan && typeof parameters.transition_plan === "object" ? parameters.transition_plan as { transitionClips?: Array<{ startSeconds: number; endSeconds: number }> } : undefined;
   const transitionStageCount = transitionPlan?.transitionClips?.length ?? 1;
   const transitionSeconds = transitionPlan?.transitionClips?.reduce((sum, clip) => sum + Math.max(0, clip.endSeconds - clip.startSeconds), 0) ?? 0;
-  const duration = taskType === "transition_chain" ? transitionSeconds : positiveNumber(parameters.audio_duration ?? parameters.source_duration_seconds, config.defaults.musicDurationSeconds);
+  const generativeDanceSequence = taskType === "generative_dance" && parameters.sequence && typeof parameters.sequence === "object" ? parameters.sequence as { durationSeconds?: unknown } : undefined;
+  const duration = taskType === "transition_chain" ? transitionSeconds : taskType === "generative_dance" ? positiveNumber(generativeDanceSequence?.durationSeconds, 0) : positiveNumber(parameters.audio_duration ?? parameters.source_duration_seconds, config.defaults.musicDurationSeconds);
   const defaultSteps = taskType === "extract" || taskType === "rhythm_beats" ? config.defaults.extractionInferenceSteps : taskType === "voice_change" ? config.defaults.voiceChangeInferenceSteps : taskType === "transition_chain" ? config.defaults.transitionInferenceSteps : config.defaults.musicInferenceSteps;
   const configuredSteps = taskType === "voice_change" ? parameters.diffusion_steps : parameters.inference_steps;
   const steps = Math.max(1, Math.round(positiveNumber(configuredSteps, defaultSteps)));
@@ -183,6 +186,10 @@ export function calculateRemotePricing(
           ? (isSol ? settings.solRhythmBeatsBasePriceUsdMicros : settings.facelessRhythmBeatsBasePriceUsdMicros)
         : taskType === "avatar"
           ? (isSol ? (settings.solAvatarBasePriceUsdMicros ?? settings.solBasePriceUsdMicros) : (settings.facelessAvatarBasePriceUsdMicros ?? settings.facelessBasePriceUsdMicros))
+          : taskType === "generative_avatar"
+            ? (isSol ? (settings.solFluxImageBasePriceUsdMicros ?? settings.solBasePriceUsdMicros) : (settings.facelessFluxImageBasePriceUsdMicros ?? settings.facelessBasePriceUsdMicros))
+            : taskType === "generative_dance"
+              ? (isSol ? (settings.solWanAnimateBasePriceUsdMicros ?? settings.solBasePriceUsdMicros) : (settings.facelessWanAnimateBasePriceUsdMicros ?? settings.facelessBasePriceUsdMicros))
           : (isSol ? settings.solBasePriceUsdMicros : settings.facelessBasePriceUsdMicros);
   const stepRateMicros = taskType === "extract"
     ? (isSol ? settings.solExtractionAdditionalStepPriceUsdMicros : settings.facelessExtractionAdditionalStepPriceUsdMicros)
@@ -201,10 +208,12 @@ export function calculateRemotePricing(
         ? (isSol ? settings.solTransitionSecondPriceUsdMicros : settings.facelessTransitionSecondPriceUsdMicros)
         : taskType === "rhythm_beats"
           ? (isSol ? settings.solRhythmBeatsSourceSecondPriceUsdMicros : settings.facelessRhythmBeatsSourceSecondPriceUsdMicros)
-        : (isSol ? settings.solGenerationAdditionalSecondPriceUsdMicros : settings.facelessGenerationAdditionalSecondPriceUsdMicros);
+        : taskType === "generative_dance"
+          ? (isSol ? (settings.solWanAnimateDurationSecondPriceUsdMicros ?? 0) : (settings.facelessWanAnimateDurationSecondPriceUsdMicros ?? 0))
+          : (isSol ? settings.solGenerationAdditionalSecondPriceUsdMicros : settings.facelessGenerationAdditionalSecondPriceUsdMicros);
   const sourceDurationSeconds = taskType === "extract" || taskType === "voice_change" || taskType === "rhythm_beats" ? nonNegativeNumber(request.inputs.find((input) => input.role === (taskType === "voice_change" ? "song" : input.role))?.durationSeconds ?? parameters.source_duration_seconds) : 0;
   if ((taskType === "extract" || taskType === "voice_change" || taskType === "rhythm_beats") && durationRateMicros > 0 && sourceDurationSeconds <= 0) throw new Error(`${taskType === "voice_change" ? "Voice Change song" : taskType === "rhythm_beats" ? "Rhythm Beats source" : "Extraction source"} duration is required for the configured per-second price`);
-  const additionalDurationSeconds = taskType === "transition_chain" ? transitionSeconds * transitionStageCount : taskType === "extract" || taskType === "voice_change" || taskType === "rhythm_beats" ? sourceDurationSeconds : Math.max(0, duration - config.defaults.musicDurationSeconds);
+  const additionalDurationSeconds = taskType === "transition_chain" ? transitionSeconds * transitionStageCount : taskType === "extract" || taskType === "voice_change" || taskType === "rhythm_beats" ? sourceDurationSeconds : taskType === "generative_dance" ? duration : Math.max(0, duration - config.defaults.musicDurationSeconds);
   const stemCount = taskType === "rhythm_beats" ? (parameters.stem_mode === "selected" && Array.isArray(parameters.selected_stems) ? parameters.selected_stems.length : 12) : 0;
   const baseChargeMicros = basePriceMicros * (taskType === "transition_chain" ? transitionStageCount : 1);
   const calculatedPriceMicros = baseChargeMicros
