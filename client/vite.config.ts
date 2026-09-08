@@ -14,7 +14,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     envDir: siteRoot,
-    envPrefix: ["VITE_", "SECONDARY_RPC_NODE"],
+    envPrefix: ["VITE_", "SECONDARY_RPC_NODE", "TERTIARY_RPC_NODE"],
     resolve: {
       alias: {
         react: "preact/compat",

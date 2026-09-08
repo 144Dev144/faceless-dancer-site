@@ -143,7 +143,8 @@ function atomicAmount(priceUsd: number, tokenPriceUsd: number, decimals: number,
 }
 
 export function holderFreeForRequest(config: RemotePricingConfig, request: RemoteGenerationRequest): boolean {
-  switch (request.parameters.task_type) {
+  const taskType = String(request.parameters.task_type ?? "");
+  switch (taskType) {
     case "extract": return config.settings.extractionFreeForHolders;
     case "voice_change": return config.settings.voiceChangeFreeForHolders;
     case "transition_chain": return config.settings.transitionFreeForHolders;
@@ -153,7 +154,11 @@ export function holderFreeForRequest(config: RemotePricingConfig, request: Remot
     case "reskin": return config.settings.avatarFreeForHolders ?? config.settings.musicFreeForHolders;
     case "generative_avatar": return config.settings.fluxImageFreeForHolders ?? config.settings.musicFreeForHolders;
     case "generative_dance": return config.settings.wanAnimateFreeForHolders ?? config.settings.musicFreeForHolders;
-    default: return config.settings.musicFreeForHolders;
+    default:
+      if (request.runtime === "flux-image") return config.settings.fluxImageFreeForHolders ?? config.settings.musicFreeForHolders;
+      if (request.runtime === "wan-animate") return config.settings.wanAnimateFreeForHolders ?? config.settings.musicFreeForHolders;
+      if (request.runtime === "avatar") return config.settings.avatarFreeForHolders ?? config.settings.musicFreeForHolders;
+      return config.settings.musicFreeForHolders;
   }
 }
 

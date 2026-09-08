@@ -5,6 +5,7 @@ import { FACELESS_TOKEN_DECIMALS, FACELESS_TOKEN_MINT } from "./facelessPrice";
 const configuredNetwork = (import.meta.env.VITE_SOLANA_NETWORK as string | undefined)?.trim() || "devnet";
 const configuredRpcUrl = (import.meta.env.VITE_SOLANA_RPC_URL as string | undefined)?.trim();
 const configuredSecondaryRpcUrl = (import.meta.env.SECONDARY_RPC_NODE as string | undefined)?.trim();
+const configuredTertiaryRpcUrl = (import.meta.env.TERTIARY_RPC_NODE as string | undefined)?.trim();
 
 export interface BalanceNetworkConfig {
   network: "devnet" | "mainnet-beta";
@@ -33,32 +34,55 @@ function resolveNetworkConfig(config?: BalanceNetworkConfig, rpcUrlOverride?: st
   };
 }
 
+function balanceRpcUrls(config: BalanceNetworkConfig | undefined): string[] {
+  const network = config?.network ?? configuredNetwork as "devnet" | "mainnet-beta";
+  return [...new Set([
+    configuredTertiaryRpcUrl,
+    configuredSecondaryRpcUrl,
+    configuredRpcUrl,
+    config?.rpcUrl,
+    defaultRpcUrl(network),
+  ].filter((url): url is string => Boolean(url)))];
+}
+
 export async function fetchFaceLESSWalletBalance(
   walletAddress: string,
   tokenMintAddress = FACELESS_TOKEN_MINT,
   tokenDecimals = FACELESS_TOKEN_DECIMALS,
   config?: BalanceNetworkConfig,
 ): Promise<FaceLESSWalletBalance> {
-  const networkConfig = resolveNetworkConfig(config, configuredSecondaryRpcUrl);
-  const connection = new Connection(networkConfig.rpcUrl, "confirmed");
   const owner = new PublicKey(walletAddress);
   const mint = new PublicKey(tokenMintAddress);
-  const tokenAccountAddress = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_2022_PROGRAM_ID);
-  let amountAtomic = "0";
-  try {
-    const balance = await connection.getTokenAccountBalance(tokenAccountAddress, "confirmed");
-    amountAtomic = balance.value.amount;
-  } catch (error) {
-    if (!String(error).toLowerCase().includes("could not find account")) throw error;
+  let lastError: unknown = null;
+
+  for (const rpcUrl of balanceRpcUrls(config)) {
+    const networkConfig = resolveNetworkConfig(config, rpcUrl);
+    const connection = new Connection(networkConfig.rpcUrl, "confirmed");
+    const tokenAccountAddress = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_2022_PROGRAM_ID);
+    try {
+      const balance = await connection.getTokenAccountBalance(tokenAccountAddress, "confirmed");
+      return {
+        amountAtomic: balance.value.amount,
+        tokenDecimals,
+        tokenMint: tokenMintAddress,
+        network: networkConfig.network,
+        fetchedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      if (String(error).toLowerCase().includes("could not find account")) {
+        return {
+          amountAtomic: "0",
+          tokenDecimals,
+          tokenMint: tokenMintAddress,
+          network: networkConfig.network,
+          fetchedAt: new Date().toISOString(),
+        };
+      }
+      lastError = error;
+    }
   }
 
-  return {
-    amountAtomic: amountAtomic.toString(),
-    tokenDecimals,
-    tokenMint: tokenMintAddress,
-    network: networkConfig.network,
-    fetchedAt: new Date().toISOString(),
-  };
+  throw lastError instanceof Error ? lastError : new Error("FACELESS Token-2022 balance lookup failed on all configured RPC nodes.");
 }
 
 export async function fetchSolWalletBalance(walletAddress: string, config?: BalanceNetworkConfig): Promise<FaceLESSWalletBalance> {

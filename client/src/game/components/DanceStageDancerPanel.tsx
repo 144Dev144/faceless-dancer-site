@@ -17,6 +17,7 @@ interface AssetChoice {
   title: string;
   source: AssetSource;
   item: CatalogItem;
+  kind: "avatar" | "generative-video";
 }
 
 interface Props {
@@ -97,7 +98,18 @@ function linkedLibraryId(item: BrowserWorkspaceItem): string {
 function assetChoices(items: CatalogItem[], kind: string, source: AssetSource, hiddenPublicIds = new Set<string>()): AssetChoice[] {
   return items
     .filter((item) => item.kind === kind && isDanceStageEnabled(item.metadata) && (source !== "public" || !hiddenPublicIds.has(item.id)))
-    .map((item) => ({ id: `${source}:${item.id}`, title: item.title || "Untitled", source, item }));
+    .map((item) => ({ id: `${source}:${item.id}`, title: item.title || "Untitled", source, item, kind: "avatar" }));
+}
+
+function generativeDanceChoices(items: CatalogItem[], source: AssetSource, hiddenPublicIds = new Set<string>()): AssetChoice[] {
+  return items
+    .filter((item) => item.kind === "dance_motion" && item.metadata.danceMode === "generative-video" && (source === "private" && item.metadata.danceStageVisibilityExplicit !== true ? true : isDanceStageEnabled(item.metadata)) && (source !== "public" || !hiddenPublicIds.has(item.id)))
+    .map((item) => ({ id: `${source}:${item.id}`, title: item.title || "Untitled", source, item, kind: "generative-video" }));
+}
+
+function authoredDanceChoices(items: CatalogItem[], source: AssetSource, hiddenPublicIds = new Set<string>()): AssetChoice[] {
+  return assetChoices(items, "dance_motion", source, hiddenPublicIds)
+    .filter((choice) => choice.item.metadata.danceMode !== "generative-video");
 }
 
 function compositionFromItem(item: CatalogItem): DanceMotionComposition | null {
@@ -124,6 +136,10 @@ function modelObjectUrl(item: CatalogItem): { url: string; revoke: boolean } {
   return { url, revoke: false };
 }
 
+function generativeDanceVideoUrl(item: CatalogItem): string {
+  return fileUrl(item, "preview") || fileUrl(item, "generative-video") || fileUrl(item, "video");
+}
+
 export function DanceStageDancerPanel({
   workspaceItems,
   publicItems,
@@ -136,9 +152,11 @@ export function DanceStageDancerPanel({
   motionPlaybackPlaying,
 }: Props): JSX.Element {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const generativeVideoRef = useRef<HTMLVideoElement | null>(null);
   const [localSelectedModelId, setLocalSelectedModelId] = useState("");
   const [localSelectedDanceId, setLocalSelectedDanceId] = useState("");
   const [model, setModel] = useState<DanceModelPreset | null>(null);
+  const [generativeVideoUrl, setGenerativeVideoUrl] = useState("");
   const [motion, setMotion] = useState<DanceMotionClip | null>(null);
   const [loadingModel, setLoadingModel] = useState(false);
   const [loadingDance, setLoadingDance] = useState(false);
@@ -155,14 +173,16 @@ export function DanceStageDancerPanel({
   const modelChoices = useMemo(
     () => [
       ...assetChoices(workspaceItems, "avatar", "private"),
+      ...generativeDanceChoices(workspaceItems, "private"),
       ...assetChoices(publicItems, "avatar", "public", hiddenPublicIds),
+      ...generativeDanceChoices(publicItems, "public", hiddenPublicIds),
     ],
     [hiddenPublicIds, publicItems, workspaceItems],
   );
   const danceChoices = useMemo(
     () => [
-      ...assetChoices(workspaceItems, "dance_motion", "private"),
-      ...assetChoices(publicItems, "dance_motion", "public", hiddenPublicIds),
+      ...authoredDanceChoices(workspaceItems, "private"),
+      ...authoredDanceChoices(publicItems, "public", hiddenPublicIds),
     ],
     [hiddenPublicIds, publicItems, workspaceItems],
   );
@@ -201,6 +221,7 @@ export function DanceStageDancerPanel({
     let cancelled = false;
     let objectUrl: string | null = null;
     setModel(null);
+    setGenerativeVideoUrl("");
     setSnapshot(null);
     setError(null);
     if (!selectedModel) {
@@ -211,6 +232,12 @@ export function DanceStageDancerPanel({
     setLoadingModel(true);
     void (async () => {
       try {
+        if (selectedModel.kind === "generative-video") {
+          const videoUrl = generativeDanceVideoUrl(selectedModel.item);
+          if (!videoUrl) throw new Error("This generative dancer has no playable video file.");
+          if (!cancelled) setGenerativeVideoUrl(videoUrl);
+          return;
+        }
         const modelSource = modelObjectUrl(selectedModel.item);
         if (!modelSource.url) throw new Error("This dancer asset has no model file.");
         if (modelSource.revoke) objectUrl = modelSource.url;
@@ -238,6 +265,23 @@ export function DanceStageDancerPanel({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [selectedModel]);
+
+  useEffect(() => {
+    const video = generativeVideoRef.current;
+    if (!video || !generativeVideoUrl) return;
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    if (motionPlaybackPlaying ?? true) {
+      void video.play().catch(() => {
+        // Browsers may defer autoplay until the first user gesture. The
+        // controls remain hidden because the game owns playback timing.
+      });
+    } else {
+      video.pause();
+      video.currentTime = 0;
+    }
+  }, [generativeVideoUrl, motionPlaybackPlaying]);
 
   useEffect(() => {
     let cancelled = false;
@@ -287,7 +331,8 @@ export function DanceStageDancerPanel({
     if (message) setError(message);
   }, []);
 
-  const ready = Boolean(model && motion);
+  const selectedGenerativeVideo = selectedModel?.kind === "generative-video";
+  const ready = Boolean(generativeVideoUrl || (model && motion));
   const panelClassName = ["game-menu-dancer-panel", className].filter(Boolean).join(" ");
   return (
     <section className={panelClassName} aria-label="Dancer and dance selection">
@@ -312,7 +357,7 @@ export function DanceStageDancerPanel({
             <ChevronRight size={16} aria-hidden="true" />
           </button>
         </div>
-        <div className="game-menu-dancer-selector">
+        {!selectedGenerativeVideo ? <div className="game-menu-dancer-selector">
           <span className="game-menu-dancer-selector-label">Dance</span>
           <button type="button" className="secondary game-icon-button" onClick={() => moveSelection("dance", -1)} disabled={danceChoices.length < 2} aria-label="Previous dance" title="Previous dance">
             <ChevronLeft size={16} aria-hidden="true" />
@@ -321,10 +366,22 @@ export function DanceStageDancerPanel({
           <button type="button" className="secondary game-icon-button" onClick={() => moveSelection("dance", 1)} disabled={danceChoices.length < 2} aria-label="Next dance" title="Next dance">
           <ChevronRight size={16} aria-hidden="true" />
         </button>
-      </div>
+        </div> : null}
       </div> : null}
       <div className="game-menu-dancer-preview">
-        {model ? (
+        {generativeVideoUrl ? (
+          <video
+            ref={generativeVideoRef}
+            className="game-menu-dancer-video"
+            src={generativeVideoUrl}
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="auto"
+            aria-label={`${selectedModel?.title ?? "Generative dancer"} dance loop`}
+          />
+        ) : model ? (
           <DanceEngineCanvas
             key={`${selectedModelId}:${selectedDanceId}`}
             audioRef={audioRef}
@@ -345,10 +402,10 @@ export function DanceStageDancerPanel({
             <span>{loadingModel ? "Preparing the selected model" : "Generated and published avatar assets will appear here."}</span>
           </div>
         )}
-        {showHeading && model && motion ? <div className="game-menu-dancer-preview-badge"><Waves size={13} aria-hidden="true" /> {snapshot?.loaded ? "Dancing" : "Loading"}</div> : null}
+        {showHeading && ready ? <div className="game-menu-dancer-preview-badge"><Waves size={13} aria-hidden="true" /> {selectedGenerativeVideo || snapshot?.loaded ? "Dancing" : "Loading"}</div> : null}
       </div>
       {error ? <p className="game-menu-dancer-error" role="status">{error}</p> : null}
-      {!modelChoices.length || !danceChoices.length ? <p className="game-menu-dancer-hint">Create or publish a dancer and a dance asset in Dance Station to use the preview.</p> : null}
+      {!modelChoices.length || (!selectedGenerativeVideo && !danceChoices.length) ? <p className="game-menu-dancer-hint">Create or publish a dancer and a dance asset in Dance Station to use the preview.</p> : null}
     </section>
   );
 }

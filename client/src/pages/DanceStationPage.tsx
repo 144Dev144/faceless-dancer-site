@@ -272,6 +272,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
       metadata: {
         ...item.metadata,
         danceStageEnabled: enabled,
+        danceStageVisibilityExplicit: true,
       },
     });
     setWorkspaceMessage(`${item.title} ${enabled ? "will appear in" : "hidden from"} Dance Stage.`);
@@ -455,7 +456,10 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           sourceTool: "wan-animate",
           danceMode: "generative-video",
           sequence: item.metadata.sequence,
-          danceStageEnabled: false,
+          // A published generative loop is a complete dancer-and-dance asset.
+          // Keep it visible in Dance Stage unless the owner explicitly hides it
+          // later through the normal asset visibility control.
+          danceStageEnabled: true,
         },
         sourceLineage: { localId: item.id, source: "dance-station-site", runtime: "wan-animate" },
         localId: item.id,
@@ -1813,7 +1817,11 @@ function PrivateAssetRow({
   const [previewExtracting, setPreviewExtracting] = useState(false);
   const metadata = item.metadata;
   const danceStageAsset = isDanceStageAsset(item.kind);
-  const danceStageEnabled = isDanceStageEnabled(metadata);
+  const danceStageEnabled = item.kind === "dance_motion"
+    && item.metadata.danceMode === "generative-video"
+    && item.metadata.danceStageVisibilityExplicit !== true
+    ? true
+    : isDanceStageEnabled(metadata);
   const size = typeof metadata.sizeBytes === "number" ? formatBytes(metadata.sizeBytes) : "";
   const mime = typeof metadata.mimeType === "string" ? metadata.mimeType : item.source === "public-library" ? "public library item" : "";
   const updated = new Date(item.updatedAt);

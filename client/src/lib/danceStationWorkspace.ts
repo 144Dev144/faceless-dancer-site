@@ -328,6 +328,8 @@ export function createRemoteGenerativeDanceWorkspaceItem(input: {
   createdAt: string;
   updatedAt: string;
 }): BrowserWorkspaceItem {
+  const fileExtension = input.objectPath.match(/\.[a-z0-9]+$/i)?.[0]
+    ?? (input.mimeType === "video/webm" ? ".webm" : input.mimeType === "video/mp4" ? ".mp4" : ".mov");
   return {
     id: `remote-generative-dance-${input.jobId}`,
     title: input.title,
@@ -339,7 +341,9 @@ export function createRemoteGenerativeDanceWorkspaceItem(input: {
       storage: "remote-cdn",
       sourceTool: "wan-animate",
       danceMode: "generative-video",
-      danceStageEnabled: false,
+      // The owner can use a private loop locally. Publication controls
+      // whether the same asset is available to everyone else.
+      danceStageEnabled: true,
       remoteJobId: input.jobId,
       publicUrl: input.publicUrl,
       objectPath: input.objectPath,
@@ -349,7 +353,7 @@ export function createRemoteGenerativeDanceWorkspaceItem(input: {
       sequence: input.sequence,
       files: [{
         role: "generative-video",
-        fileName: `${input.title}.mp4`,
+        fileName: `${input.title}${fileExtension}`,
         objectPath: input.objectPath,
         publicUrl: `/api/remote-generation/assets/file?path=${encodeURIComponent(input.objectPath)}`,
         sourcePublicUrl: input.publicUrl,

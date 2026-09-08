@@ -664,7 +664,15 @@ export const api = {
       body: JSON.stringify({ paymentIntentId, request }),
     }),
 
-  remoteJob: (jobId: string) => apiFetch<RemoteJob>(`/remote-generation/jobs/${encodeURIComponent(jobId)}`),
+  remoteJob: (jobId: string) => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 20_000);
+    return apiFetch<RemoteJob>(`/remote-generation/jobs/${encodeURIComponent(jobId)}`, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+      signal: controller.signal,
+    }).finally(() => window.clearTimeout(timeout));
+  },
 
   remoteChart: (objectPath: string) => apiFetch<unknown>(`/remote-generation/assets/chart?path=${encodeURIComponent(objectPath)}`),
 
@@ -675,7 +683,10 @@ export const api = {
     if (options.activeOnly) params.set("active", "true");
     if (options.knownJobIds?.length) params.set("knownIds", options.knownJobIds.join(","));
     if (options.runtime) params.set("runtime", options.runtime);
-    return apiFetch<RemoteJobHistoryPage>(`/remote-generation/jobs?${params.toString()}`);
+    return apiFetch<RemoteJobHistoryPage>(`/remote-generation/jobs?${params.toString()}`, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+    });
   },
 
   createRemoteRewardSubmission: (jobId: string, postLink: string) =>

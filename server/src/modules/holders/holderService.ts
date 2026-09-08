@@ -2,7 +2,10 @@ import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } from "@solana/sp
 import { Connection, PublicKey } from "@solana/web3.js";
 import { env } from "../../config/env.js";
 
-const connection = new Connection(env.SECONDARY_RPC_NODE || env.SOLANA_RPC_URL, "confirmed");
+const connection = new Connection(
+  env.TERTIARY_RPC_NODE || env.SECONDARY_RPC_NODE || env.SOLANA_RPC_URL,
+  "confirmed",
+);
 
 export async function checkHolderEligibility(ownerPublicKey: string): Promise<boolean> {
   // Holder verification is a wallet/RPC check. Keep it independent of the
