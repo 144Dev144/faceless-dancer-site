@@ -22,7 +22,7 @@ export const remoteGenerationPrioritySchema = z.enum(["low", "standard", "high"]
 export const remotePaymentCurrencySchema = z.enum(["FACELESS", "SOL"]);
 
 export const remoteGenerationRequestSchema = z.object({
-  runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate"]).default("ace-step"),
+  runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate", "ltx-video"]).default("ace-step"),
   modelRevision: z.string().trim().min(1).max(200).default("ace-step-1.5"),
   inputs: z.array(inputSchema).max(16).default([]),
   priority: remoteGenerationPrioritySchema.default("standard"),

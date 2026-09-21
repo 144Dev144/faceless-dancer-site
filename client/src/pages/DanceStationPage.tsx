@@ -1,6 +1,6 @@
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { AudioWaveform, Check, CircleHelp, Eye, EyeOff, FileUp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Search, Settings2, SlidersHorizontal, Sparkles, Upload, Waves, X as XIcon, type LucideIcon } from "lucide-preact";
+import { AudioWaveform, Check, CircleHelp, Eye, EyeOff, FileUp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Search, Settings2, SlidersHorizontal, Sparkles, Upload, Video, Waves, X as XIcon, type LucideIcon } from "lucide-preact";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
 import { RemoteGenerationPanel } from "../components/danceStation/RemoteGenerationPanel";
@@ -29,10 +29,11 @@ interface Props {
   setSession: (next: SessionState) => void;
 }
 
-type DanceStationPanel = "library" | "audio-edit" | "instrument-lab" | "generation" | "rhythm-beats" | "dance-creation";
+type DanceStationPanel = "library" | "audio-edit" | "instrument-lab" | "generation" | "video-generation" | "rhythm-beats" | "dance-creation";
 
 const panelHashById: Record<DanceStationPanel, string> = {
   generation: "music-generation",
+  "video-generation": "video-generation",
   "rhythm-beats": "rhythm-beats",
   "dance-creation": "dance-creation",
   library: "library",
@@ -43,6 +44,7 @@ const panelHashById: Record<DanceStationPanel, string> = {
 const panelIdByHash: Record<string, DanceStationPanel> = {
   "music-generation": "generation",
   generation: "generation",
+  "video-generation": "video-generation",
   "rhythm-beats": "rhythm-beats",
   "dance-creation": "dance-creation",
   library: "library",
@@ -68,6 +70,13 @@ const tools: Array<{
     status: "REMOTE",
     available: true,
     Icon: Sparkles,
+  },
+  {
+    id: "video-generation",
+    label: "Video Generation",
+    status: "REMOTE",
+    available: true,
+    Icon: Video,
   },
   {
     id: "rhythm-beats",
@@ -1464,7 +1473,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   }, [activePanel, activeInstrumentTrackId, activeInstrumentNotes, instrumentOctave, instrumentRecording, instrumentBpm]);
 
   return (
-    <main className={`home-v2 library-page-shell dance-station-app-shell${activePanel === "generation" ? " dance-station-app-shell--generation" : ""}${activePanel === "dance-creation" ? " dance-station-app-shell--dance-creation" : ""}`}>
+    <main className={`home-v2 library-page-shell dance-station-app-shell${activePanel === "generation" || activePanel === "video-generation" ? " dance-station-app-shell--generation" : ""}${activePanel === "dance-creation" ? " dance-station-app-shell--dance-creation" : ""}`}>
       <div className="home-v2-shell">
         <HomeTopNav session={session} setSession={setSession} />
 
@@ -1521,111 +1530,120 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
           </div>
         </section>
 
-        <section className="dance-station-tool-grid" aria-label="Dance Station tools">
-          {tools.map((tool) => (
-            <button
-              key={tool.id}
-              type="button"
-              className={`dance-station-tool-card${activePanel === tool.id ? " active" : ""}${tool.available ? "" : " disabled"}`}
-              onClick={() => selectPanel(tool.id)}
-            >
-              <tool.Icon aria-hidden="true" size={16} strokeWidth={2} />
-              <span className="dance-station-tool-card__label">{tool.label}</span>
-              {!tool.available ? <span className="dance-station-tool-card__status">{tool.status}</span> : null}
-            </button>
-          ))}
-        </section>
+        <div className="dance-station-workspace-shell">
+          <aside className="dance-station-tool-rail" aria-label="Dance Station tools">
+            <p className="dance-station-tool-rail__title">Workspace</p>
+            <nav className="dance-station-tool-grid">
+              {tools.map((tool) => (
+                <button
+                  key={tool.id}
+                  type="button"
+                  className={`dance-station-tool-card${activePanel === tool.id ? " active" : ""}${tool.available ? "" : " disabled"}`}
+                  onClick={() => selectPanel(tool.id)}
+                >
+                  <tool.Icon aria-hidden="true" size={16} strokeWidth={2} />
+                  <span className="dance-station-tool-card__label">{tool.label}</span>
+                  {!tool.available ? <span className="dance-station-tool-card__status">{tool.status}</span> : null}
+                </button>
+              ))}
+            </nav>
+          </aside>
 
-        <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" || activePanel === "audio-edit" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" ? " dance-station-main-grid--generation" : ""}${activePanel === "rhythm-beats" ? " dance-station-main-grid--rhythm-beats" : ""}${activePanel === "dance-creation" ? " dance-station-main-grid--dance-creation" : ""}`}>
-          <div className="home-v2-card dance-station-main-panel">
-            {showSettings ? (
-              <BrowserWorkspaceSettings
-                workspaceStatus={workspaceStatus}
-                workspaceMessage={workspaceMessage}
-                refreshWorkspace={refreshWorkspace}
-                requestPersistence={requestPersistence}
-                openStorageHelp={openHelpModal}
-              />
-            ) : activePanel === "library" ? (
-                <LibraryWorkspacePanel
-                  workspaceItems={workspaceItems}
-                  session={session}
-                  assetLabel={assetLabel}
-                  workspaceMessage={workspaceMessage}
-                  publicItems={publicItems}
-                publicLoading={publicLoading}
-                publicError={publicError}
-                publicQuery={publicQuery}
-                setAssetLabel={setAssetLabel}
-                setPublicQuery={setPublicQuery}
-                  addPrivateAsset={addPrivateAsset}
-                  importPublicItem={importPublicItem}
-                  publishWorkspaceItem={publishWorkspaceItem}
-                  renameWorkspaceItem={renameWorkspaceItem}
-                  setDanceStageVisibility={setDanceStageVisibility}
-                  extractAvatarCardImage={extractAvatarCardImage}
-                  revokeWorkspaceItem={revokeWorkspaceItem}
-                  setWorkspaceCardImage={setWorkspaceCardImage}
-                  workspaceCardObjectUrlsRef={workspaceCardObjectUrlsRef}
-                  refreshWorkspace={refreshWorkspace}
-                  setWorkspaceMessage={setWorkspaceMessage}
-                />
-            ) : activePanel === "audio-edit" ? (
-              <AudioEditWorkspace
-                onAudioMassEvent={handleAudioMassEvent}
-                assets={audioMassAssets}
-                query={audioEditAssetQuery}
-                setQuery={setAudioEditAssetQuery}
-                railTab={audioEditRailTab}
-                setRailTab={setAudioEditRailTab}
-                label={audioEditLabel}
-                setLabel={setAudioEditLabel}
-                saveStatus={audioEditSaveStatus}
-                workspaceMessage={workspaceMessage}
-                addAsset={addAudioMassAsset}
-                saveCurrentEdit={requestAudioMassWorkspaceSave}
-              />
-            ) : activePanel === "instrument-lab" ? (
-              <InstrumentLabPanel frameRef={instrumentLabFrameRef} />
-            ) : activePanel === "generation" ? (
-              <RemoteGenerationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
-            ) : activePanel === "rhythm-beats" ? (
-              <RhythmBeatsPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} onPublishAsset={publishWorkspaceItem} />
-            ) : activePanel === "dance-creation" ? (
-              <DanceCreationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} onPublishAsset={publishWorkspaceItem} />
-            ) : (
-              <UnavailablePanel tool={tools.find((tool) => tool.id === activePanel) ?? tools[0]} />
-            )}
+          <div className="dance-station-workspace-content">
+            <section className={`dance-station-main-grid${activePanel === "instrument-lab" || activePanel === "library" || activePanel === "audio-edit" ? " dance-station-main-grid--wide" : ""}${activePanel === "generation" || activePanel === "video-generation" ? " dance-station-main-grid--generation" : ""}${activePanel === "rhythm-beats" ? " dance-station-main-grid--rhythm-beats" : ""}${activePanel === "dance-creation" ? " dance-station-main-grid--dance-creation" : ""}`}>
+              <div className="home-v2-card dance-station-main-panel">
+                {showSettings ? (
+                  <BrowserWorkspaceSettings
+                    workspaceStatus={workspaceStatus}
+                    workspaceMessage={workspaceMessage}
+                    refreshWorkspace={refreshWorkspace}
+                    requestPersistence={requestPersistence}
+                    openStorageHelp={openHelpModal}
+                  />
+                ) : activePanel === "library" ? (
+                  <LibraryWorkspacePanel
+                    workspaceItems={workspaceItems}
+                    session={session}
+                    assetLabel={assetLabel}
+                    workspaceMessage={workspaceMessage}
+                    publicItems={publicItems}
+                    publicLoading={publicLoading}
+                    publicError={publicError}
+                    publicQuery={publicQuery}
+                    setAssetLabel={setAssetLabel}
+                    setPublicQuery={setPublicQuery}
+                    addPrivateAsset={addPrivateAsset}
+                    importPublicItem={importPublicItem}
+                    publishWorkspaceItem={publishWorkspaceItem}
+                    renameWorkspaceItem={renameWorkspaceItem}
+                    setDanceStageVisibility={setDanceStageVisibility}
+                    extractAvatarCardImage={extractAvatarCardImage}
+                    revokeWorkspaceItem={revokeWorkspaceItem}
+                    setWorkspaceCardImage={setWorkspaceCardImage}
+                    workspaceCardObjectUrlsRef={workspaceCardObjectUrlsRef}
+                    refreshWorkspace={refreshWorkspace}
+                    setWorkspaceMessage={setWorkspaceMessage}
+                  />
+                ) : activePanel === "audio-edit" ? (
+                  <AudioEditWorkspace
+                    onAudioMassEvent={handleAudioMassEvent}
+                    assets={audioMassAssets}
+                    query={audioEditAssetQuery}
+                    setQuery={setAudioEditAssetQuery}
+                    railTab={audioEditRailTab}
+                    setRailTab={setAudioEditRailTab}
+                    label={audioEditLabel}
+                    setLabel={setAudioEditLabel}
+                    saveStatus={audioEditSaveStatus}
+                    workspaceMessage={workspaceMessage}
+                    addAsset={addAudioMassAsset}
+                    saveCurrentEdit={requestAudioMassWorkspaceSave}
+                  />
+                ) : activePanel === "instrument-lab" ? (
+                  <InstrumentLabPanel frameRef={instrumentLabFrameRef} />
+                ) : activePanel === "generation" ? (
+                  <RemoteGenerationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
+                ) : activePanel === "video-generation" ? (
+                  <RemoteGenerationPanel mode="video" session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
+                ) : activePanel === "rhythm-beats" ? (
+                  <RhythmBeatsPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} onPublishAsset={publishWorkspaceItem} />
+                ) : activePanel === "dance-creation" ? (
+                  <DanceCreationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} onPublishAsset={publishWorkspaceItem} />
+                ) : (
+                  <UnavailablePanel tool={tools.find((tool) => tool.id === activePanel) ?? tools[0]} />
+                )}
+              </div>
+
+              {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "video-generation" && activePanel !== "rhythm-beats" && activePanel !== "dance-creation" && activePanel !== "library" && activePanel !== "audio-edit" ? <aside className="home-v2-card dance-station-context-panel">
+                {showSettings ? (
+                  <SettingsSummaryPanel
+                    session={session}
+                    workspaceStatus={workspaceStatus}
+                  />
+                ) : (
+                  <>
+                    <p className="home-v2-kicker">Session</p>
+                    <h2>{session.authenticated ? "Connected" : "Not connected"}</h2>
+                    <p>
+                      {session.authenticated
+                        ? `Wallet ${session.publicKey.slice(0, 6)}...${session.publicKey.slice(-4)}`
+                        : "Connect a wallet when you want to sync or publish account-owned assets."}
+                    </p>
+                  </>
+                )}
+              </aside> : null}
+            </section>
+
+            {activePanel === "generation" || activePanel === "video-generation" ? (
+              <footer className="dance-station-status-bar" aria-label="Dance Station status">
+                <span>Remote generation</span>
+                <span>Workspace: Local assets</span>
+                <span>Queue: Remote launch</span>
+                <span>System status <strong>Live above</strong></span>
+              </footer>
+            ) : null}
           </div>
-
-          {activePanel !== "instrument-lab" && activePanel !== "generation" && activePanel !== "rhythm-beats" && activePanel !== "dance-creation" && activePanel !== "library" && activePanel !== "audio-edit" ? <aside className="home-v2-card dance-station-context-panel">
-            {showSettings ? (
-              <SettingsSummaryPanel
-                session={session}
-                workspaceStatus={workspaceStatus}
-              />
-            ) : (
-              <>
-                <p className="home-v2-kicker">Session</p>
-                <h2>{session.authenticated ? "Connected" : "Not connected"}</h2>
-                <p>
-                  {session.authenticated
-                    ? `Wallet ${session.publicKey.slice(0, 6)}...${session.publicKey.slice(-4)}`
-                    : "Connect a wallet when you want to sync or publish account-owned assets."}
-                </p>
-              </>
-            )}
-          </aside> : null}
-        </section>
-
-        {activePanel === "generation" ? (
-          <footer className="dance-station-status-bar" aria-label="Dance Station status">
-            <span>Model: ACE-Step 1.5 XL Turbo</span>
-            <span>Workspace: Local assets</span>
-            <span>Queue: Remote launch</span>
-            <span>System status <strong>Live above</strong></span>
-          </footer>
-        ) : null}
+        </div>
 
       </div>
     </main>

@@ -156,7 +156,7 @@ export function holderFreeForRequest(config: RemotePricingConfig, request: Remot
     case "generative_dance": return config.settings.wanAnimateFreeForHolders ?? config.settings.musicFreeForHolders;
     default:
       if (request.runtime === "flux-image") return config.settings.fluxImageFreeForHolders ?? config.settings.musicFreeForHolders;
-      if (request.runtime === "wan-animate") return config.settings.wanAnimateFreeForHolders ?? config.settings.musicFreeForHolders;
+      if (request.runtime === "wan-animate" || request.runtime === "ltx-video") return config.settings.wanAnimateFreeForHolders ?? config.settings.musicFreeForHolders;
       if (request.runtime === "avatar") return config.settings.avatarFreeForHolders ?? config.settings.musicFreeForHolders;
       return config.settings.musicFreeForHolders;
   }
@@ -169,7 +169,7 @@ export function calculateRemotePricing(
   options: { freeForHolder?: boolean } = {},
 ): RemotePricingQuote {
   const parameters = request.parameters;
-  const taskType = parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : parameters.task_type === "rhythm_beats" ? "rhythm_beats" : ["avatar", "avatar_reskin", "reskin"].includes(String(parameters.task_type)) ? "avatar" : parameters.task_type === "generative_avatar" ? "generative_avatar" : parameters.task_type === "generative_dance" ? "generative_dance" : "text2music";
+  const taskType = request.runtime === "ltx-video" || request.runtime === "wan-animate" || parameters.task_type === "generative_dance" ? "generative_dance" : parameters.task_type === "extract" ? "extract" : parameters.task_type === "voice_change" ? "voice_change" : parameters.task_type === "transition_chain" ? "transition_chain" : parameters.task_type === "rhythm_beats" ? "rhythm_beats" : ["avatar", "avatar_reskin", "reskin"].includes(String(parameters.task_type)) ? "avatar" : parameters.task_type === "generative_avatar" ? "generative_avatar" : "text2music";
   const transitionPlan = taskType === "transition_chain" && parameters.transition_plan && typeof parameters.transition_plan === "object" ? parameters.transition_plan as { transitionClips?: Array<{ startSeconds: number; endSeconds: number }> } : undefined;
   const transitionStageCount = transitionPlan?.transitionClips?.length ?? 1;
   const transitionSeconds = transitionPlan?.transitionClips?.reduce((sum, clip) => sum + Math.max(0, clip.endSeconds - clip.startSeconds), 0) ?? 0;
@@ -227,7 +227,9 @@ export function calculateRemotePricing(
     + (taskType === "rhythm_beats" ? Math.max(0, stemCount - positiveNumber(config.defaults.rhythmBeatsBaseStemCount, 5)) * (isSol ? settings.solRhythmBeatsAdditionalStemPriceUsdMicros : settings.facelessRhythmBeatsAdditionalStemPriceUsdMicros) : 0);
   const freeSignature = config.paymentMode === "free-signature";
   const holderFree = options.freeForHolder === true;
-  const billablePriceMicros = holderFree ? Math.max(0, calculatedPriceMicros - baseChargeMicros) : calculatedPriceMicros;
+  // Keep the client display identical to the launch server: holder-free
+  // generation waives the complete request, including duration/add-on costs.
+  const billablePriceMicros = holderFree ? 0 : calculatedPriceMicros;
   const priceUsd = freeSignature ? 0 : billablePriceMicros / 1_000_000;
   const tokenPriceUsd = isSol ? market.solPriceUsd : market.facelessPriceUsd;
   const token = config.currencies[currency];

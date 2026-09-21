@@ -138,6 +138,7 @@ deploy-bundle/
 deploy-bundle.tar.gz
 
 # Local planning notes and generated diagnostics
+/docs/
 /docs/plans/*.md
 /expanded-prompt-check.png
 /pump_hourly.csv

@@ -157,7 +157,7 @@ router.post("/availability", async (req, res, next) => {
   try {
     const request = z.object({
       priority: remoteGenerationPrioritySchema,
-      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate"]),
+      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate", "ltx-video"]),
     }).parse({
       priority: req.body?.priority ?? "standard",
       runtime: req.body?.runtime ?? "ace-step",

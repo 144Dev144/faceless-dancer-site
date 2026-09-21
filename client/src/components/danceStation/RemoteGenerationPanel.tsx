@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { createPortal } from "preact/compat";
-import { AudioWaveform, CalendarDays, CheckCircle2, CircleAlert, Clock3, Download, Info, MoreHorizontal, Music2, Play, RefreshCw, RotateCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-preact";
+import { AudioWaveform, CalendarDays, CheckCircle2, CircleAlert, Clock3, Download, Film, ImagePlus, Info, MoreHorizontal, Music2, Play, RefreshCw, RotateCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, Video, X } from "lucide-preact";
 import {
   api,
   type RemoteGenerationHealth,
@@ -26,6 +26,7 @@ import { WaveformVisual } from "../audio/WaveformVisual";
 import { TransitionWorkspace, type TransitionAudioChoice, type TransitionWorkspaceValue } from "./TransitionWorkspace";
 
 interface Props {
+  mode?: GenerationMode;
   session: SessionState;
   workspaceItems: BrowserWorkspaceItem[];
   publicItems: LibraryItem[];
@@ -48,10 +49,23 @@ const extractionTracks = [
   "woodwinds",
 ] as const;
 
-type GenerationMode = "music" | "extraction" | "voice-change" | "transition";
+type GenerationMode = "music" | "video" | "extraction" | "voice-change" | "transition";
 type ExtractionSourceMode = "private" | "disk";
 type RemoteSubmissionStage = "payment-request" | "wallet-payment" | "payment-verification" | "queue-submission";
 const MAX_REMOTE_AUDIO_DURATION_SECONDS = 360;
+const LTX_VIDEO_FRAME_RATE = 24;
+const LTX_VIDEO_MIN_FRAMES = 9;
+const LTX_VIDEO_MIN_DURATION_SECONDS = LTX_VIDEO_MIN_FRAMES / LTX_VIDEO_FRAME_RATE;
+const LTX_VIDEO_MAX_DURATION_SECONDS = 20;
+const LTX_VIDEO_ASPECTS = ["16:9", "9:16", "1:1"] as const;
+
+type VideoFrameSlot = "start" | "intermediate" | "end";
+
+interface VideoFrameSelection {
+  input: RemoteGenerationInput;
+  fileName: string;
+  previewUrl: string;
+}
 
 interface RemoteGenerationErrorBody {
   code?: string;
@@ -82,7 +96,7 @@ function remoteGenerationFailureMessage(
     case "payment-verification":
       return "We could not verify the payment. Check your wallet activity before trying again.";
     case "queue-submission":
-      return `Payment was accepted, but the ${generationMode === "music" ? "music generation" : generationMode === "extraction" ? "music extraction" : generationMode === "transition" ? "music transition" : "voice change"} could not be queued. Please try again.`;
+      return `Payment was accepted, but the ${generationMode === "music" ? "music generation" : generationMode === "video" ? "video generation" : generationMode === "extraction" ? "music extraction" : generationMode === "transition" ? "music transition" : "voice change"} could not be queued. Please try again.`;
   }
 }
 
@@ -144,7 +158,7 @@ function generationTitle(job: RemoteJob): string {
   if (title) return taskType === "extract" && trackName ? `${title} · ${trackName}` : title;
   const prompt = parameters && typeof parameters.prompt === "string" ? parameters.prompt.trim() : "";
   if (taskType === "extract" && trackName) return `Extracted ${trackName}`;
-  return prompt || "Music generation";
+  return prompt || (job.runtime === "ltx-video" ? "Video generation" : "Music generation");
 }
 
 function generationPrompt(job: RemoteJob): string {
@@ -158,6 +172,34 @@ function generationStatus(job: RemoteJob): { label: string; tone: "complete" | "
   if (["created", "awaiting_payment", "queued", "starting"].includes(job.status)) return { label: "Queued", tone: "queued", spinning: true };
   if (job.status === "cancel_requested") return { label: "Cancelling", tone: "active", spinning: true };
   return { label: "Generating", tone: "active", spinning: true };
+}
+
+const COMPLETED_STATUS_DISPLAY_MS = 5_000;
+
+function useStatusBadgeVisible(job: Pick<RemoteJob, "id" | "status" | "updatedAt">): boolean {
+  const [visible, setVisible] = useState(job.status !== "succeeded");
+
+  useEffect(() => {
+    if (job.status !== "succeeded") {
+      setVisible(true);
+      return undefined;
+    }
+
+    const completedAt = Date.parse(job.updatedAt);
+    const remaining = Number.isFinite(completedAt)
+      ? completedAt + COMPLETED_STATUS_DISPLAY_MS - Date.now()
+      : COMPLETED_STATUS_DISPLAY_MS;
+    if (remaining <= 0) {
+      setVisible(false);
+      return undefined;
+    }
+
+    setVisible(true);
+    const timeout = window.setTimeout(() => setVisible(false), remaining);
+    return () => window.clearTimeout(timeout);
+  }, [job.id, job.status, job.updatedAt]);
+
+  return visible;
 }
 
 function generationParameterNumber(job: RemoteJob, keys: string[]): number | undefined {
@@ -175,6 +217,7 @@ function formatGenerationDuration(seconds?: number): string | null {
 }
 
 function generationModelLabel(job: RemoteJob): string {
+  if (job.runtime === "ltx-video") return "Video Generation";
   if (job.runtime === "voice-change") return "UVR + Seed-VC";
   if (job.request.parameters?.task_type === "transition_chain") return "ACE-Step Transition";
   const model = typeof job.request.parameters?.model === "string" ? job.request.parameters.model : job.modelRevision;
@@ -188,6 +231,8 @@ function generationTags(job: RemoteJob): string[] {
   const tags: string[] = [];
   if (parameters.instrumental === true || parameters.lyrics === "[Instrumental]") tags.push("Instrumental");
   if (typeof parameters.track_name === "string" && parameters.track_name.trim()) tags.push(parameters.track_name.trim().replaceAll("_", " "));
+  if (job.runtime === "ltx-video" && parameters.audio_mode === "generated") tags.push("Audio");
+  if (job.runtime === "ltx-video" && typeof parameters.aspect_ratio === "string") tags.push(parameters.aspect_ratio);
   return tags.slice(0, 3);
 }
 
@@ -289,6 +334,21 @@ function clampMusicDurationSeconds(value: number): number {
   return Math.max(10, Math.min(MAX_REMOTE_AUDIO_DURATION_SECONDS, value));
 }
 
+function clampLtxDurationSeconds(value: number): number {
+  if (!Number.isFinite(value)) return 4;
+  return Math.max(LTX_VIDEO_MIN_DURATION_SECONDS, Math.min(LTX_VIDEO_MAX_DURATION_SECONDS, value));
+}
+
+function ltxFrameCount(durationSeconds: number): number {
+  const requestedFrames = Math.max(LTX_VIDEO_MIN_FRAMES, Math.round(durationSeconds * LTX_VIDEO_FRAME_RATE));
+  return 8 * Math.round((requestedFrames - 1) / 8) + 1;
+}
+
+function ltxFrameIndexAtTime(timeSeconds: number, durationSeconds: number): number {
+  const frameCount = ltxFrameCount(durationSeconds);
+  return Math.max(0, Math.min(frameCount - 1, Math.round(timeSeconds * LTX_VIDEO_FRAME_RATE)));
+}
+
 function mergeJobs(current: RemoteJob[], incoming: RemoteJob[]): RemoteJob[] {
   const jobs = new Map(current.map((job) => [job.id, job]));
   incoming.forEach((job) => jobs.set(job.id, job));
@@ -301,9 +361,9 @@ function formatPaymentToken(amountAtomic: string, decimals: number): string {
   return amount.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-export function RemoteGenerationPanel({ session, workspaceItems, publicItems, onWorkspaceChanged }: Props): JSX.Element {
+export function RemoteGenerationPanel({ mode, session, workspaceItems, publicItems, onWorkspaceChanged }: Props): JSX.Element {
   const [health, setHealth] = useState<RemoteGenerationHealth | null>(null);
-  const [generationMode, setGenerationMode] = useState<GenerationMode>("music");
+  const [generationMode, setGenerationMode] = useState<GenerationMode>(mode ?? "music");
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [instrumental, setInstrumental] = useState(true);
@@ -344,6 +404,14 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const [voiceUvrOverlap, setVoiceUvrOverlap] = useState(0.25);
   const [voiceUvrDenoise, setVoiceUvrDenoise] = useState(false);
   const [voiceLoudnessOptimization, setVoiceLoudnessOptimization] = useState(false);
+  const [videoPrompt, setVideoPrompt] = useState("");
+  const [videoDurationSeconds, setVideoDurationSeconds] = useState(4);
+  const [videoAspectRatio, setVideoAspectRatio] = useState<(typeof LTX_VIDEO_ASPECTS)[number]>("16:9");
+  const [videoAudioMode, setVideoAudioMode] = useState<"off" | "generated">("off");
+  const [videoIntermediateTime, setVideoIntermediateTime] = useState(2);
+  const [videoFrames, setVideoFrames] = useState<Partial<Record<VideoFrameSlot, VideoFrameSelection>>>({});
+  const [videoFrameBusy, setVideoFrameBusy] = useState<VideoFrameSlot | "">("");
+  const [videoFrameError, setVideoFrameError] = useState("");
   const [extractionTrack, setExtractionTrack] = useState<(typeof extractionTracks)[number]>("vocals");
   const [paymentCurrency, setPaymentCurrency] = useState<RemotePaymentCurrency>("FACELESS");
   const [pricingConfig, setPricingConfig] = useState<RemotePricingConfig | null>(null);
@@ -355,6 +423,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const [walletBalanceRefreshKey, setWalletBalanceRefreshKey] = useState(0);
   const [, setPaymentIntent] = useState<RemotePaymentIntent | null>(null);
   const [jobs, setJobs] = useState<RemoteJob[]>([]);
+  const [selectedVideoJobId, setSelectedVideoJobId] = useState("");
   const [historyCursor, setHistoryCursor] = useState<string | undefined>();
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [rewardSubmissions, setRewardSubmissions] = useState<RemoteRewardSubmission[]>([]);
@@ -375,9 +444,13 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   const historyInitializedRef = useRef(false);
   const historyUserRef = useRef<string | undefined>();
   const jobsRequestInFlightRef = useRef(false);
+  const videoPreviewUrlsRef = useRef<Set<string>>(new Set());
   jobsRef.current = jobs;
 
-  const defaultTitle = `Song ${jobs.length + 1}`;
+  const videoPanel = mode === "video";
+  const historyRuntime = videoPanel ? "ltx-video" as const : undefined;
+  const generationCount = videoPanel ? jobs.filter((job) => job.runtime === "ltx-video").length : jobs.length;
+  const defaultTitle = `${videoPanel ? "Video" : "Song"} ${generationCount + 1}`;
   const resolvedTitle = title.trim() || defaultTitle;
 
   const lokrChoices = useMemo(() => {
@@ -465,6 +538,86 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
     && extractionSourceInput.durationSeconds > MAX_REMOTE_AUDIO_DURATION_SECONDS;
 
   useEffect(() => {
+    setGenerationMode(mode ?? "music");
+  }, [mode]);
+
+  useEffect(() => () => {
+    videoPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    videoPreviewUrlsRef.current.clear();
+  }, []);
+
+  useEffect(() => {
+    setVideoIntermediateTime((current) => Math.max(0, Math.min(videoDurationSeconds, current)));
+  }, [videoDurationSeconds]);
+
+  const uploadVideoFrame = useCallback(async (slot: VideoFrameSlot, file?: File) => {
+    if (!file) return;
+    if (!session.authenticated) {
+      setVideoFrameError("Connect your wallet before adding a conditioning frame.");
+      return;
+    }
+    setVideoFrameBusy(slot);
+    setVideoFrameError("");
+    try {
+      if (!file.type.startsWith("image/")) throw new Error("Conditioning frames must be image files.");
+      const response = await api.uploadRemoteGenerationSource(file);
+      const previewUrl = URL.createObjectURL(file);
+      videoPreviewUrlsRef.current.add(previewUrl);
+      setVideoFrames((current) => {
+        const previous = current[slot];
+        if (previous?.previewUrl) {
+          URL.revokeObjectURL(previous.previewUrl);
+          videoPreviewUrlsRef.current.delete(previous.previewUrl);
+        }
+        return { ...current, [slot]: { input: response.input, fileName: file.name, previewUrl } };
+      });
+    } catch (nextError) {
+      setVideoFrameError(nextError instanceof Error ? nextError.message : "Could not upload that conditioning frame.");
+    } finally {
+      setVideoFrameBusy("");
+    }
+  }, [session.authenticated]);
+
+  const removeVideoFrame = useCallback((slot: VideoFrameSlot) => {
+    setVideoFrames((current) => {
+      const previous = current[slot];
+      if (previous?.previewUrl) {
+        URL.revokeObjectURL(previous.previewUrl);
+        videoPreviewUrlsRef.current.delete(previous.previewUrl);
+      }
+      const next = { ...current };
+      delete next[slot];
+      return next;
+    });
+    setVideoFrameError("");
+  }, []);
+
+  const videoFrameCount = ltxFrameCount(videoDurationSeconds);
+  const videoConditioningImages = useMemo(() => {
+    const conditions: Array<Record<string, unknown>> = [];
+    const addCondition = (slot: VideoFrameSlot, frame: VideoFrameSelection | undefined, frameIndex: number) => {
+      if (!frame) return;
+      conditions.push({
+        sourceUrl: frame.input.sourceUrl,
+        filename: frame.fileName,
+        frameIndex,
+        strength: 1,
+        mode: "guide",
+      });
+    };
+    addCondition("start", videoFrames.start, 0);
+    addCondition("intermediate", videoFrames.intermediate, ltxFrameIndexAtTime(videoIntermediateTime, videoDurationSeconds));
+    addCondition("end", videoFrames.end, videoFrameCount - 1);
+    return conditions;
+  }, [videoDurationSeconds, videoFrameCount, videoFrames.end, videoFrames.intermediate, videoFrames.start, videoIntermediateTime]);
+
+  const videoInputs = useMemo<RemoteGenerationInput[]>(() => [
+    videoFrames.start,
+    videoFrames.intermediate,
+    videoFrames.end,
+  ].flatMap((frame) => frame ? [{ ...frame.input, role: "conditioning" }] : []), [videoFrames.end, videoFrames.intermediate, videoFrames.start]);
+
+  useEffect(() => {
     if (selectedLokrId && !selectedLokr) setSelectedLokrId("");
   }, [selectedLokr, selectedLokrId]);
 
@@ -519,6 +672,27 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
   };
 
   const request = useMemo<RemoteGenerationRequest>(() => {
+    if (generationMode === "video") {
+      return {
+        runtime: "ltx-video",
+        modelRevision: "ltx-2.5-22b-distilled-nvfp4",
+        inputs: videoInputs,
+        priority: "standard",
+        paymentCurrency,
+        metadata: { title: resolvedTitle },
+        parameters: {
+          task_type: "generative_dance",
+          prompt: videoPrompt.trim(),
+          aspect_ratio: videoAspectRatio,
+          duration_seconds: videoDurationSeconds,
+          frame_rate: LTX_VIDEO_FRAME_RATE,
+          audio_mode: videoAudioMode,
+          output_format: "mp4",
+          conditioning_images: videoConditioningImages,
+          sequence: { durationSeconds: videoDurationSeconds },
+        },
+      };
+    }
     if (generationMode === "transition") {
       const workspace = transitionWorkspace;
       return {
@@ -639,17 +813,18 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
         ...(selectedLokr ? { lokr_scale: lokrScale } : {}),
       },
     };
-  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, transitionGuidanceScale, transitionInferenceSteps, transitionWorkspace, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
+  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, transitionGuidanceScale, transitionInferenceSteps, transitionWorkspace, videoAspectRatio, videoAudioMode, videoConditioningImages, videoDurationSeconds, videoInputs, videoPrompt, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
 
   const holderFreeAvailable = Boolean(session.isHolder && pricingConfig && holderFreeForRequest(pricingConfig, request));
 
-  const hasActiveJobs = jobs.some((candidate) => activeStatuses.has(candidate.status));
+  const panelJobs = videoPanel ? jobs.filter((job) => job.runtime === "ltx-video") : jobs;
+  const hasActiveJobs = panelJobs.some((candidate) => activeStatuses.has(candidate.status));
   busyRef.current = busy;
   const rewardSubmissionsByJob = useMemo(() => new Map(rewardSubmissions.map((submission) => [submission.jobId, submission])), [rewardSubmissions]);
 
   const visibleJobs = useMemo(() => {
     const query = historyQuery.trim().toLowerCase();
-    return jobs.filter((job) => {
+    return panelJobs.filter((job) => {
       const failed = ["failed", "cancelled", "expired"].includes(job.status);
       const matchesFilter = historyFilter === "all"
         || historyFilter === "active" && activeStatuses.has(job.status)
@@ -661,7 +836,19 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
         || job.status.toLowerCase().includes(query);
       return matchesFilter && matchesQuery;
     });
-  }, [historyFilter, historyQuery, jobs]);
+  }, [historyFilter, historyQuery, panelJobs]);
+
+  const selectedVideoJob = videoPanel
+    ? panelJobs.find((job) => job.id === selectedVideoJobId) ?? panelJobs[0]
+    : undefined;
+  const selectedVideoArtifact = selectedVideoJob?.artifacts.find((artifact) => artifact.role === "preview" && artifact.publicUrl && artifact.mimeType.startsWith("video/"))
+    ?? selectedVideoJob?.artifacts.find((artifact) => artifact.publicUrl && artifact.mimeType.startsWith("video/"));
+
+  useEffect(() => {
+    if (!videoPanel) return;
+    if (!selectedVideoJob && selectedVideoJobId) setSelectedVideoJobId("");
+    else if (selectedVideoJob && selectedVideoJob.id !== selectedVideoJobId) setSelectedVideoJobId(selectedVideoJob.id);
+  }, [selectedVideoJob, selectedVideoJobId, videoPanel]);
 
   useEffect(() => {
     let cancelled = false;
@@ -713,7 +900,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
       jobsRequestInFlightRef.current = true;
       try {
         const knownJobIds = initial ? [] : jobsRef.current.filter((job) => activeStatuses.has(job.status)).map((job) => job.id);
-        const nextPage = await api.remoteJobs({ limit: 50, activeOnly: !initial, knownJobIds });
+        const nextPage = await api.remoteJobs({ limit: 50, activeOnly: !initial, knownJobIds, runtime: historyRuntime });
         if (cancelled) return;
         setJobs((current) => mergeJobs(current, nextPage.jobs));
         if (initial) {
@@ -755,13 +942,13 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
       if (timer !== undefined) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [hasActiveJobs, session.authenticated, session.publicKey]);
+  }, [hasActiveJobs, historyRuntime, session.authenticated, session.publicKey]);
 
   const loadOlderHistory = async () => {
     if (!historyCursor || historyLoadingMore || !session.authenticated) return;
     setHistoryLoadingMore(true);
     try {
-      const nextPage = await api.remoteJobs({ limit: 50, cursor: historyCursor });
+      const nextPage = await api.remoteJobs({ limit: 50, cursor: historyCursor, runtime: historyRuntime });
       setJobs((current) => mergeJobs(current, nextPage.jobs));
       setHistoryCursor(nextPage.nextCursor);
     } catch (nextError) {
@@ -934,6 +1121,15 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
         setError("Enter lyrics or enable Instrumental.");
         return;
       }
+    } else if (generationMode === "video") {
+      if (!videoPrompt.trim()) {
+        setError("Enter a video prompt.");
+        return;
+      }
+      if (videoFrames.intermediate && (videoIntermediateTime < 0 || videoIntermediateTime > videoDurationSeconds)) {
+        setError("The intermediate frame time must be within the video duration.");
+        return;
+      }
     } else if (generationMode === "extraction") {
       if (!extractionSourceInput) {
         setError(extractionSourceMode === "private" ? "Choose a Private Asset before extracting." : "Upload a source audio file before extracting.");
@@ -1015,6 +1211,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
       setPhase("Submitting");
       const queued = await api.createRemoteJob(paid.id, request);
       setJobs((current) => mergeJobs(current, [queued]));
+      if (generationMode === "video") setSelectedVideoJobId(queued.id);
       setPhase("Queued");
     } catch (nextError) {
       const errorBody = nextError instanceof Error
@@ -1058,7 +1255,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
       setError("This generation does not have a saved prompt.");
       return;
     }
-    setPrompt(savedPrompt);
+    if (generationMode === "video") setVideoPrompt(savedPrompt);
+    else setPrompt(savedPrompt);
     setError("");
     setPhase("Ready");
   };
@@ -1083,8 +1281,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
         <section className={`dance-station-generation-builder${generationMode === "transition" ? " is-transition" : ""}`}>
           <div className="dance-station-generation-heading">
             <div className="dance-station-generation-heading__title">
-              <span className="dance-station-generation-heading__icon"><Sparkles aria-hidden="true" size={22} strokeWidth={1.8} /></span>
-              <div className="dance-station-generation-mode-tabs" role="tablist" aria-label="Generation mode">
+              <span className="dance-station-generation-heading__icon">{videoPanel ? <Video aria-hidden="true" size={22} strokeWidth={1.8} /> : <Sparkles aria-hidden="true" size={22} strokeWidth={1.8} />}</span>
+              {videoPanel ? <strong className="dance-station-generation-panel-title">Video Generation</strong> : <div className="dance-station-generation-mode-tabs" role="tablist" aria-label="Generation mode">
                 <button
                   type="button"
                   role="tab"
@@ -1125,7 +1323,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                 >
                   Voice Change
                 </button>
-              </div>
+              </div>}
             </div>
             <div className="dance-station-generation-heading__summary">
               <div className={`dance-station-system-status${health?.ok ? "" : " is-error"}`}>
@@ -1221,6 +1419,55 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                       </label>
                     </div>
                     {!lokrChoices.length ? <p className="dance-station-availability-line">Import a published LoKr adapter into the library to use it remotely.</p> : null}
+                  </>
+                ) : generationMode === "video" ? (
+                  <>
+                    <label>
+                      <span className="dance-station-field-label-row">Prompt <Info aria-hidden="true" size={13} strokeWidth={2} /></span>
+                      <textarea value={videoPrompt} rows={5} placeholder="A cinematic dancer crosses a sunlit plaza, natural camera movement, detailed motion" onInput={(event) => setVideoPrompt((event.currentTarget as HTMLTextAreaElement).value)} disabled={busy} />
+                    </label>
+                    <div className="dance-station-prompt-actions">
+                      <button type="button" className="dance-station-inline-button" onClick={() => setVideoPrompt("")} disabled={!videoPrompt.trim() || busy}>
+                        <Trash2 aria-hidden="true" size={13} strokeWidth={2} />
+                        Clear
+                      </button>
+                    </div>
+                    <div className="dance-station-control-row">
+                      <label>
+                        Duration (sec)
+                        <input type="number" min={LTX_VIDEO_MIN_DURATION_SECONDS} max={LTX_VIDEO_MAX_DURATION_SECONDS} step="0.1" value={videoDurationSeconds} onInput={(event) => setVideoDurationSeconds(clampLtxDurationSeconds(Number((event.currentTarget as HTMLInputElement).value)))} disabled={busy} />
+                      </label>
+                      <label>
+                        Aspect ratio
+                        <select value={videoAspectRatio} onChange={(event) => setVideoAspectRatio((event.currentTarget as HTMLSelectElement).value as (typeof LTX_VIDEO_ASPECTS)[number])} disabled={busy}>
+                          {LTX_VIDEO_ASPECTS.map((aspect) => <option key={aspect} value={aspect}>{aspect}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <label className="dance-station-switch-row">
+                      <input type="checkbox" checked={videoAudioMode === "generated"} onChange={(event) => setVideoAudioMode((event.currentTarget as HTMLInputElement).checked ? "generated" : "off")} disabled={busy} />
+                      <span className="dance-station-switch" aria-hidden="true"></span>
+                      <span>Generate audio with video <em>(optional)</em></span>
+                    </label>
+                    <div className="dance-station-video-frame-field">
+                      <div className="dance-station-field-label-row">Conditioning frames <small>(optional)</small></div>
+                      <div className="dance-station-video-frame-grid">
+                        <VideoConditioningFramePicker slot="start" label="Start frame" frame={videoFrames.start} inputId="dance-station-video-start-frame" busy={videoFrameBusy === "start"} disabled={busy || Boolean(videoFrameBusy)} onUpload={(file) => void uploadVideoFrame("start", file)} onRemove={() => removeVideoFrame("start")} />
+                        <VideoConditioningFramePicker slot="intermediate" label="Intermediate frame" frame={videoFrames.intermediate} inputId="dance-station-video-intermediate-frame" busy={videoFrameBusy === "intermediate"} disabled={busy || Boolean(videoFrameBusy)} onUpload={(file) => void uploadVideoFrame("intermediate", file)} onRemove={() => removeVideoFrame("intermediate")} />
+                        <VideoConditioningFramePicker slot="end" label="Last frame" frame={videoFrames.end} inputId="dance-station-video-end-frame" busy={videoFrameBusy === "end"} disabled={busy || Boolean(videoFrameBusy)} onUpload={(file) => void uploadVideoFrame("end", file)} onRemove={() => removeVideoFrame("end")} />
+                      </div>
+                    </div>
+                    <div className="dance-station-control-row">
+                      <label>
+                        Intermediate time (sec)
+                        <input type="number" min="0" max={videoDurationSeconds} step="0.1" value={videoIntermediateTime} onInput={(event) => setVideoIntermediateTime(Math.max(0, Math.min(videoDurationSeconds, Number((event.currentTarget as HTMLInputElement).value) || 0)))} disabled={busy || !videoFrames.intermediate} />
+                      </label>
+                      <div className="dance-station-video-frame-summary">
+                        <span>{videoFrameCount} frames at {LTX_VIDEO_FRAME_RATE} fps</span>
+                        <small>{videoFrames.intermediate ? `Intermediate frame ${ltxFrameIndexAtTime(videoIntermediateTime, videoDurationSeconds)}` : "Add a middle frame to place it in time"}</small>
+                      </div>
+                    </div>
+                    {videoFrameError ? <p className="dance-station-error" role="alert">{videoFrameError}</p> : null}
                   </>
                 ) : generationMode === "extraction" ? (
                   <>
@@ -1353,10 +1600,10 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                 ))}
               </div>
               <div className="dance-station-create-panel__footer">
-                <button type="button" className="dance-station-generate-button" onClick={() => void submitGeneration()} disabled={busy || diskSourceBusy || voiceUploadBusy || !health?.enabled || !session.authenticated || !currentPricing}>
+                <button type="button" className="dance-station-generate-button" onClick={() => void submitGeneration()} disabled={busy || diskSourceBusy || voiceUploadBusy || Boolean(videoFrameBusy) || !health?.enabled || !session.authenticated || !currentPricing}>
                   {busy ? <span className="dance-station-generation-spinner" aria-hidden="true" /> : <Sparkles aria-hidden="true" size={17} strokeWidth={2.1} />}
                   <span className="dance-station-generate-button__copy">
-                    <strong>{busy ? "Submitting" : generationMode === "music" ? "Create" : generationMode === "extraction" ? "Extract" : generationMode === "transition" ? "Create transition" : "Change voice"}</strong>
+                    <strong>{busy ? "Submitting" : generationMode === "music" ? "Create" : generationMode === "video" ? "Generate video" : generationMode === "extraction" ? "Extract" : generationMode === "transition" ? "Create transition" : "Change voice"}</strong>
                     {!busy ? <small>{costLabel}</small> : null}
                   </span>
                 </button>
@@ -1366,10 +1613,13 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
             </section>
 
             <section className="dance-station-generation-preview" aria-label="Generation preview">
+              {generationMode === "video" ? (
+                <VideoGenerationPreview job={selectedVideoJob} artifact={selectedVideoArtifact} />
+              ) : null}
               <div className={`dance-station-transition-workspace-shell${generationMode === "transition" ? "" : " is-hidden"}`} aria-hidden={generationMode !== "transition"}>
                 <TransitionWorkspace choices={transitionChoices} inferenceSteps={transitionInferenceSteps} guidanceScale={transitionGuidanceScale} busy={busy} uploadBusy={transitionUploadBusy} uploadError={transitionUploadError} onUpload={uploadTransitionSource} onChange={onTransitionWorkspaceChange} />
               </div>
-              {generationMode !== "transition" ? <div className="dance-station-generation-tips">
+              {generationMode !== "transition" && generationMode !== "video" ? <div className="dance-station-generation-tips">
                 <p>Tips</p>
                 <ul>
                   {generationMode === "music" ? <>
@@ -1395,7 +1645,7 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
           <div className="dance-station-history-heading">
             <div className="dance-station-history-heading__title">
               <h3>Generation History</h3>
-              <span>{jobs.length}</span>
+              <span>{panelJobs.length}</span>
             </div>
           </div>
           <div className="dance-station-history-toolbar">
@@ -1422,6 +1672,8 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                 job={candidate}
                 rewardSubmission={rewardSubmissionsByJob.get(candidate.id)}
                 expanded={expandedJobIds.has(candidate.id)}
+                selected={candidate.id === selectedVideoJobId}
+                onSelect={videoPanel ? () => setSelectedVideoJobId(candidate.id) : undefined}
                 onToggleDetails={() => toggleJobDetails(candidate.id)}
                 onReusePrompt={() => reusePrompt(candidate)}
                 onRewardSubmitted={(submission) => setRewardSubmissions((current) => [submission, ...current.filter((item) => item.jobId !== submission.jobId)])}
@@ -1432,12 +1684,67 @@ export function RemoteGenerationPanel({ session, workspaceItems, publicItems, on
                 {historyLoadingMore ? "Loading..." : "Load older generations"}
               </button>
             ) : null}
-            {!visibleJobs.length ? <div className="dance-station-history-empty"><AudioWaveform aria-hidden="true" size={42} strokeWidth={1.3} /><strong>{jobs.length ? "No generations match" : "Your generations will appear here"}</strong><span>{jobs.length ? "Try another search or filter" : "Start creating music to see your results"}</span></div> : null}
+            {!visibleJobs.length ? <div className="dance-station-history-empty">{videoPanel ? <Film aria-hidden="true" size={42} strokeWidth={1.3} /> : <AudioWaveform aria-hidden="true" size={42} strokeWidth={1.3} />}<strong>{panelJobs.length ? "No generations match" : videoPanel ? "Your videos will appear here" : "Your generations will appear here"}</strong><span>{panelJobs.length ? "Try another search or filter" : videoPanel ? "Generate a video to see it here" : "Start creating music to see your results"}</span></div> : null}
           </div>
         </section>
       </div>
     </section>
   );
+}
+
+function VideoGenerationPreview({ job, artifact }: { job?: RemoteJob; artifact?: RemoteJob["artifacts"][number] }): JSX.Element {
+  const showStatusBadge = useStatusBadgeVisible(job ?? { id: "video-preview-empty", status: "empty", updatedAt: "" });
+  if (!job) {
+    return <div className="dance-station-generation-preview__empty dance-station-video-preview__empty"><Video aria-hidden="true" size={58} strokeWidth={1.2} /><strong>Your video will play here</strong><span>Generate a clip or select one from your video history.</span></div>;
+  }
+  const status = generationStatus(job);
+  if (job.status === "succeeded" && artifact?.publicUrl) {
+    return <div className="dance-station-video-preview">
+      <div className="dance-station-video-preview__head">
+        <div><span className="dance-station-eyebrow">Video preview</span><strong>{generationTitle(job)}</strong></div>
+        {showStatusBadge ? <span className="dance-station-generation-state dance-station-generation-state--complete"><CheckCircle2 aria-hidden="true" size={14} strokeWidth={2.2} />Completed</span> : null}
+      </div>
+      <video className="dance-station-video-preview__player" src={artifact.publicUrl} controls playsInline preload="metadata" />
+      <a className="dance-station-inline-button dance-station-video-preview__download" href={artifact.publicUrl} download target="_blank" rel="noreferrer"><Download aria-hidden="true" size={14} strokeWidth={2} />Download video</a>
+    </div>;
+  }
+  if (["failed", "cancelled", "expired"].includes(job.status)) {
+    return <div className="dance-station-generation-preview__empty dance-station-video-preview__empty"><CircleAlert aria-hidden="true" size={58} strokeWidth={1.2} /><strong>Video generation failed</strong><span>{job.errorMessage || "The worker returned an error for this generation."}</span></div>;
+  }
+  const progress = typeof job.progress?.progress === "number" ? Math.max(0, Math.min(1, job.progress.progress)) : 0;
+  return <div className="dance-station-video-preview dance-station-video-preview--processing">
+    <div className="dance-station-generation-preview__empty"><span className="dance-station-generation-spinner" aria-hidden="true" /><strong>{status.label}</strong><span>{job.progress?.message || job.progress?.phase || "Preparing your video"}</span><div className="dance-station-video-preview__progress"><span style={{ width: `${Math.round(progress * 100)}%` }} /></div><small>{Math.round(progress * 100)}%</small></div>
+  </div>;
+}
+
+function VideoConditioningFramePicker({
+  slot,
+  label,
+  frame,
+  inputId,
+  busy,
+  disabled,
+  onUpload,
+  onRemove,
+}: {
+  slot: VideoFrameSlot;
+  label: string;
+  frame?: VideoFrameSelection;
+  inputId: string;
+  busy: boolean;
+  disabled: boolean;
+  onUpload: (file?: File) => void;
+  onRemove: () => void;
+}): JSX.Element {
+  return <div className={`dance-station-video-frame-picker${frame ? " is-filled" : ""}`}>
+    <input id={inputId} className="dance-station-source-file-input" type="file" accept="image/*" onChange={(event) => { const input = event.currentTarget as HTMLInputElement; const file = input.files?.[0]; input.value = ""; onUpload(file); }} disabled={disabled} />
+    <label className="dance-station-video-frame-picker__button" htmlFor={inputId} aria-label={`${frame ? "Replace" : "Add"} ${label}`}>
+      {frame?.previewUrl ? <img src={frame.previewUrl} alt="" /> : <><ImagePlus aria-hidden="true" size={25} strokeWidth={1.7} /><span>Add image</span></>}
+      {busy ? <span className="dance-station-video-frame-picker__busy"><span className="dance-station-generation-spinner" aria-hidden="true" />Uploading</span> : null}
+    </label>
+    {frame ? <button type="button" className="dance-station-video-frame-picker__remove" onClick={onRemove} disabled={disabled} aria-label={`Remove ${label}`} title={`Remove ${label}`}><X aria-hidden="true" size={14} strokeWidth={2.4} /></button> : null}
+    <span className="dance-station-video-frame-picker__label">{label}</span>
+  </div>;
 }
 
 function VoiceChangeSourceField({
@@ -1488,6 +1795,8 @@ function RemoteGenerationRow({
   job,
   rewardSubmission,
   expanded,
+  selected = false,
+  onSelect,
   onToggleDetails,
   onReusePrompt,
   onRewardSubmitted,
@@ -1495,6 +1804,8 @@ function RemoteGenerationRow({
   job: RemoteJob;
   rewardSubmission?: RemoteRewardSubmission;
   expanded: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
   onToggleDetails: () => void;
   onReusePrompt: () => void;
   onRewardSubmitted: (submission: RemoteRewardSubmission) => void;
@@ -1509,12 +1820,15 @@ function RemoteGenerationRow({
   const menuRef = useRef<HTMLDivElement>(null);
   const audioArtifacts = job.artifacts.filter((artifact) => artifact.role === "audio" && artifact.publicUrl);
   const audioArtifact = audioArtifacts.find((artifact) => artifact.variant === "merged") ?? audioArtifacts[0];
+  const videoArtifact = job.artifacts.find((artifact) => artifact.role === "preview" && artifact.publicUrl && artifact.mimeType.startsWith("video/"))
+    ?? job.artifacts.find((artifact) => artifact.publicUrl && artifact.mimeType.startsWith("video/"));
   const convertedVocalArtifact = audioArtifacts.find((artifact) => artifact.variant === "converted-vocal");
   const instrumentalArtifact = audioArtifacts.find((artifact) => artifact.variant === "instrumental");
   const waveformArtifact = job.artifacts.find((artifact) => artifact.role === "waveform" && artifact.publicUrl);
   const failed = ["failed", "cancelled", "expired"].includes(job.status);
   const complete = job.status === "succeeded";
   const status = generationStatus(job);
+  const showStatusBadge = useStatusBadgeVisible(job);
   const prompt = generationPrompt(job);
   const detailsId = `generation-prompt-${job.id}`;
   const coverArtifact = job.artifacts.find((artifact) => artifact.role !== "waveform" && artifact.publicUrl && artifact.mimeType.startsWith("image/"));
@@ -1575,23 +1889,23 @@ function RemoteGenerationRow({
   };
 
   return (
-    <article className={`dance-station-generation-row${expanded ? " dance-station-generation-row--expanded" : ""}${failed ? " dance-station-generation-row--error" : ""}`}>
+    <article className={`dance-station-generation-row${expanded ? " dance-station-generation-row--expanded" : ""}${failed ? " dance-station-generation-row--error" : ""}${selected ? " is-selected" : ""}${onSelect ? " is-selectable" : ""}`} onClick={onSelect} onKeyDown={onSelect ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); } } : undefined} role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined}>
+      {showStatusBadge ? <span className={`dance-station-generation-state dance-station-generation-row__status dance-station-generation-state--${status.tone}`}>
+        {status.tone === "complete" ? <CheckCircle2 aria-hidden="true" size={14} strokeWidth={2.2} /> : null}
+        {status.tone === "error" ? <CircleAlert aria-hidden="true" size={14} strokeWidth={2.2} /> : null}
+        {status.spinning ? <span className="dance-station-generation-spinner" aria-hidden="true" /> : null}
+        {status.label}
+      </span> : null}
       <div className={`dance-station-generation-row__artwork${failed ? " dance-station-generation-row__artwork--error" : ""}`} aria-hidden={coverArtifact?.publicUrl ? undefined : "true"}>
-        {coverUrl ? <img src={coverUrl} alt="" loading="lazy" decoding="async" /> : <AudioWaveform size={34} strokeWidth={1.2} />}
+        {videoArtifact?.publicUrl ? <video src={videoArtifact.publicUrl} muted preload="metadata" aria-label="Video generation thumbnail" /> : coverUrl ? <img src={coverUrl} alt="" loading="lazy" decoding="async" /> : job.runtime === "ltx-video" ? <Film size={34} strokeWidth={1.2} /> : <AudioWaveform size={34} strokeWidth={1.2} />}
       </div>
       <div className="dance-station-generation-row__content">
         <div className="dance-station-generation-row__head">
           <div className="dance-station-generation-row__title-line">
             <strong>{generationTitle(job)}</strong>
-            <span className={`dance-station-generation-state dance-station-generation-state--${status.tone}`}>
-              {status.tone === "complete" ? <CheckCircle2 aria-hidden="true" size={14} strokeWidth={2.2} /> : null}
-              {status.tone === "error" ? <CircleAlert aria-hidden="true" size={14} strokeWidth={2.2} /> : null}
-              {status.spinning ? <span className="dance-station-generation-spinner" aria-hidden="true" /> : null}
-              {status.label}
-            </span>
           </div>
           <div className="dance-station-generation-row__meta">
-            <span><Music2 aria-hidden="true" size={14} strokeWidth={1.8} />{generationModelLabel(job)}</span>
+            <span>{job.runtime === "ltx-video" ? <Video aria-hidden="true" size={14} strokeWidth={1.8} /> : <Music2 aria-hidden="true" size={14} strokeWidth={1.8} />}{generationModelLabel(job)}</span>
             <span><CalendarDays aria-hidden="true" size={14} strokeWidth={1.8} />{new Date(job.createdAt).toLocaleString()}</span>
           </div>
         </div>
@@ -1630,7 +1944,11 @@ function RemoteGenerationRow({
         </div>
       ) : null}
       <div className="dance-station-generation-media">
-        {complete && audioArtifact?.publicUrl ? (
+        {job.runtime === "ltx-video" ? (
+          <button type="button" className="site-audio-play-button dance-station-generation-video-select" disabled={!videoArtifact?.publicUrl} aria-label={`${complete ? "View" : status.label} ${generationTitle(job)}`} onClick={(event) => { event.stopPropagation(); onSelect?.(); }}>
+            <Video aria-hidden="true" size={17} strokeWidth={2.1} />
+          </button>
+        ) : complete && audioArtifact?.publicUrl ? (
           <AudioPlayButton track={{ id: `remote-generation-${job.id}`, title: generationTitle(job), url: audioArtifact.publicUrl, mimeType: audioArtifact.mimeType, waveformUrl: waveformArtifact?.publicUrl }} />
         ) : (
           <button type="button" className="site-audio-play-button dance-station-generation-play-disabled" disabled aria-label={`${status.label} for ${generationTitle(job)}`}>
@@ -1662,7 +1980,12 @@ function RemoteGenerationRow({
           <button type="button" role="menuitem" onClick={togglePromptDetails}>
             {expanded ? "Hide prompt" : "Show prompt"}
           </button>
-          {complete && audioArtifact?.publicUrl ? (
+          {job.runtime === "ltx-video" && complete && videoArtifact?.publicUrl ? (
+            <a role="menuitem" href={videoArtifact.publicUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}>
+              <Download aria-hidden="true" size={14} strokeWidth={2} />
+              Download video
+            </a>
+          ) : complete && audioArtifact?.publicUrl ? (
             <>
               <a role="menuitem" href={audioArtifact.publicUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}>
                 <Download aria-hidden="true" size={14} strokeWidth={2} />
