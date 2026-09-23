@@ -10,7 +10,7 @@ import { buildObjectPath, downloadFromBunny, uploadBufferToBunny } from "../stor
 import { LaunchServerRequestError, launchServerClient, type RemoteJob } from "./client.js";
 import { appealRewardSubmissionRequestSchema, createJobRequestSchema, createRewardSubmissionRequestSchema, createVideoChainRequestSchema, remoteGenerationPrioritySchema, remoteGenerationRequestSchema, verifyPaymentRequestSchema } from "./schemas.js";
 import { createVideoChain, type VideoChainParent } from "./videoChainService.js";
-import { findRemoteVideoAssetByJob, findRemoteVideoChainById, listRemoteVideoAssets, upsertRemoteVideoChainAsset, upsertRemoteVideoGenerationAsset, type StoredRemoteVideoAsset } from "./videoAssetStore.js";
+import { findRemoteVideoAssetByJob, findRemoteVideoChainById, listRemoteVideoAssets, updateRemoteVideoChainMetadata, upsertRemoteVideoChainAsset, upsertRemoteVideoGenerationAsset, type StoredRemoteVideoAsset } from "./videoAssetStore.js";
 
 const router = Router();
 const sourceUpload = multer({
@@ -188,7 +188,22 @@ async function persistCompletedLtxJob(userId: string, job: RemoteJob): Promise<S
   const prefix = ltxTemporalPrefix(job);
   if (!parent || !prefix || prefix.overlapFrames < 1) return rawAsset;
   const existingChain = await findRemoteVideoAssetByJob({ ownerUserId: userId, jobId: job.id, assetKind: "video_chain" });
-  if (existingChain) return rawAsset;
+  if (existingChain) {
+    const continuationVideo = {
+      objectPath: artifact.objectPath,
+      publicUrl: artifact.publicUrl,
+      mimeType: artifact.mimeType,
+      sizeBytes: artifact.sizeBytes,
+      sha256: artifact.sha256,
+    };
+    await updateRemoteVideoChainMetadata({
+      ownerUserId: userId,
+      appendJobId: job.id,
+      prompt: typeof job.request.parameters.prompt === "string" ? job.request.parameters.prompt : undefined,
+      continuationVideo,
+    });
+    return rawAsset;
+  }
 
   if (parent.sourceType === "job") {
     const sourceJob = await launchServerClient.getJob(parent.sourceJobId!);
@@ -213,7 +228,21 @@ async function persistCompletedLtxJob(userId: string, job: RemoteJob): Promise<S
       outputIncludesPrefix: prefix.outputIncludesPrefix,
     },
   });
-  await upsertRemoteVideoChainAsset({ ownerUserId: userId, appendJobId: job.id, title: chain.title, parent, chain });
+  await upsertRemoteVideoChainAsset({
+    ownerUserId: userId,
+    appendJobId: job.id,
+    title: chain.title,
+    prompt: typeof job.request.parameters.prompt === "string" ? job.request.parameters.prompt : undefined,
+    continuationVideo: {
+      objectPath: artifact.objectPath,
+      publicUrl: artifact.publicUrl,
+      mimeType: artifact.mimeType,
+      sizeBytes: artifact.sizeBytes,
+      sha256: artifact.sha256,
+    },
+    parent,
+    chain,
+  });
   return rawAsset;
 }
 
@@ -514,7 +543,21 @@ router.post("/video-chains", async (req, res, next) => {
       parent: canonicalParent,
       append: { ...parsed.append, overlapFrames, outputIncludesPrefix },
     });
-    await upsertRemoteVideoChainAsset({ ownerUserId: req.session!.userId, appendJobId: appendJob.id, title: chain.title, parent: canonicalParent, chain });
+    await upsertRemoteVideoChainAsset({
+      ownerUserId: req.session!.userId,
+      appendJobId: appendJob.id,
+      title: chain.title,
+      prompt: typeof appendJob.request.parameters.prompt === "string" ? appendJob.request.parameters.prompt : undefined,
+      continuationVideo: {
+        objectPath: appendArtifact.objectPath,
+        publicUrl: appendArtifact.publicUrl,
+        mimeType: appendArtifact.mimeType,
+        sizeBytes: appendArtifact.sizeBytes,
+        sha256: appendArtifact.sha256,
+      },
+      parent: canonicalParent,
+      chain,
+    });
     return res.status(201).json(chain);
   } catch (error) {
     return next(error);

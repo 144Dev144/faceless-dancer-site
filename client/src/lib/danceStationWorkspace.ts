@@ -420,6 +420,14 @@ export function createRemoteVideoChainWorkspaceItem(input: {
   chainId: string;
   appendJobId?: string;
   title: string;
+  prompt?: string;
+  continuationVideo?: {
+    objectPath: string;
+    publicUrl?: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+  };
   publicUrl: string;
   proxyUrl: string;
   objectPath: string;
@@ -446,6 +454,8 @@ export function createRemoteVideoChainWorkspaceItem(input: {
       storage: "remote-cdn",
       sourceTool: "ltx-video",
       videoAssetKind: "chain",
+      prompt: input.prompt,
+      continuationVideo: input.continuationVideo,
       chainId: input.chainId,
       appendJobId: input.appendJobId,
       publicUrl: input.publicUrl,

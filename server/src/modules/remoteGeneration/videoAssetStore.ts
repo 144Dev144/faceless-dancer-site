@@ -113,6 +113,14 @@ export async function upsertRemoteVideoChainAsset(input: {
   ownerUserId: string;
   appendJobId: string;
   title: string;
+  prompt?: string;
+  continuationVideo: {
+    objectPath: string;
+    publicUrl?: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+  };
   parent: VideoChainParent;
   chain: {
     chainId: string;
@@ -176,6 +184,8 @@ export async function upsertRemoteVideoChainAsset(input: {
         sourceTool: "ltx-video",
         videoAssetKind: "chain",
         appendJobId: input.appendJobId,
+        prompt: input.prompt,
+        continuationVideo: input.continuationVideo,
         parent: input.parent,
         audioPreserved: input.chain.audioPreserved,
         segments: input.chain.segments,
@@ -199,6 +209,26 @@ export async function findRemoteVideoChainById(input: { ownerUserId: string; cha
     [input.ownerUserId, input.chainId],
   );
   return result.rows[0] ? mapAsset(result.rows[0]) : null;
+}
+
+export async function updateRemoteVideoChainMetadata(input: {
+  ownerUserId: string;
+  appendJobId: string;
+  prompt?: string;
+  continuationVideo: {
+    objectPath: string;
+    publicUrl?: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+  };
+}): Promise<void> {
+  await pool.query(
+    `UPDATE remote_generation_assets
+     SET metadata_json = metadata_json || $3::jsonb, updated_at = now()
+     WHERE owner_user_id = $1 AND job_id = $2 AND asset_kind = 'video_chain'`,
+    [input.ownerUserId, input.appendJobId, JSON.stringify({ prompt: input.prompt, continuationVideo: input.continuationVideo })],
+  );
 }
 
 export async function listRemoteVideoAssets(ownerUserId: string): Promise<StoredRemoteVideoAsset[]> {

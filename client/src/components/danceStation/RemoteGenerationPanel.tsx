@@ -977,6 +977,10 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
           chainId: asset.chainId!,
           appendJobId: asset.jobId,
           title: asset.title,
+          prompt: typeof asset.metadata.prompt === "string" ? asset.metadata.prompt : undefined,
+          continuationVideo: asset.metadata.continuationVideo && typeof asset.metadata.continuationVideo === "object" && !Array.isArray(asset.metadata.continuationVideo)
+            ? asset.metadata.continuationVideo as { objectPath: string; publicUrl?: string; mimeType: string; sizeBytes: number; sha256: string }
+            : undefined,
           publicUrl: asset.publicUrl,
           proxyUrl: asset.proxyUrl ?? remoteVideoProxyUrl(asset.objectPath),
           objectPath: asset.objectPath,
@@ -993,9 +997,19 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
           updatedAt: asset.updatedAt,
         });
       })
-      .filter((item) => !localIds.has(item.id))
       .filter((item) => !query || item.title.toLowerCase().includes(query));
-    return [...localItems, ...persistedItems].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const persistedById = new Map(persistedItems.map((item) => [item.id, item]));
+    const mergedLocalItems = localItems.map((item) => {
+      const persisted = persistedById.get(item.id);
+      if (!persisted) return item;
+      return {
+        ...item,
+        updatedAt: persisted.updatedAt,
+        metadata: { ...item.metadata, ...persisted.metadata },
+      };
+    });
+    const newPersistedItems = persistedItems.filter((item) => !localIds.has(item.id));
+    return [...mergedLocalItems, ...newPersistedItems].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }, [historyFilter, historyQuery, persistedVideoAssets, workspaceItems]);
   const hasActiveJobs = panelJobs.some((candidate) => activeStatuses.has(candidate.status));
   busyRef.current = busy;
@@ -1397,6 +1411,14 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
             chainId: chain.chainId,
             appendJobId: job.id,
             title: chain.title,
+            prompt: generationPrompt(job),
+            continuationVideo: {
+              objectPath: artifact.objectPath,
+              publicUrl: artifact.publicUrl,
+              mimeType: artifact.mimeType,
+              sizeBytes: artifact.sizeBytes,
+              sha256: artifact.sha256,
+            },
             publicUrl: chain.publicUrl,
             proxyUrl: chain.proxyUrl,
             objectPath: chain.objectPath,
@@ -2008,6 +2030,12 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                 item={item}
                 selected={item.id === selectedVideoWorkspaceId}
                 onSelect={() => { setSelectedVideoWorkspaceId(item.id); setSelectedVideoJobId(""); }}
+                onSelectContinuation={() => {
+                  const appendJobId = typeof item.metadata.appendJobId === "string" ? item.metadata.appendJobId : "";
+                  if (!appendJobId) return;
+                  setSelectedVideoJobId(appendJobId);
+                  setSelectedVideoWorkspaceId("");
+                }}
               />
             )) : null}
             {visibleJobs.map((candidate) => (
@@ -2036,8 +2064,9 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   );
 }
 
-function VideoWorkspaceRow({ item, selected, onSelect }: { item: BrowserWorkspaceItem; selected: boolean; onSelect: () => void }): JSX.Element {
+function VideoWorkspaceRow({ item, selected, onSelect, onSelectContinuation }: { item: BrowserWorkspaceItem; selected: boolean; onSelect: () => void; onSelectContinuation?: () => void }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const optionsButtonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -2045,9 +2074,11 @@ function VideoWorkspaceRow({ item, selected, onSelect }: { item: BrowserWorkspac
   const duration = typeof item.metadata.durationSeconds === "number" ? formatGenerationDuration(item.metadata.durationSeconds) : "Video chain";
   const segmentCount = Array.isArray(item.metadata.segments) ? item.metadata.segments.length : 0;
   const downloadUrl = typeof item.metadata.publicUrl === "string" ? item.metadata.publicUrl : source?.url;
-  const manifestUrl = typeof item.metadata.manifestObjectPath === "string" && item.metadata.manifestObjectPath
-    ? remoteVideoProxyUrl(item.metadata.manifestObjectPath)
+  const prompt = typeof item.metadata.prompt === "string" ? item.metadata.prompt.trim() : "";
+  const continuation = item.metadata.continuationVideo && typeof item.metadata.continuationVideo === "object" && !Array.isArray(item.metadata.continuationVideo)
+    ? item.metadata.continuationVideo as { objectPath: string; publicUrl?: string; mimeType: string; sizeBytes: number; sha256: string }
     : undefined;
+  const continuationUrl = continuation?.publicUrl ?? (continuation ? remoteVideoProxyUrl(continuation.objectPath) : undefined);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -2076,7 +2107,7 @@ function VideoWorkspaceRow({ item, selected, onSelect }: { item: BrowserWorkspac
     };
   }, [menuOpen]);
 
-  return <article className={`dance-station-generation-row dance-station-video-workspace-row is-selectable${selected ? " is-selected" : ""}`} onClick={onSelect} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); } }} role="button" tabIndex={0}>
+  return <article className={`dance-station-generation-row dance-station-video-workspace-row is-selectable${selected ? " is-selected" : ""}${expanded ? " dance-station-generation-row--expanded" : ""}`} onClick={onSelect} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); } }} role="button" tabIndex={0}>
     <div className="dance-station-generation-row__artwork dance-station-video-workspace-row__artwork" aria-label="Video chain thumbnail">
       {source?.url ? <video src={source.url} muted preload="metadata" aria-label={`${item.title} video thumbnail`} /> : <Film aria-hidden="true" size={21} strokeWidth={1.8} />}
     </div>
@@ -2089,8 +2120,11 @@ function VideoWorkspaceRow({ item, selected, onSelect }: { item: BrowserWorkspac
     </div>
     <div className="dance-station-generation-media">
       <button type="button" className="site-audio-play-button dance-station-generation-video-select" aria-label={`View ${item.title}`} onClick={(event) => { event.stopPropagation(); onSelect(); }}>
-        <Video aria-hidden="true" size={17} strokeWidth={2.1} />
+        <Link2 aria-hidden="true" size={17} strokeWidth={2.1} />
       </button>
+      {continuation && onSelectContinuation ? <button type="button" className="site-audio-play-button dance-station-generation-video-select" aria-label={`View continuation for ${item.title}`} title="View generated continuation" onClick={(event) => { event.stopPropagation(); onSelectContinuation(); }}>
+        <Video aria-hidden="true" size={17} strokeWidth={2.1} />
+      </button> : null}
       <button
         type="button"
         className="dance-station-tool-button dance-station-generation-options-button"
@@ -2104,10 +2138,20 @@ function VideoWorkspaceRow({ item, selected, onSelect }: { item: BrowserWorkspac
         <MoreHorizontal aria-hidden="true" size={19} strokeWidth={2.2} />
       </button>
     </div>
+    {expanded ? <div className="dance-station-generation-details" onClick={(event) => event.stopPropagation()}>
+      <div className="dance-station-generation-details__actions">
+        <button type="button" className="dance-station-inline-button" onClick={() => setExpanded(false)}>Hide prompt</button>
+      </div>
+      <div className="dance-station-generation-details__prompt">
+        <span>Prompt</span>
+        <p>{prompt || "No prompt saved for this chain."}</p>
+      </div>
+    </div> : null}
     {menuOpen && typeof document !== "undefined" ? createPortal(
       <div ref={menuRef} className="dance-station-generation-options-menu" role="menu" style={{ top: `${menuPosition.top}px`, right: `${menuPosition.right}px` }}>
+        <button type="button" role="menuitem" onClick={() => { setExpanded((current) => !current); setMenuOpen(false); }}>{expanded ? "Hide prompt" : "Show prompt"}</button>
         {downloadUrl ? <a role="menuitem" href={downloadUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download video chain</a> : null}
-        {manifestUrl ? <a role="menuitem" href={manifestUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download chain manifest</a> : null}
+        {continuationUrl ? <a role="menuitem" href={continuationUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download continuation video</a> : null}
       </div>,
       document.body,
     ) : null}
