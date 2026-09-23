@@ -25,8 +25,7 @@ export interface VideoChainAppend {
   jobId: string;
   artifactObjectPath: string;
   artifactId?: string;
-  overlapFrames?: number;
-  outputIncludesPrefix?: boolean;
+  conditioningPrefixFrames?: number;
 }
 
 interface VideoChainSegment {
@@ -84,10 +83,6 @@ async function probeFrameCount(filePath: string): Promise<number> {
   return value;
 }
 
-function concatListEntry(filePath: string): string {
-  return `file '${filePath.replace(/'/g, "'\\''")}'`;
-}
-
 export async function createVideoChain(input: {
   userId: string;
   title: string;
@@ -101,7 +96,6 @@ export async function createVideoChain(input: {
   const appendInputPath = path.join(tempDir, "append-source");
   const parentSegmentPath = path.join(tempDir, "parent-segment.mp4");
   const appendSegmentPath = path.join(tempDir, "append-segment.mp4");
-  const concatListPath = path.join(tempDir, "concat.txt");
   const outputPath = path.join(tempDir, "video-chain.mp4");
 
   try {
@@ -125,11 +119,11 @@ export async function createVideoChain(input: {
     ]);
     const parentKeepFrames = Math.min(parentFrameCount, input.parent.frameIndex + 1);
     const parentTrimDuration = parentKeepFrames / input.frameRate;
-    const overlapFrames = input.append.outputIncludesPrefix === false ? 0 : Math.max(0, input.append.overlapFrames ?? 0);
-    if (overlapFrames >= appendFrameCount) {
-      throw new Error(`Temporal prefix overlap (${overlapFrames} frames) consumes the entire appended video (${appendFrameCount} frames).`);
-    }
-    const appendedTailFrames = appendFrameCount - overlapFrames;
+    // LTX uses the temporal prefix as model conditioning. It does not return
+    // those source frames as a literal prefix in the child artifact, so the
+    // child must always be assembled from frame zero. The parent is already
+    // bounded to the selected frame above.
+    const appendedTailFrames = appendFrameCount;
     const preserveAudio = parentHasAudio && appendHasAudio;
     const normalizeFilter = `fps=${input.frameRate},scale=${dimensions.width}:${dimensions.height}:force_original_aspect_ratio=decrease,pad=${dimensions.width}:${dimensions.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p`;
 
@@ -143,7 +137,7 @@ export async function createVideoChain(input: {
       const selector = typeof options.endFrame === "number"
         ? `select=between(n\\,${options.startFrame}\\,${options.endFrame})`
         : `select=gte(n\\,${options.startFrame})`;
-      args.push("-map", "0:v:0", "-vf", `${selector},setpts=N/${input.frameRate}/TB,${normalizeFilter}`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18");
+      args.push("-map", "0:v:0", "-vf", `${selector},setpts=N/${input.frameRate}/TB,${normalizeFilter}`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-fps_mode", "cfr");
       if (withAudio) {
         args.push("-map", "0:a:0", "-c:a", "aac", "-ar", "48000", "-ac", "2");
         const audioFilters = [];
@@ -162,8 +156,8 @@ export async function createVideoChain(input: {
       audioDurationSeconds: parentTrimDuration,
     }, preserveAudio);
     await encodeSegment(appendInputPath, appendSegmentPath, {
-      startFrame: overlapFrames,
-      audioStartSeconds: overlapFrames / input.frameRate,
+      startFrame: 0,
+      audioStartSeconds: 0,
       audioDurationSeconds: appendedTailFrames / input.frameRate,
     }, preserveAudio);
     const [encodedParentFrames, encodedAppendFrames] = await Promise.all([
@@ -176,10 +170,29 @@ export async function createVideoChain(input: {
         + `append ${encodedAppendFrames}/${appendedTailFrames}.`,
       );
     }
-    await fs.writeFile(concatListPath, `${concatListEntry(parentSegmentPath)}\n${concatListEntry(appendSegmentPath)}\n`, "utf8");
-    await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", "-movflags", "+faststart", outputPath]);
+    const concatArgs = ["-y", "-i", parentSegmentPath, "-i", appendSegmentPath];
+    if (preserveAudio) {
+      concatArgs.push(
+        "-filter_complex", "[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[v][a]",
+        "-map", "[v]", "-map", "[a]",
+      );
+    } else {
+      concatArgs.push(
+        "-filter_complex", "[0:v:0][1:v:0]concat=n=2:v=1:a=0[v]",
+        "-map", "[v]",
+      );
+    }
+    concatArgs.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(input.frameRate));
+    if (preserveAudio) concatArgs.push("-c:a", "aac", "-ar", "48000", "-ac", "2");
+    concatArgs.push("-movflags", "+faststart", outputPath);
+    await runFfmpeg(concatArgs);
 
     const chainDuration = await probeDuration(outputPath);
+    const chainFrameCount = await probeFrameCount(outputPath);
+    const expectedChainFrames = parentKeepFrames + appendedTailFrames;
+    if (chainFrameCount !== expectedChainFrames) {
+      throw new Error(`Video chain frame invariant failed: output ${chainFrameCount}/${expectedChainFrames}.`);
+    }
     const outputBuffer = await fs.readFile(outputPath);
     const outputStats = await fs.stat(outputPath);
     const objectPath = buildObjectPath(["remote-generation", "chains", input.userId, chainId, "video-chain.mp4"]);
@@ -198,7 +211,7 @@ export async function createVideoChain(input: {
         sourceType: "job",
         sourceJobId: input.append.jobId,
         objectPath: input.append.artifactObjectPath,
-        startSeconds: overlapFrames / input.frameRate,
+        startSeconds: 0,
         endSeconds: appendDuration,
         frameRate: input.frameRate,
       },
@@ -210,8 +223,9 @@ export async function createVideoChain(input: {
       frameRate: input.frameRate,
       durationSeconds: chainDuration,
       audioPreserved: preserveAudio,
-      overlapFrames,
-      outputIncludesPrefix: overlapFrames > 0,
+      overlapFrames: 0,
+      outputIncludesPrefix: false,
+      conditioningPrefixFrames: input.append.conditioningPrefixFrames ?? 0,
       parentFrameCount: parentKeepFrames,
       appendFrameCount,
       appendedTailFrames,

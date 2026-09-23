@@ -15567,3 +15567,105 @@ input.dance-station-source-file-input {
     grid-row: 3;
   }
 }
+
+/* History rows use a simple flex layout so the content stays beside the thumbnail. */
+.dance-station-app-shell--generation .dance-station-generation-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 14px;
+}
+
+.dance-station-app-shell--generation .dance-station-generation-row__artwork {
+  flex: 0 0 142px;
+  width: 142px;
+  max-width: 142px;
+}
+
+.dance-station-app-shell--generation .dance-station-generation-row__content {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  padding-right: 0;
+  text-align: left;
+}
+
+.dance-station-app-shell--generation .dance-station-generation-row__head,
+.dance-station-app-shell--generation .dance-station-generation-row__title-line,
+.dance-station-app-shell--generation .dance-station-generation-row__meta {
+  justify-self: stretch;
+  text-align: left;
+}
+
+.dance-station-app-shell--generation .dance-station-generation-row > .dance-station-generation-media {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+}
+
+.dance-station-app-shell--generation .dance-station-generation-row > .dance-station-generation-media > .site-audio-play-button,
+.dance-station-app-shell--generation .dance-station-generation-row > .dance-station-generation-media > .dance-station-generation-play-disabled,
+.dance-station-app-shell--generation .dance-station-generation-row .dance-station-generation-options-button {
+  flex: 0 0 30px !important;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  border-width: 1px;
+}
+
+.dance-station-app-shell--generation .dance-station-generation-row--expanded > .dance-station-generation-details {
+  flex: 1 0 100%;
+  width: 100%;
+  min-width: 0;
+  grid-column: auto;
+  grid-row: auto;
+}
+
+.dance-station-app-shell--generation .dance-station-video-workspace-row {
+  padding-right: 12px;
+}
+
+.dance-station-app-shell--generation .dance-station-video-workspace-row > .dance-station-generation-media > .site-audio-play-button {
+  border-radius: 50%;
+}
+
+.dance-station-app-shell--generation .dance-station-video-workspace-row .dance-station-generation-options-button {
+  border-radius: 7px;
+}
+
+@media (max-width: 760px) {
+  .dance-station-app-shell--generation .dance-station-generation-row {
+    gap: 10px;
+  }
+
+  .dance-station-app-shell--generation .dance-station-generation-row__artwork {
+    flex-basis: 76px;
+    width: 76px;
+    max-width: 76px;
+  }
+}
+
+@media (max-width: 640px) {
+  .dance-station-app-shell--generation .dance-station-generation-row__artwork {
+    flex-basis: 48px;
+    width: 48px;
+    max-width: 48px;
+  }
+}
+
+@container (max-width: 620px) {
+  .dance-station-app-shell--generation .dance-station-generation-row {
+    gap: 10px;
+  }
+
+  .dance-station-app-shell--generation .dance-station-generation-row__artwork {
+    flex-basis: 84px;
+    width: 84px;
+    max-width: 84px;
+  }
+}

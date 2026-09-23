@@ -20,6 +20,7 @@ import { fetchFaceLESSWalletBalance, fetchSolWalletBalance, type FaceLESSWalletB
 import { sendRemoteGenerationPayment, sendRemoteGenerationSolPayment, signRemoteGenerationPayment } from "../../lib/remoteGenerationPayment";
 import { calculateRemotePricing, createFreeMarketPrice, fetchOnChainMarketPrice, holderFreeForRequest, type RemoteMarketPrice } from "../../lib/remoteGenerationPricing";
 import { fallbackGenerationCoverUrl } from "../../lib/remoteGenerationCoverArt";
+import { downloadAsset } from "../../lib/downloadAsset";
 import { createRemoteAudioWorkspaceItem, createRemoteVideoChainWorkspaceItem, createRemoteVideoWorkspaceItem, listWorkspaceItems, saveWorkspaceItem } from "../../lib/danceStationWorkspace";
 import type { BrowserWorkspaceItem } from "../../lib/danceStationWorkspace";
 import type { LibraryItem } from "../../lib/api";
@@ -439,14 +440,24 @@ function ltxTemporalPrefixForLineage(lineage: RemoteVideoFrameLineage | undefine
     source_frame_rate: lineage.frameRate,
     strength: 1,
     mode: "prefix",
-    output_includes_prefix: true,
   };
 }
 
 function mergeJobs(current: RemoteJob[], incoming: RemoteJob[]): RemoteJob[] {
   const jobs = new Map(current.map((job) => [job.id, job]));
   incoming.forEach((job) => jobs.set(job.id, job));
-  return [...jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return [...jobs.values()].sort(compareRemoteJobs);
+}
+
+function compareRemoteJobs(a: RemoteJob, b: RemoteJob): number {
+  const aActive = activeStatuses.has(a.status) ? 0 : 1;
+  const bActive = activeStatuses.has(b.status) ? 0 : 1;
+  if (aActive !== bActive) return aActive - bActive;
+
+  const aTime = Date.parse(a.updatedAt || a.createdAt);
+  const bTime = Date.parse(b.updatedAt || b.createdAt);
+  if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return bTime - aTime;
+  return b.createdAt.localeCompare(a.createdAt);
 }
 
 function formatPaymentToken(amountAtomic: string, decimals: number): string {
@@ -520,6 +531,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   const [, setPaymentIntent] = useState<RemotePaymentIntent | null>(null);
   const [jobs, setJobs] = useState<RemoteJob[]>([]);
   const [persistedVideoAssets, setPersistedVideoAssets] = useState<RemoteVideoAsset[]>([]);
+  const [assemblingChainJobIds, setAssemblingChainJobIds] = useState<Set<string>>(new Set());
   const [selectedVideoJobId, setSelectedVideoJobId] = useState("");
   const [selectedVideoWorkspaceId, setSelectedVideoWorkspaceId] = useState("");
   const [historyCursor, setHistoryCursor] = useState<string | undefined>();
@@ -1011,7 +1023,8 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
     const newPersistedItems = persistedItems.filter((item) => !localIds.has(item.id));
     return [...mergedLocalItems, ...newPersistedItems].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }, [historyFilter, historyQuery, persistedVideoAssets, workspaceItems]);
-  const hasActiveJobs = panelJobs.some((candidate) => activeStatuses.has(candidate.status));
+  const hasAssemblingVideoChains = panelJobs.some((candidate) => assemblingChainJobIds.has(candidate.id));
+  const hasActiveJobs = panelJobs.some((candidate) => activeStatuses.has(candidate.status)) || hasAssemblingVideoChains;
   busyRef.current = busy;
   const rewardSubmissionsByJob = useMemo(() => new Map(rewardSubmissions.map((submission) => [submission.jobId, submission])), [rewardSubmissions]);
 
@@ -1020,7 +1033,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
     return panelJobs.filter((job) => {
       const failed = ["failed", "cancelled", "expired"].includes(job.status);
       const matchesFilter = historyFilter === "all"
-        || historyFilter === "active" && activeStatuses.has(job.status)
+        || historyFilter === "active" && (activeStatuses.has(job.status) || assemblingChainJobIds.has(job.id))
         || historyFilter === "complete" && job.status === "succeeded"
         || historyFilter === "error" && failed;
       const matchesQuery = !query
@@ -1028,8 +1041,10 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
         || generationPrompt(job).toLowerCase().includes(query)
         || job.status.toLowerCase().includes(query);
       return matchesFilter && matchesQuery;
-    });
-  }, [historyFilter, historyQuery, panelJobs]);
+    }).sort(compareRemoteJobs);
+  }, [assemblingChainJobIds, historyFilter, historyQuery, panelJobs]);
+  const activeHistoryJobs = visibleJobs.filter((job) => activeStatuses.has(job.status) || assemblingChainJobIds.has(job.id));
+  const completedHistoryJobs = visibleJobs.filter((job) => !activeStatuses.has(job.status) && !assemblingChainJobIds.has(job.id));
 
   const selectedVideoWorkspaceItem = videoPanel
     ? videoChainItems.find((item) => item.id === selectedVideoWorkspaceId)
@@ -1394,9 +1409,21 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
       const existingChain = videoChainItems.find((item) => item.metadata.appendJobId === job.id);
       if (existingChain) {
         exportedVideoChainsRef.current.add(job.id);
+        setAssemblingChainJobIds((current) => {
+          if (!current.has(job.id)) return current;
+          const next = new Set(current);
+          next.delete(job.id);
+          return next;
+        });
         return;
       }
       exportingVideoChainsRef.current.add(job.id);
+      setAssemblingChainJobIds((current) => {
+        if (current.has(job.id)) return current;
+        const next = new Set(current);
+        next.add(job.id);
+        return next;
+      });
       void api.createRemoteVideoChain({
         title: `${generationTitle(job)} chain`,
         frameRate: parent.frameRate,
@@ -1404,6 +1431,12 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
         append: { jobId: job.id, artifactObjectPath: artifact.objectPath, artifactId: artifact.id },
       })
         .then(async (chain) => {
+          setAssemblingChainJobIds((current) => {
+            if (!current.has(job.id)) return current;
+            const next = new Set(current);
+            next.delete(job.id);
+            return next;
+          });
           exportedVideoChainsRef.current.add(job.id);
           const workspace = await listWorkspaceItems();
           const now = new Date().toISOString();
@@ -1444,6 +1477,12 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
           onWorkspaceChanged?.();
         })
         .catch((nextError) => {
+          setAssemblingChainJobIds((current) => {
+            if (!current.has(job.id)) return current;
+            const next = new Set(current);
+            next.delete(job.id);
+            return next;
+          });
           if (!exportedVideoChainsRef.current.has(job.id)) exportingVideoChainsRef.current.delete(job.id);
           const message = nextError instanceof Error ? nextError.message : "The video chain could not be assembled.";
           console.error("[remote-generation] video chain export failed", { jobId: job.id, error: nextError });
@@ -1454,8 +1493,12 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
 
   useEffect(() => {
     if (busy || error) return;
-    setPhase(jobs.some((job) => ["created", "awaiting_payment", "queued"].includes(job.status)) ? "Queued" : hasActiveJobs ? "Generating" : "Ready");
-  }, [busy, error, hasActiveJobs, jobs]);
+    setPhase(jobs.some((job) => ["created", "awaiting_payment", "queued"].includes(job.status))
+      ? "Queued"
+      : hasAssemblingVideoChains
+        ? "Assembling chain"
+        : hasActiveJobs ? "Generating" : "Ready");
+  }, [busy, error, hasActiveJobs, hasAssemblingVideoChains, jobs]);
 
   const submitGeneration = async () => {
     if (busy) return;
@@ -2023,6 +2066,20 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
             </label>
           </div>
           <div className="dance-station-generation-list" aria-live="polite">
+            {activeHistoryJobs.map((candidate) => (
+              <RemoteGenerationRow
+                key={candidate.id}
+                job={candidate}
+                assemblingChain={assemblingChainJobIds.has(candidate.id)}
+                rewardSubmission={rewardSubmissionsByJob.get(candidate.id)}
+                expanded={expandedJobIds.has(candidate.id)}
+                selected={candidate.id === selectedVideoJobId}
+                onSelect={videoPanel ? () => { setSelectedVideoJobId(candidate.id); setSelectedVideoWorkspaceId(""); } : undefined}
+                onToggleDetails={() => toggleJobDetails(candidate.id)}
+                onReusePrompt={() => reusePrompt(candidate)}
+                onRewardSubmitted={(submission) => setRewardSubmissions((current) => [submission, ...current.filter((item) => item.jobId !== submission.jobId)])}
+              />
+            ))}
             {videoPanel && videoChainItems.length ? <div className="dance-station-generation-list__section-label">Video chains</div> : null}
             {videoPanel ? videoChainItems.map((item) => (
               <VideoWorkspaceRow
@@ -2038,10 +2095,11 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                 }}
               />
             )) : null}
-            {visibleJobs.map((candidate) => (
+            {completedHistoryJobs.map((candidate) => (
               <RemoteGenerationRow
                 key={candidate.id}
                 job={candidate}
+                assemblingChain={assemblingChainJobIds.has(candidate.id)}
                 rewardSubmission={rewardSubmissionsByJob.get(candidate.id)}
                 expanded={expandedJobIds.has(candidate.id)}
                 selected={candidate.id === selectedVideoJobId}
@@ -2067,6 +2125,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
 function VideoWorkspaceRow({ item, selected, onSelect, onSelectContinuation }: { item: BrowserWorkspaceItem; selected: boolean; onSelect: () => void; onSelectContinuation?: () => void }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const optionsButtonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -2079,6 +2138,19 @@ function VideoWorkspaceRow({ item, selected, onSelect, onSelectContinuation }: {
     ? item.metadata.continuationVideo as { objectPath: string; publicUrl?: string; mimeType: string; sizeBytes: number; sha256: string }
     : undefined;
   const continuationUrl = continuation?.publicUrl ?? (continuation ? remoteVideoProxyUrl(continuation.objectPath) : undefined);
+  const continuationProxyUrl = continuation ? remoteVideoProxyUrl(continuation.objectPath) : undefined;
+
+  const downloadVideo = async (url: string | undefined, fileName: string, fallbackUrl?: string) => {
+    if (!url || downloadBusy) return;
+    setDownloadBusy(true);
+    try {
+      await downloadAsset(url, fileName, fallbackUrl);
+    } catch (error) {
+      console.error("[dance-station] video download failed", error);
+    } finally {
+      setDownloadBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -2150,8 +2222,8 @@ function VideoWorkspaceRow({ item, selected, onSelect, onSelectContinuation }: {
     {menuOpen && typeof document !== "undefined" ? createPortal(
       <div ref={menuRef} className="dance-station-generation-options-menu" role="menu" style={{ top: `${menuPosition.top}px`, right: `${menuPosition.right}px` }}>
         <button type="button" role="menuitem" onClick={() => { setExpanded((current) => !current); setMenuOpen(false); }}>{expanded ? "Hide prompt" : "Show prompt"}</button>
-        {downloadUrl ? <a role="menuitem" href={downloadUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download video chain</a> : null}
-        {continuationUrl ? <a role="menuitem" href={continuationUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download continuation video</a> : null}
+        {downloadUrl ? <button type="button" role="menuitem" disabled={downloadBusy} onClick={() => { setMenuOpen(false); void downloadVideo(source?.url ?? downloadUrl, `${item.title}.mp4`, source?.url === downloadUrl ? undefined : downloadUrl); }}><Download aria-hidden="true" size={14} strokeWidth={2} />{downloadBusy ? "Downloading..." : "Download video chain"}</button> : null}
+        {continuationUrl ? <button type="button" role="menuitem" disabled={downloadBusy} onClick={() => { setMenuOpen(false); void downloadVideo(continuationProxyUrl ?? continuationUrl, `${item.title} continuation.mp4`, continuationProxyUrl === continuationUrl ? undefined : continuationUrl); }}><Download aria-hidden="true" size={14} strokeWidth={2} />Download continuation video</button> : null}
       </div>,
       document.body,
     ) : null}
@@ -2278,6 +2350,7 @@ function VoiceChangeSourceField({
 
 function RemoteGenerationRow({
   job,
+  assemblingChain = false,
   rewardSubmission,
   expanded,
   selected = false,
@@ -2287,6 +2360,7 @@ function RemoteGenerationRow({
   onRewardSubmitted,
 }: {
   job: RemoteJob;
+  assemblingChain?: boolean;
   rewardSubmission?: RemoteRewardSubmission;
   expanded: boolean;
   selected?: boolean;
@@ -2312,8 +2386,11 @@ function RemoteGenerationRow({
   const waveformArtifact = job.artifacts.find((artifact) => artifact.role === "waveform" && artifact.publicUrl);
   const failed = ["failed", "cancelled", "expired"].includes(job.status);
   const complete = job.status === "succeeded";
-  const status = generationStatus(job);
-  const showStatusBadge = useStatusBadgeVisible(job);
+  const status = assemblingChain
+    ? { label: "Assembling chain", tone: "active" as const, spinning: true }
+    : generationStatus(job);
+  const completedStatusBadgeVisible = useStatusBadgeVisible(job);
+  const showStatusBadge = assemblingChain || completedStatusBadgeVisible;
   const prompt = generationPrompt(job);
   const detailsId = `generation-prompt-${job.id}`;
   const coverArtifact = job.artifacts.find((artifact) => artifact.role !== "waveform" && artifact.publicUrl && artifact.mimeType.startsWith("image/"));
@@ -2466,10 +2543,10 @@ function RemoteGenerationRow({
             {expanded ? "Hide prompt" : "Show prompt"}
           </button>
           {job.runtime === "ltx-video" && complete && videoArtifact?.publicUrl ? (
-            <a role="menuitem" href={videoArtifact.publicUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}>
+            <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); void downloadAsset(remoteVideoProxyUrl(videoArtifact.objectPath), `${generationTitle(job)}.mp4`, videoArtifact.publicUrl); }}>
               <Download aria-hidden="true" size={14} strokeWidth={2} />
               Download video
-            </a>
+            </button>
           ) : complete && audioArtifact?.publicUrl ? (
             <>
               <a role="menuitem" href={audioArtifact.publicUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}>

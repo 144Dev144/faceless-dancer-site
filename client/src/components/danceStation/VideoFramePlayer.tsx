@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ChevronLeft, ChevronRight, Download, Maximize2, Pause, Play, ScanLine } from "lucide-preact";
+import { downloadAsset } from "../../lib/downloadAsset";
 
 export interface VideoFramePlayerSource {
   id: string;
@@ -72,6 +73,7 @@ export function VideoFramePlayer({ source, disabled = false, onUseAsFirstFrame }
   const [controlsVisible, setControlsVisible] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
   const hideControlsTimeoutRef = useRef<number | null>(null);
 
@@ -244,6 +246,19 @@ export function VideoFramePlayer({ source, disabled = false, onUseAsFirstFrame }
     }
   };
 
+  const downloadVideo = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setError("");
+    try {
+      await downloadAsset(source.url, `${source.title}.mp4`, source.downloadUrl);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "The video could not be downloaded.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return <div className="dance-station-video-frame-player">
     <div ref={stageRef} className="dance-station-video-frame-player__stage" onPointerMove={revealPlaybackControls} onFocusCapture={revealPlaybackControls}>
       <video
@@ -305,9 +320,9 @@ export function VideoFramePlayer({ source, disabled = false, onUseAsFirstFrame }
         <ScanLine aria-hidden="true" size={17} strokeWidth={2} />
         {capturing ? "Capturing frame" : "Use as first frame"}
       </button>
-      <a className="dance-station-video-frame-player__action dance-station-video-preview__download" href={source.downloadUrl ?? source.url} download target="_blank" rel="noreferrer">
-        <Download aria-hidden="true" size={17} strokeWidth={2} />Download video
-      </a>
+      <button type="button" className="dance-station-video-frame-player__action dance-station-video-preview__download" onClick={() => void downloadVideo()} disabled={disabled || capturing || downloading}>
+        <Download aria-hidden="true" size={17} strokeWidth={2} />{downloading ? "Downloading..." : "Download video"}
+      </button>
     </div>
     {error ? <p className="dance-station-error" role="alert">{error}</p> : null}
   </div>;

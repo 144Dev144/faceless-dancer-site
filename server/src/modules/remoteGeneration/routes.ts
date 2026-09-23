@@ -137,14 +137,13 @@ function ltxLineageParent(job: RemoteJob): VideoChainParent | undefined {
   };
 }
 
-function ltxTemporalPrefix(job: RemoteJob): { overlapFrames: number; outputIncludesPrefix: boolean } | undefined {
+function ltxTemporalPrefix(job: RemoteJob): { conditioningPrefixFrames: number } | undefined {
   const raw = job.request.parameters.temporal_prefix ?? job.request.parameters.temporalPrefix;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const prefix = raw as Record<string, unknown>;
   const rawFrameCount = prefix.frame_count ?? prefix.frameCount;
   if (typeof rawFrameCount !== "number" || !Number.isInteger(rawFrameCount) || rawFrameCount < 1) return undefined;
-  const rawIncludesPrefix = prefix.output_includes_prefix ?? prefix.outputIncludesPrefix;
-  return { overlapFrames: rawFrameCount, outputIncludesPrefix: rawIncludesPrefix !== false };
+  return { conditioningPrefixFrames: rawFrameCount };
 }
 
 function chainResponseFromStoredAsset(asset: StoredRemoteVideoAsset) {
@@ -186,7 +185,7 @@ async function persistCompletedLtxJob(userId: string, job: RemoteJob): Promise<S
 
   const parent = ltxLineageParent(job);
   const prefix = ltxTemporalPrefix(job);
-  if (!parent || !prefix || prefix.overlapFrames < 1) return rawAsset;
+  if (!parent || !prefix || prefix.conditioningPrefixFrames < 1) return rawAsset;
   const existingChain = await findRemoteVideoAssetByJob({ ownerUserId: userId, jobId: job.id, assetKind: "video_chain" });
   if (existingChain) {
     const continuationVideo = {
@@ -224,8 +223,7 @@ async function persistCompletedLtxJob(userId: string, job: RemoteJob): Promise<S
       jobId: job.id,
       artifactObjectPath: artifact.objectPath,
       artifactId: artifact.id,
-      overlapFrames: prefix.overlapFrames,
-      outputIncludesPrefix: prefix.outputIncludesPrefix,
+      conditioningPrefixFrames: prefix.conditioningPrefixFrames,
     },
   });
   await upsertRemoteVideoChainAsset({
@@ -518,14 +516,12 @@ router.post("/video-chains", async (req, res, next) => {
     }
     const temporalPrefix = temporalPrefixValue as Record<string, unknown>;
     const rawOverlapFrames = temporalPrefix?.frame_count ?? temporalPrefix?.frameCount;
-    const overlapFrames = typeof rawOverlapFrames === "number" && Number.isInteger(rawOverlapFrames) && rawOverlapFrames > 0
+    const conditioningPrefixFrames = typeof rawOverlapFrames === "number" && Number.isInteger(rawOverlapFrames) && rawOverlapFrames > 0
       ? rawOverlapFrames
       : 0;
-    if (overlapFrames < 1) {
+    if (conditioningPrefixFrames < 1) {
       return res.status(422).json({ error: "The appended video job contains an invalid temporal-prefix frame count." });
     }
-    const rawIncludesPrefix = temporalPrefix?.output_includes_prefix ?? temporalPrefix?.outputIncludesPrefix;
-    const outputIncludesPrefix = temporalPrefix ? rawIncludesPrefix !== false : false;
 
     const rawAsset = await upsertRemoteVideoGenerationAsset({
       ownerUserId: req.session!.userId,
@@ -541,7 +537,7 @@ router.post("/video-chains", async (req, res, next) => {
       title: parsed.title || `${rawAsset.title} chain`,
       frameRate: parsed.frameRate,
       parent: canonicalParent,
-      append: { ...parsed.append, overlapFrames, outputIncludesPrefix },
+      append: { ...parsed.append, conditioningPrefixFrames },
     });
     await upsertRemoteVideoChainAsset({
       ownerUserId: req.session!.userId,
