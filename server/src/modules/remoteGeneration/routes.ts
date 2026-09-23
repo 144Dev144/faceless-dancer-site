@@ -7,8 +7,10 @@ import { requireAuth } from "../../middleware/auth.js";
 import { env } from "../../config/env.js";
 import { createId } from "../../utils/crypto.js";
 import { buildObjectPath, downloadFromBunny, uploadBufferToBunny } from "../storage/bunnyStorage.js";
-import { LaunchServerRequestError, launchServerClient } from "./client.js";
-import { appealRewardSubmissionRequestSchema, createJobRequestSchema, createRewardSubmissionRequestSchema, remoteGenerationPrioritySchema, remoteGenerationRequestSchema, verifyPaymentRequestSchema } from "./schemas.js";
+import { LaunchServerRequestError, launchServerClient, type RemoteJob } from "./client.js";
+import { appealRewardSubmissionRequestSchema, createJobRequestSchema, createRewardSubmissionRequestSchema, createVideoChainRequestSchema, remoteGenerationPrioritySchema, remoteGenerationRequestSchema, verifyPaymentRequestSchema } from "./schemas.js";
+import { createVideoChain, type VideoChainParent } from "./videoChainService.js";
+import { findRemoteVideoAssetByJob, findRemoteVideoChainById, listRemoteVideoAssets, upsertRemoteVideoChainAsset, upsertRemoteVideoGenerationAsset, type StoredRemoteVideoAsset } from "./videoAssetStore.js";
 
 const router = Router();
 const sourceUpload = multer({
@@ -38,6 +40,8 @@ const supportedAudioMimeAliases = new Set([
 const supportedAudioExtensions = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"]);
 const supportedVideoMimeAliases = new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-matroska", "video/ogg"]);
 const supportedVideoExtensions = new Set([".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi"]);
+const supportedImageMimeAliases = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+const supportedImageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const browserFallbackMimeTypes = new Set(["", "application/octet-stream", "binary/octet-stream"]);
 const avatarSourceUpload = multer({
   storage: multer.memoryStorage(),
@@ -58,7 +62,8 @@ function isSupportedSourceUpload(file: Express.Multer.File): boolean {
   if (isSupportedAudioUpload(file)) return true;
   const mimeType = String(file.mimetype || "").trim().toLowerCase();
   const extension = path.extname(file.originalname || "").toLowerCase();
-  return supportedVideoMimeAliases.has(mimeType) || (browserFallbackMimeTypes.has(mimeType) && supportedVideoExtensions.has(extension));
+  if (supportedVideoMimeAliases.has(mimeType) || (browserFallbackMimeTypes.has(mimeType) && supportedVideoExtensions.has(extension))) return true;
+  return supportedImageMimeAliases.has(mimeType) || (browserFallbackMimeTypes.has(mimeType) && supportedImageExtensions.has(extension));
 }
 
 function safeSourceFileName(name: string): string {
@@ -76,7 +81,7 @@ function isSupportedAvatarSource(file: Express.Multer.File, role: string): boole
 }
 
 function isRemoteGenerationObjectPath(objectPath: string): boolean {
-  return /^remote-generation(?:-[A-Za-z0-9-]+)?\/jobs\/[A-Za-z0-9-]+\/[^/]+(?:\/[^/]+)*$/.test(objectPath)
+  return /^remote-generation(?:-[A-Za-z0-9-]+)?\/(?:jobs\/[A-Za-z0-9-]+|chains\/[A-Za-z0-9-]+\/[A-Za-z0-9-]+)\/[^/]+(?:\/[^/]+)*$/.test(objectPath)
     && !objectPath.includes("..")
     && !objectPath.includes("\\");
 }
@@ -103,6 +108,113 @@ function respondRemoteGenerationError(error: unknown, res: Response, fallback: s
 
   console.error("[remote-generation] request failed", error);
   res.status(503).json({ error: fallback, code: "REMOTE_GENERATION_UNAVAILABLE" });
+}
+
+function completedLtxVideoArtifact(job: RemoteJob) {
+  if (job.status !== "succeeded") return undefined;
+  return job.artifacts.find((artifact) => artifact.role === "preview" && artifact.mimeType.startsWith("video/"))
+    ?? job.artifacts.find((artifact) => artifact.mimeType.startsWith("video/"));
+}
+
+function ltxLineageParent(job: RemoteJob): VideoChainParent | undefined {
+  const rawLineage = job.request.metadata?.videoLineage ?? job.request.parameters.video_lineage;
+  if (!rawLineage || typeof rawLineage !== "object" || Array.isArray(rawLineage)) return undefined;
+  const lineage = rawLineage as Record<string, unknown>;
+  if (lineage.kind !== "create-from-frame" || !lineage.parent || typeof lineage.parent !== "object" || Array.isArray(lineage.parent)) return undefined;
+  const rawParent = lineage.parent as Record<string, unknown>;
+  if (rawParent.sourceType !== "job" && rawParent.sourceType !== "chain") return undefined;
+  if (typeof rawParent.sourceArtifactObjectPath !== "string" || typeof rawParent.frameIndex !== "number" || typeof rawParent.timeSeconds !== "number" || typeof rawParent.frameRate !== "number") return undefined;
+  return {
+    sourceType: rawParent.sourceType,
+    sourceJobId: typeof rawParent.sourceJobId === "string" ? rawParent.sourceJobId : undefined,
+    sourceChainId: typeof rawParent.sourceChainId === "string" ? rawParent.sourceChainId : undefined,
+    sourceArtifactObjectPath: rawParent.sourceArtifactObjectPath,
+    sourceArtifactId: typeof rawParent.sourceArtifactId === "string" ? rawParent.sourceArtifactId : undefined,
+    sourceUrl: typeof rawParent.sourceUrl === "string" ? rawParent.sourceUrl : undefined,
+    frameIndex: rawParent.frameIndex,
+    timeSeconds: rawParent.timeSeconds,
+    frameRate: rawParent.frameRate,
+  };
+}
+
+function ltxTemporalPrefix(job: RemoteJob): { overlapFrames: number; outputIncludesPrefix: boolean } | undefined {
+  const raw = job.request.parameters.temporal_prefix ?? job.request.parameters.temporalPrefix;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const prefix = raw as Record<string, unknown>;
+  const rawFrameCount = prefix.frame_count ?? prefix.frameCount;
+  if (typeof rawFrameCount !== "number" || !Number.isInteger(rawFrameCount) || rawFrameCount < 1) return undefined;
+  const rawIncludesPrefix = prefix.output_includes_prefix ?? prefix.outputIncludesPrefix;
+  return { overlapFrames: rawFrameCount, outputIncludesPrefix: rawIncludesPrefix !== false };
+}
+
+function chainResponseFromStoredAsset(asset: StoredRemoteVideoAsset) {
+  const metadata = asset.metadata;
+  return {
+    chainId: asset.chainId!,
+    title: asset.title,
+    objectPath: asset.objectPath,
+    publicUrl: asset.publicUrl,
+    proxyUrl: asset.proxyUrl ?? `/api/remote-generation/assets/file?path=${encodeURIComponent(asset.objectPath)}`,
+    manifestObjectPath: asset.manifestObjectPath!,
+    manifestPublicUrl: asset.manifestPublicUrl!,
+    mimeType: asset.mimeType,
+    sizeBytes: asset.sizeBytes,
+    sha256: asset.sha256,
+    durationSeconds: asset.durationSeconds ?? 0,
+    frameRate: asset.frameRate ?? 0,
+    audioPreserved: metadata.audioPreserved === true,
+    segments: Array.isArray(metadata.segments) ? metadata.segments : [],
+  };
+}
+
+async function persistCompletedLtxJob(userId: string, job: RemoteJob): Promise<StoredRemoteVideoAsset | null> {
+  const artifact = completedLtxVideoArtifact(job);
+  if (!artifact) return null;
+
+  const lineage = job.request.metadata?.videoLineage ?? job.request.parameters.video_lineage;
+  const duration = typeof job.request.parameters.duration_seconds === "number" ? job.request.parameters.duration_seconds : undefined;
+  const frameRate = typeof job.request.parameters.frame_rate === "number" ? job.request.parameters.frame_rate : undefined;
+  const rawAsset = await upsertRemoteVideoGenerationAsset({
+    ownerUserId: userId,
+    job,
+    artifact,
+    title: typeof job.request.metadata?.title === "string" ? job.request.metadata.title : `Video ${job.id.slice(0, 8)}`,
+    durationSeconds: duration,
+    frameRate,
+    lineage: lineage && typeof lineage === "object" && !Array.isArray(lineage) ? lineage as Record<string, unknown> : undefined,
+  });
+
+  const parent = ltxLineageParent(job);
+  const prefix = ltxTemporalPrefix(job);
+  if (!parent || !prefix || prefix.overlapFrames < 1) return rawAsset;
+  const existingChain = await findRemoteVideoAssetByJob({ ownerUserId: userId, jobId: job.id, assetKind: "video_chain" });
+  if (existingChain) return rawAsset;
+
+  if (parent.sourceType === "job") {
+    const sourceJob = await launchServerClient.getJob(parent.sourceJobId!);
+    if (sourceJob.userId !== userId) throw new Error("The video lineage source belongs to another user.");
+    const sourceArtifact = sourceJob.artifacts.find((candidate) => candidate.objectPath === parent.sourceArtifactObjectPath && candidate.mimeType.startsWith("video/"));
+    if (!sourceArtifact) throw new Error("The video lineage source artifact is no longer available.");
+  } else {
+    const sourceChain = await findRemoteVideoChainById({ ownerUserId: userId, chainId: parent.sourceChainId! });
+    if (!sourceChain || sourceChain.objectPath !== parent.sourceArtifactObjectPath) throw new Error("The video lineage source chain is no longer available.");
+  }
+
+  const chain = await createVideoChain({
+    userId,
+    title: `${rawAsset.title} chain`,
+    frameRate: parent.frameRate,
+    parent,
+    append: {
+      jobId: job.id,
+      artifactObjectPath: artifact.objectPath,
+      artifactId: artifact.id,
+      overlapFrames: prefix.overlapFrames,
+      outputIncludesPrefix: prefix.outputIncludesPrefix,
+    },
+  });
+  await upsertRemoteVideoChainAsset({ ownerUserId: userId, appendJobId: job.id, title: chain.title, parent, chain });
+  return rawAsset;
 }
 
 router.get("/assets/audio", async (req, res) => {
@@ -211,14 +323,14 @@ router.get("/assets/chart", async (req, res) => {
 router.post("/sources", sourceUpload.single("file"), async (req, res, next) => {
   if (!requireEnabled(res)) return;
   try {
-    if (!req.file) return res.status(400).json({ error: "Choose an audio or video file first" });
+    if (!req.file) return res.status(400).json({ error: "Choose an audio, video, or image file first" });
     if (!isSupportedSourceUpload(req.file)) {
       console.warn("[remote-generation] rejected source upload", {
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
         extension: path.extname(req.file.originalname || "").toLowerCase(),
       });
-      return res.status(400).json({ error: "Only supported audio and video files can be uploaded" });
+      return res.status(400).json({ error: "Only supported audio, video, and image files can be uploaded" });
     }
 
     const sourceId = createId();
@@ -331,6 +443,101 @@ router.post("/jobs", async (req, res, next) => {
     return res.status(201).json(job);
   } catch (error) {
     return respondRemoteGenerationError(error, res, "Your generation could not be queued. Please try again shortly.");
+  }
+});
+
+router.post("/video-chains", async (req, res, next) => {
+  if (!requireEnabled(res)) return;
+  try {
+    const parsed = createVideoChainRequestSchema.parse(req.body);
+    const parent = parsed.parent;
+    if (parent.sourceType === "job") {
+      const sourceJob = await launchServerClient.getJob(parent.sourceJobId!);
+      if (sourceJob.userId !== req.session!.userId) return res.status(404).json({ error: "Source video not found" });
+      const sourceArtifact = sourceJob.artifacts.find((artifact) => artifact.objectPath === parent.sourceArtifactObjectPath && artifact.mimeType.startsWith("video/"));
+      if (!sourceArtifact) return res.status(404).json({ error: "Source video artifact not found" });
+    } else if (!isRemoteGenerationObjectPath(parent.sourceArtifactObjectPath)
+      || !parent.sourceArtifactObjectPath.startsWith(`remote-generation/chains/${req.session!.userId}/${parent.sourceChainId}/`)) {
+      return res.status(404).json({ error: "Source video chain not found" });
+    }
+
+    const appendJob = await launchServerClient.getJob(parsed.append.jobId);
+    if (appendJob.userId !== req.session!.userId) return res.status(404).json({ error: "Appended video not found" });
+    const appendArtifact = appendJob.artifacts.find((artifact) => artifact.objectPath === parsed.append.artifactObjectPath && artifact.mimeType.startsWith("video/"));
+    if (!appendArtifact) return res.status(404).json({ error: "Appended video artifact not found" });
+
+    const existingChain = await findRemoteVideoAssetByJob({ ownerUserId: req.session!.userId, jobId: appendJob.id, assetKind: "video_chain" });
+    if (existingChain) return res.status(200).json(chainResponseFromStoredAsset(existingChain));
+
+    const appendParameters = appendJob.request.parameters as Record<string, unknown>;
+    const rawLineage = appendJob.request.metadata?.videoLineage ?? appendParameters.video_lineage;
+    if (!rawLineage || typeof rawLineage !== "object" || Array.isArray(rawLineage)) {
+      return res.status(422).json({ error: "The appended video job has no video lineage; the source video was not submitted for temporal continuation." });
+    }
+    const canonicalParent = ltxLineageParent(appendJob);
+    if (!canonicalParent
+      || canonicalParent.sourceType !== parent.sourceType
+      || canonicalParent.sourceJobId !== parent.sourceJobId
+      || canonicalParent.sourceChainId !== parent.sourceChainId
+      || canonicalParent.sourceArtifactObjectPath !== parent.sourceArtifactObjectPath
+      || canonicalParent.frameIndex !== parent.frameIndex) {
+      return res.status(422).json({ error: "The appended video job lineage does not match the requested source frame." });
+    }
+    const temporalPrefixValue = appendParameters.temporal_prefix ?? appendParameters.temporalPrefix;
+    if (!temporalPrefixValue || typeof temporalPrefixValue !== "object" || Array.isArray(temporalPrefixValue)) {
+      return res.status(422).json({ error: "The appended video job has no temporal prefix; the source video was not submitted to the worker." });
+    }
+    const temporalPrefix = temporalPrefixValue as Record<string, unknown>;
+    const rawOverlapFrames = temporalPrefix?.frame_count ?? temporalPrefix?.frameCount;
+    const overlapFrames = typeof rawOverlapFrames === "number" && Number.isInteger(rawOverlapFrames) && rawOverlapFrames > 0
+      ? rawOverlapFrames
+      : 0;
+    if (overlapFrames < 1) {
+      return res.status(422).json({ error: "The appended video job contains an invalid temporal-prefix frame count." });
+    }
+    const rawIncludesPrefix = temporalPrefix?.output_includes_prefix ?? temporalPrefix?.outputIncludesPrefix;
+    const outputIncludesPrefix = temporalPrefix ? rawIncludesPrefix !== false : false;
+
+    const rawAsset = await upsertRemoteVideoGenerationAsset({
+      ownerUserId: req.session!.userId,
+      job: appendJob,
+      artifact: appendArtifact,
+      title: typeof appendJob.request.metadata?.title === "string" ? appendJob.request.metadata.title : parsed.title.replace(/\s+chain$/i, ""),
+      durationSeconds: typeof appendJob.request.parameters.duration_seconds === "number" ? appendJob.request.parameters.duration_seconds : undefined,
+      frameRate: typeof appendJob.request.parameters.frame_rate === "number" ? appendJob.request.parameters.frame_rate : undefined,
+      lineage: rawLineage as Record<string, unknown>,
+    });
+    const chain = await createVideoChain({
+      userId: req.session!.userId,
+      title: parsed.title || `${rawAsset.title} chain`,
+      frameRate: parsed.frameRate,
+      parent: canonicalParent,
+      append: { ...parsed.append, overlapFrames, outputIncludesPrefix },
+    });
+    await upsertRemoteVideoChainAsset({ ownerUserId: req.session!.userId, appendJobId: appendJob.id, title: chain.title, parent: canonicalParent, chain });
+    return res.status(201).json(chain);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/video-assets", async (req, res, next) => {
+  if (!requireEnabled(res)) return;
+  try {
+    const page = await launchServerClient.listJobs(req.session!.userId, { limit: 50, runtime: "ltx-video" });
+    const completedJobs = page.jobs
+      .filter((job) => job.status === "succeeded")
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    for (const job of completedJobs) {
+      try {
+        await persistCompletedLtxJob(req.session!.userId, job);
+      } catch (error) {
+        console.error("[remote-generation] persisted video asset recovery failed", { jobId: job.id, error });
+      }
+    }
+    return res.json({ assets: await listRemoteVideoAssets(req.session!.userId) });
+  } catch (error) {
+    return next(error);
   }
 });
 

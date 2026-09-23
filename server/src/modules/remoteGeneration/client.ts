@@ -15,6 +15,20 @@ export type RemotePaymentCurrency = "FACELESS" | "SOL";
 export interface RemoteGenerationMetadata {
   title: string;
   reanalysisOfJobId?: string;
+  videoLineage?: {
+    kind: "create-from-frame";
+    parent: {
+      sourceType: "job" | "chain";
+      sourceJobId?: string;
+      sourceChainId?: string;
+      sourceArtifactObjectPath: string;
+      sourceArtifactId?: string;
+      sourceUrl?: string;
+      frameIndex: number;
+      timeSeconds: number;
+      frameRate: number;
+    };
+  };
 }
 
 export interface RemoteGenerationRequest {

@@ -114,11 +114,81 @@ export interface RemoteGenerationInput {
   durationSeconds?: number;
 }
 
+export interface RemoteVideoFrameLineage {
+  sourceType: "job" | "chain";
+  sourceJobId?: string;
+  sourceChainId?: string;
+  sourceArtifactObjectPath: string;
+  sourceArtifactId?: string;
+  sourceUrl?: string;
+  frameIndex: number;
+  timeSeconds: number;
+  frameRate: number;
+  aspectRatio?: "16:9" | "9:16" | "1:1";
+}
+
+export interface RemoteVideoLineage {
+  kind: "create-from-frame";
+  parent: RemoteVideoFrameLineage;
+}
+
+export interface RemoteVideoChainSegment {
+  sourceType: "job" | "chain";
+  sourceJobId?: string;
+  sourceChainId?: string;
+  objectPath: string;
+  startSeconds: number;
+  endSeconds?: number;
+  frameRate: number;
+}
+
+export interface RemoteVideoChain {
+  chainId: string;
+  title: string;
+  objectPath: string;
+  publicUrl: string;
+  proxyUrl: string;
+  manifestObjectPath: string;
+  manifestPublicUrl: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  durationSeconds: number;
+  frameRate: number;
+  audioPreserved: boolean;
+  segments: RemoteVideoChainSegment[];
+}
+
+export interface RemoteVideoAsset {
+  id: string;
+  ownerUserId: string;
+  assetKind: "video_generation" | "video_chain";
+  jobId: string;
+  chainId?: string;
+  parentJobId?: string;
+  parentChainId?: string;
+  title: string;
+  objectPath: string;
+  publicUrl: string;
+  proxyUrl?: string;
+  manifestObjectPath?: string;
+  manifestPublicUrl?: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  durationSeconds?: number;
+  frameRate?: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type RemotePaymentCurrency = "FACELESS" | "SOL";
 
 export interface RemoteGenerationMetadata {
   title: string;
   reanalysisOfJobId?: string;
+  videoLineage?: RemoteVideoLineage;
 }
 
 export interface RemoteGenerationRequest {
@@ -663,6 +733,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ paymentIntentId, request }),
     }),
+
+  createRemoteVideoChain: (input: {
+    title: string;
+    frameRate: number;
+    parent: RemoteVideoFrameLineage;
+    append: { jobId: string; artifactObjectPath: string; artifactId?: string };
+  }) => apiFetch<RemoteVideoChain>("/remote-generation/video-chains", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }),
+
+  remoteVideoAssets: () => apiFetch<{ assets: RemoteVideoAsset[] }>("/remote-generation/video-assets", {
+    cache: "no-store",
+    headers: { "Cache-Control": "no-cache" },
+  }),
 
   remoteJob: (jobId: string) => {
     const controller = new AbortController();

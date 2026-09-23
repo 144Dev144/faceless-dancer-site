@@ -365,6 +365,115 @@ export function createRemoteGenerativeDanceWorkspaceItem(input: {
   };
 }
 
+export function createRemoteVideoWorkspaceItem(input: {
+  jobId: string;
+  title: string;
+  publicUrl: string;
+  objectPath: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  durationSeconds?: number;
+  frameRate?: number;
+  aspectRatio?: "16:9" | "9:16" | "1:1";
+  videoLineage?: unknown;
+  createdAt: string;
+  updatedAt: string;
+}): BrowserWorkspaceItem {
+  const fileExtension = input.objectPath.match(/\.[a-z0-9]+$/i)?.[0] ?? ".mp4";
+  return {
+    id: `remote-video-generation-${input.jobId}`,
+    title: input.title,
+    kind: "video_generation",
+    source: "private",
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+    metadata: {
+      storage: "remote-cdn",
+      sourceTool: "ltx-video",
+      videoAssetKind: "generation",
+      remoteJobId: input.jobId,
+      publicUrl: input.publicUrl,
+      objectPath: input.objectPath,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      sha256: input.sha256,
+      durationSeconds: input.durationSeconds,
+      frameRate: input.frameRate,
+      aspectRatio: input.aspectRatio,
+      videoLineage: input.videoLineage,
+      files: [{
+        role: "video",
+        fileName: `${input.title}${fileExtension}`,
+        objectPath: input.objectPath,
+        publicUrl: `/api/remote-generation/assets/file?path=${encodeURIComponent(input.objectPath)}`,
+        sourcePublicUrl: input.publicUrl,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        sha256: input.sha256,
+      }],
+    },
+  };
+}
+
+export function createRemoteVideoChainWorkspaceItem(input: {
+  chainId: string;
+  appendJobId?: string;
+  title: string;
+  publicUrl: string;
+  proxyUrl: string;
+  objectPath: string;
+  manifestObjectPath: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  durationSeconds: number;
+  frameRate: number;
+  aspectRatio?: "16:9" | "9:16" | "1:1";
+  audioPreserved: boolean;
+  segments: unknown;
+  createdAt: string;
+  updatedAt: string;
+}): BrowserWorkspaceItem {
+  return {
+    id: `remote-video-chain-${input.chainId}`,
+    title: input.title,
+    kind: "video_chain",
+    source: "private",
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+    metadata: {
+      storage: "remote-cdn",
+      sourceTool: "ltx-video",
+      videoAssetKind: "chain",
+      chainId: input.chainId,
+      appendJobId: input.appendJobId,
+      publicUrl: input.publicUrl,
+      proxyUrl: input.proxyUrl,
+      objectPath: input.objectPath,
+      manifestObjectPath: input.manifestObjectPath,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      sha256: input.sha256,
+      durationSeconds: input.durationSeconds,
+      frameRate: input.frameRate,
+      aspectRatio: input.aspectRatio,
+      audioPreserved: input.audioPreserved,
+      segments: input.segments,
+      files: [{
+        role: "video-chain",
+        fileName: `${input.title}.mp4`,
+        objectPath: input.objectPath,
+        publicUrl: input.proxyUrl,
+        sourcePublicUrl: input.publicUrl,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        sha256: input.sha256,
+      }],
+    },
+  };
+}
+
 export function normalizeRemoteAvatarMetadata(
   metadata: Record<string, unknown> | undefined,
   files: Array<Record<string, unknown>>,

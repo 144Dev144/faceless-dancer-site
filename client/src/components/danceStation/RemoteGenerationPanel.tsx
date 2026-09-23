@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { createPortal } from "preact/compat";
-import { AudioWaveform, CalendarDays, CheckCircle2, CircleAlert, Clock3, Download, Film, ImagePlus, Info, MoreHorizontal, Music2, Play, RefreshCw, RotateCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, Video, X } from "lucide-preact";
+import { AudioWaveform, CalendarDays, CheckCircle2, CircleAlert, Clock3, Download, Film, ImagePlus, Info, Link2, MoreHorizontal, Music2, Play, RefreshCw, RotateCcw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, Video, X } from "lucide-preact";
 import {
   api,
   type RemoteGenerationHealth,
@@ -12,18 +12,22 @@ import {
   type RemotePricingConfig,
   type RemotePricingQuote,
   type RemoteRewardSubmission,
+  type RemoteVideoFrameLineage,
+  type RemoteVideoAsset,
+  type RemoteVideoLineage,
 } from "../../lib/api";
 import { fetchFaceLESSWalletBalance, fetchSolWalletBalance, type FaceLESSWalletBalance } from "../../lib/facelessBalance";
 import { sendRemoteGenerationPayment, sendRemoteGenerationSolPayment, signRemoteGenerationPayment } from "../../lib/remoteGenerationPayment";
 import { calculateRemotePricing, createFreeMarketPrice, fetchOnChainMarketPrice, holderFreeForRequest, type RemoteMarketPrice } from "../../lib/remoteGenerationPricing";
 import { fallbackGenerationCoverUrl } from "../../lib/remoteGenerationCoverArt";
-import { createRemoteAudioWorkspaceItem, listWorkspaceItems, saveWorkspaceItem } from "../../lib/danceStationWorkspace";
+import { createRemoteAudioWorkspaceItem, createRemoteVideoChainWorkspaceItem, createRemoteVideoWorkspaceItem, listWorkspaceItems, saveWorkspaceItem } from "../../lib/danceStationWorkspace";
 import type { BrowserWorkspaceItem } from "../../lib/danceStationWorkspace";
 import type { LibraryItem } from "../../lib/api";
 import type { SessionState } from "../../hooks/useSession";
 import { AudioPlayButton } from "../audio/SiteAudioPlayer";
 import { WaveformVisual } from "../audio/WaveformVisual";
 import { TransitionWorkspace, type TransitionAudioChoice, type TransitionWorkspaceValue } from "./TransitionWorkspace";
+import { VideoFramePlayer, type VideoFrameSelectionResult } from "./VideoFramePlayer";
 
 interface Props {
   mode?: GenerationMode;
@@ -65,6 +69,78 @@ interface VideoFrameSelection {
   input: RemoteGenerationInput;
   fileName: string;
   previewUrl: string;
+}
+
+interface VideoWorkspaceSource {
+  id: string;
+  title: string;
+  url: string;
+  downloadUrl?: string;
+  frameRate: number;
+  durationSeconds?: number;
+  aspectRatio?: (typeof LTX_VIDEO_ASPECTS)[number];
+  lineage: RemoteVideoFrameLineage;
+}
+
+function videoAspectRatioFromValue(value: unknown): (typeof LTX_VIDEO_ASPECTS)[number] | undefined {
+  return typeof value === "string" && (LTX_VIDEO_ASPECTS as readonly string[]).includes(value)
+    ? value as (typeof LTX_VIDEO_ASPECTS)[number]
+    : undefined;
+}
+
+function videoAspectRatioFromJob(job: RemoteJob): (typeof LTX_VIDEO_ASPECTS)[number] | undefined {
+  return videoAspectRatioFromValue(job.request.parameters.aspect_ratio);
+}
+
+function videoLineageFromJob(job: RemoteJob): RemoteVideoLineage | undefined {
+  if (job.request.metadata?.videoLineage) return job.request.metadata.videoLineage;
+  const candidate = job.request.parameters.video_lineage;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined;
+  const value = candidate as Record<string, unknown>;
+  if (value.kind !== "create-from-frame" || !value.parent || typeof value.parent !== "object" || Array.isArray(value.parent)) return undefined;
+  const parent = value.parent as Record<string, unknown>;
+  if (parent.sourceType !== "job" && parent.sourceType !== "chain") return undefined;
+  if (typeof parent.sourceArtifactObjectPath !== "string" || typeof parent.frameIndex !== "number" || typeof parent.timeSeconds !== "number" || typeof parent.frameRate !== "number") return undefined;
+  return candidate as RemoteVideoLineage;
+}
+
+function remoteVideoProxyUrl(objectPath: string): string {
+  return `/api/remote-generation/assets/file?path=${encodeURIComponent(objectPath)}`;
+}
+
+function workspaceVideoSource(item: BrowserWorkspaceItem): VideoWorkspaceSource | null {
+  if (item.kind !== "video_chain" && item.kind !== "video_generation") return null;
+  const metadata = item.metadata;
+  const objectPath = typeof metadata.objectPath === "string" ? metadata.objectPath : "";
+  if (!objectPath) return null;
+  const sourceType = item.kind === "video_chain" ? "chain" : "job";
+  const sourceJobId = typeof metadata.remoteJobId === "string" ? metadata.remoteJobId : undefined;
+  const sourceChainId = typeof metadata.chainId === "string" ? metadata.chainId : undefined;
+  if (sourceType === "job" && !sourceJobId || sourceType === "chain" && !sourceChainId) return null;
+  const aspectRatio = videoAspectRatioFromValue(metadata.aspectRatio)
+    ?? (metadata.videoLineage && typeof metadata.videoLineage === "object" && !Array.isArray(metadata.videoLineage)
+      ? videoAspectRatioFromValue((metadata.videoLineage as Record<string, unknown>).parent && typeof (metadata.videoLineage as Record<string, unknown>).parent === "object" ? ((metadata.videoLineage as Record<string, unknown>).parent as Record<string, unknown>).aspectRatio : undefined)
+      : undefined);
+  return {
+    id: item.id,
+    title: item.title,
+    url: typeof metadata.proxyUrl === "string" ? metadata.proxyUrl : remoteVideoProxyUrl(objectPath),
+    downloadUrl: typeof metadata.publicUrl === "string" ? metadata.publicUrl : undefined,
+    frameRate: typeof metadata.frameRate === "number" && metadata.frameRate > 0 ? metadata.frameRate : LTX_VIDEO_FRAME_RATE,
+    durationSeconds: typeof metadata.durationSeconds === "number" ? metadata.durationSeconds : undefined,
+    aspectRatio,
+    lineage: {
+      sourceType,
+      ...(sourceJobId ? { sourceJobId } : {}),
+      ...(sourceChainId ? { sourceChainId } : {}),
+      sourceArtifactObjectPath: objectPath,
+      ...(typeof metadata.publicUrl === "string" ? { sourceUrl: metadata.publicUrl } : {}),
+      frameIndex: 0,
+      timeSeconds: 0,
+      frameRate: typeof metadata.frameRate === "number" && metadata.frameRate > 0 ? metadata.frameRate : LTX_VIDEO_FRAME_RATE,
+      ...(aspectRatio ? { aspectRatio } : {}),
+    },
+  };
 }
 
 interface RemoteGenerationErrorBody {
@@ -349,6 +425,24 @@ function ltxFrameIndexAtTime(timeSeconds: number, durationSeconds: number): numb
   return Math.max(0, Math.min(frameCount - 1, Math.round(timeSeconds * LTX_VIDEO_FRAME_RATE)));
 }
 
+function ltxTemporalPrefixForLineage(lineage: RemoteVideoFrameLineage | undefined, outputFrameCount: number) {
+  if (!lineage?.sourceUrl) return undefined;
+  const availableFrames = lineage.frameIndex + 1;
+  const largestValidPrefix = 8 * Math.floor((availableFrames - 1) / 8) + 1;
+  const frameCount = Math.min(25, largestValidPrefix);
+  if (frameCount < 9 || frameCount >= outputFrameCount) return undefined;
+  return {
+    source_url: lineage.sourceUrl,
+    filename: "temporal-prefix.mp4",
+    start_frame: lineage.frameIndex - frameCount + 1,
+    frame_count: frameCount,
+    source_frame_rate: lineage.frameRate,
+    strength: 1,
+    mode: "prefix",
+    output_includes_prefix: true,
+  };
+}
+
 function mergeJobs(current: RemoteJob[], incoming: RemoteJob[]): RemoteJob[] {
   const jobs = new Map(current.map((job) => [job.id, job]));
   incoming.forEach((job) => jobs.set(job.id, job));
@@ -407,9 +501,11 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   const [videoPrompt, setVideoPrompt] = useState("");
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(4);
   const [videoAspectRatio, setVideoAspectRatio] = useState<(typeof LTX_VIDEO_ASPECTS)[number]>("16:9");
-  const [videoAudioMode, setVideoAudioMode] = useState<"off" | "generated">("off");
+  const [videoAspectRatioLocked, setVideoAspectRatioLocked] = useState(false);
+  const [videoAudioMode, setVideoAudioMode] = useState<"off" | "generated">("generated");
   const [videoIntermediateTime, setVideoIntermediateTime] = useState(2);
   const [videoFrames, setVideoFrames] = useState<Partial<Record<VideoFrameSlot, VideoFrameSelection>>>({});
+  const [videoFrameLineage, setVideoFrameLineage] = useState<RemoteVideoLineage | undefined>();
   const [videoFrameBusy, setVideoFrameBusy] = useState<VideoFrameSlot | "">("");
   const [videoFrameError, setVideoFrameError] = useState("");
   const [extractionTrack, setExtractionTrack] = useState<(typeof extractionTracks)[number]>("vocals");
@@ -423,7 +519,9 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   const [walletBalanceRefreshKey, setWalletBalanceRefreshKey] = useState(0);
   const [, setPaymentIntent] = useState<RemotePaymentIntent | null>(null);
   const [jobs, setJobs] = useState<RemoteJob[]>([]);
+  const [persistedVideoAssets, setPersistedVideoAssets] = useState<RemoteVideoAsset[]>([]);
   const [selectedVideoJobId, setSelectedVideoJobId] = useState("");
+  const [selectedVideoWorkspaceId, setSelectedVideoWorkspaceId] = useState("");
   const [historyCursor, setHistoryCursor] = useState<string | undefined>();
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [rewardSubmissions, setRewardSubmissions] = useState<RemoteRewardSubmission[]>([]);
@@ -440,6 +538,11 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   const [expandedJobIds, setExpandedJobIds] = useState<Set<string>>(new Set());
   const savedRemoteJobsRef = useRef<Set<string>>(new Set());
   const savingRemoteJobsRef = useRef<Set<string>>(new Set());
+  const savedVideoJobsRef = useRef<Set<string>>(new Set());
+  const savingVideoJobsRef = useRef<Set<string>>(new Set());
+  const exportedVideoChainsRef = useRef<Set<string>>(new Set());
+  const exportingVideoChainsRef = useRef<Set<string>>(new Set());
+  const videoAspectRatioBeforeFrameRef = useRef<(typeof LTX_VIDEO_ASPECTS)[number] | undefined>();
   const jobsRef = useRef<RemoteJob[]>([]);
   const historyInitializedRef = useRef(false);
   const historyUserRef = useRef<string | undefined>();
@@ -452,6 +555,24 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   const generationCount = videoPanel ? jobs.filter((job) => job.runtime === "ltx-video").length : jobs.length;
   const defaultTitle = `${videoPanel ? "Video" : "Song"} ${generationCount + 1}`;
   const resolvedTitle = title.trim() || defaultTitle;
+
+  useEffect(() => {
+    if (!videoPanel || !session.authenticated) {
+      setPersistedVideoAssets([]);
+      return;
+    }
+    let cancelled = false;
+    void api.remoteVideoAssets()
+      .then(({ assets }) => {
+        if (!cancelled) setPersistedVideoAssets(assets);
+      })
+      .catch((nextError) => {
+        if (!cancelled) console.warn("[remote-generation] persisted video assets unavailable", nextError);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.authenticated, session.publicKey, videoPanel]);
 
   const lokrChoices = useMemo(() => {
     const choices = workspaceItems
@@ -550,11 +671,11 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
     setVideoIntermediateTime((current) => Math.max(0, Math.min(videoDurationSeconds, current)));
   }, [videoDurationSeconds]);
 
-  const uploadVideoFrame = useCallback(async (slot: VideoFrameSlot, file?: File) => {
-    if (!file) return;
+  const uploadVideoFrame = useCallback(async (slot: VideoFrameSlot, file?: File, lineage?: RemoteVideoLineage) => {
+    if (!file) return undefined;
     if (!session.authenticated) {
       setVideoFrameError("Connect your wallet before adding a conditioning frame.");
-      return;
+      return undefined;
     }
     setVideoFrameBusy(slot);
     setVideoFrameError("");
@@ -571,8 +692,16 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
         }
         return { ...current, [slot]: { input: response.input, fileName: file.name, previewUrl } };
       });
+      if (slot === "start") setVideoFrameLineage(lineage);
+      if (slot === "start" && !lineage) {
+        setVideoAspectRatioLocked(false);
+        setVideoAspectRatio(videoAspectRatioBeforeFrameRef.current ?? "16:9");
+        videoAspectRatioBeforeFrameRef.current = undefined;
+      }
+      return response.input;
     } catch (nextError) {
       setVideoFrameError(nextError instanceof Error ? nextError.message : "Could not upload that conditioning frame.");
+      return undefined;
     } finally {
       setVideoFrameBusy("");
     }
@@ -589,10 +718,20 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
       delete next[slot];
       return next;
     });
+    if (slot === "start") {
+      setVideoFrameLineage(undefined);
+      setVideoAspectRatioLocked(false);
+      setVideoAspectRatio(videoAspectRatioBeforeFrameRef.current ?? "16:9");
+      videoAspectRatioBeforeFrameRef.current = undefined;
+    }
     setVideoFrameError("");
   }, []);
 
   const videoFrameCount = ltxFrameCount(videoDurationSeconds);
+  const videoTemporalPrefix = useMemo(
+    () => ltxTemporalPrefixForLineage(videoFrameLineage?.parent, videoFrameCount),
+    [videoFrameCount, videoFrameLineage],
+  );
   const videoConditioningImages = useMemo(() => {
     const conditions: Array<Record<string, unknown>> = [];
     const addCondition = (slot: VideoFrameSlot, frame: VideoFrameSelection | undefined, frameIndex: number) => {
@@ -605,11 +744,11 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
         mode: "guide",
       });
     };
-    addCondition("start", videoFrames.start, 0);
+    if (!videoTemporalPrefix) addCondition("start", videoFrames.start, 0);
     addCondition("intermediate", videoFrames.intermediate, ltxFrameIndexAtTime(videoIntermediateTime, videoDurationSeconds));
     addCondition("end", videoFrames.end, videoFrameCount - 1);
     return conditions;
-  }, [videoDurationSeconds, videoFrameCount, videoFrames.end, videoFrames.intermediate, videoFrames.start, videoIntermediateTime]);
+  }, [videoDurationSeconds, videoFrameCount, videoFrames.end, videoFrames.intermediate, videoFrames.start, videoIntermediateTime, videoTemporalPrefix]);
 
   const videoInputs = useMemo<RemoteGenerationInput[]>(() => [
     videoFrames.start,
@@ -679,7 +818,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
         inputs: videoInputs,
         priority: "standard",
         paymentCurrency,
-        metadata: { title: resolvedTitle },
+        metadata: { title: resolvedTitle, ...(videoFrameLineage ? { videoLineage: videoFrameLineage } : {}) },
         parameters: {
           task_type: "generative_dance",
           prompt: videoPrompt.trim(),
@@ -689,6 +828,8 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
           audio_mode: videoAudioMode,
           output_format: "mp4",
           conditioning_images: videoConditioningImages,
+          ...(videoTemporalPrefix ? { temporal_prefix: videoTemporalPrefix } : {}),
+          ...(videoFrameLineage ? { video_lineage: videoFrameLineage } : {}),
           sequence: { durationSeconds: videoDurationSeconds },
         },
       };
@@ -813,11 +954,49 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
         ...(selectedLokr ? { lokr_scale: lokrScale } : {}),
       },
     };
-  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, transitionGuidanceScale, transitionInferenceSteps, transitionWorkspace, videoAspectRatio, videoAudioMode, videoConditioningImages, videoDurationSeconds, videoInputs, videoPrompt, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
+  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, transitionGuidanceScale, transitionInferenceSteps, transitionWorkspace, videoAspectRatio, videoAudioMode, videoConditioningImages, videoDurationSeconds, videoFrameLineage, videoInputs, videoPrompt, videoTemporalPrefix, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
 
   const holderFreeAvailable = Boolean(session.isHolder && pricingConfig && holderFreeForRequest(pricingConfig, request));
 
   const panelJobs = videoPanel ? jobs.filter((job) => job.runtime === "ltx-video") : jobs;
+  const videoChainItems = useMemo(() => {
+    const query = historyQuery.trim().toLowerCase();
+    if (historyFilter === "active" || historyFilter === "error") return [];
+    const localItems = workspaceItems
+      .filter((item) => item.kind === "video_chain")
+      .filter((item) => !query || item.title.toLowerCase().includes(query))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const localIds = new Set(localItems.map((item) => item.id));
+    const persistedItems = persistedVideoAssets
+      .filter((asset) => asset.assetKind === "video_chain" && asset.chainId)
+      .map((asset) => {
+        const parent = asset.metadata.parent && typeof asset.metadata.parent === "object" && !Array.isArray(asset.metadata.parent)
+          ? asset.metadata.parent as Record<string, unknown>
+          : undefined;
+        return createRemoteVideoChainWorkspaceItem({
+          chainId: asset.chainId!,
+          appendJobId: asset.jobId,
+          title: asset.title,
+          publicUrl: asset.publicUrl,
+          proxyUrl: asset.proxyUrl ?? remoteVideoProxyUrl(asset.objectPath),
+          objectPath: asset.objectPath,
+          manifestObjectPath: asset.manifestObjectPath ?? "",
+          mimeType: asset.mimeType,
+          sizeBytes: asset.sizeBytes,
+          sha256: asset.sha256,
+          durationSeconds: asset.durationSeconds ?? 0,
+          frameRate: asset.frameRate ?? LTX_VIDEO_FRAME_RATE,
+          aspectRatio: parent ? videoAspectRatioFromValue(parent.aspectRatio) : undefined,
+          audioPreserved: asset.metadata.audioPreserved === true,
+          segments: Array.isArray(asset.metadata.segments) ? asset.metadata.segments : [],
+          createdAt: asset.createdAt,
+          updatedAt: asset.updatedAt,
+        });
+      })
+      .filter((item) => !localIds.has(item.id))
+      .filter((item) => !query || item.title.toLowerCase().includes(query));
+    return [...localItems, ...persistedItems].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [historyFilter, historyQuery, persistedVideoAssets, workspaceItems]);
   const hasActiveJobs = panelJobs.some((candidate) => activeStatuses.has(candidate.status));
   busyRef.current = busy;
   const rewardSubmissionsByJob = useMemo(() => new Map(rewardSubmissions.map((submission) => [submission.jobId, submission])), [rewardSubmissions]);
@@ -838,17 +1017,73 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
     });
   }, [historyFilter, historyQuery, panelJobs]);
 
-  const selectedVideoJob = videoPanel
+  const selectedVideoWorkspaceItem = videoPanel
+    ? videoChainItems.find((item) => item.id === selectedVideoWorkspaceId)
+    : undefined;
+  const selectedVideoJob = videoPanel && !selectedVideoWorkspaceItem
     ? panelJobs.find((job) => job.id === selectedVideoJobId) ?? panelJobs[0]
     : undefined;
-  const selectedVideoArtifact = selectedVideoJob?.artifacts.find((artifact) => artifact.role === "preview" && artifact.publicUrl && artifact.mimeType.startsWith("video/"))
-    ?? selectedVideoJob?.artifacts.find((artifact) => artifact.publicUrl && artifact.mimeType.startsWith("video/"));
+  const selectedVideoArtifact = selectedVideoJob?.artifacts.find((artifact) => artifact.role === "preview" && artifact.mimeType.startsWith("video/"))
+    ?? selectedVideoJob?.artifacts.find((artifact) => artifact.mimeType.startsWith("video/"));
+
+  const useSelectedVideoFrame = useCallback(async (selection: VideoFrameSelectionResult) => {
+    let source: VideoWorkspaceSource | undefined;
+    if (selectedVideoWorkspaceItem) {
+      source = workspaceVideoSource(selectedVideoWorkspaceItem) ?? undefined;
+    } else if (selectedVideoJob && selectedVideoArtifact) {
+      const frameRate = generationParameterNumber(selectedVideoJob, ["frame_rate"]) ?? LTX_VIDEO_FRAME_RATE;
+      source = {
+        id: selectedVideoJob.id,
+        title: generationTitle(selectedVideoJob),
+        url: remoteVideoProxyUrl(selectedVideoArtifact.objectPath),
+        downloadUrl: selectedVideoArtifact.publicUrl,
+        frameRate,
+        durationSeconds: generationParameterNumber(selectedVideoJob, ["duration_seconds", "duration"]),
+        aspectRatio: videoAspectRatioFromJob(selectedVideoJob),
+        lineage: {
+          sourceType: "job",
+          sourceJobId: selectedVideoJob.id,
+          sourceArtifactObjectPath: selectedVideoArtifact.objectPath,
+          sourceArtifactId: selectedVideoArtifact.id,
+          ...(selectedVideoArtifact.publicUrl ? { sourceUrl: selectedVideoArtifact.publicUrl } : {}),
+          frameIndex: selection.frameIndex,
+          timeSeconds: selection.timeSeconds,
+          frameRate,
+          ...(videoAspectRatioFromJob(selectedVideoJob) ? { aspectRatio: videoAspectRatioFromJob(selectedVideoJob) } : {}),
+        },
+      };
+    }
+    if (!source) return;
+    if (!source.lineage.sourceUrl) {
+      setVideoFrameError("This video is missing a remotely reachable source URL, so it cannot be continued as a chain.");
+      return;
+    }
+    const file = new File([selection.blob], `${source.title.replace(/[^A-Za-z0-9._-]+/g, "_")}-frame-${selection.frameIndex}.png`, { type: "image/png" });
+    const sourceAspectRatio = selection.aspectRatio ?? source.aspectRatio;
+    const uploadedInput = await uploadVideoFrame("start", file, {
+      kind: "create-from-frame",
+      parent: {
+        ...source.lineage,
+        frameIndex: selection.frameIndex,
+        timeSeconds: selection.timeSeconds,
+        frameRate: selection.frameRate,
+        ...(sourceAspectRatio ? { aspectRatio: sourceAspectRatio } : {}),
+      },
+    });
+    if (uploadedInput && sourceAspectRatio) {
+      if (!videoAspectRatioLocked) videoAspectRatioBeforeFrameRef.current = videoAspectRatio;
+      setVideoAspectRatio(sourceAspectRatio);
+      setVideoAspectRatioLocked(true);
+    }
+  }, [selectedVideoArtifact, selectedVideoJob, selectedVideoWorkspaceItem, uploadVideoFrame, videoAspectRatio, videoAspectRatioLocked]);
 
   useEffect(() => {
     if (!videoPanel) return;
+    if (selectedVideoWorkspaceId && !selectedVideoWorkspaceItem) setSelectedVideoWorkspaceId("");
+    if (selectedVideoWorkspaceItem) return;
     if (!selectedVideoJob && selectedVideoJobId) setSelectedVideoJobId("");
     else if (selectedVideoJob && selectedVideoJob.id !== selectedVideoJobId) setSelectedVideoJobId(selectedVideoJob.id);
-  }, [selectedVideoJob, selectedVideoJobId, videoPanel]);
+  }, [selectedVideoJob, selectedVideoJobId, selectedVideoWorkspaceId, selectedVideoWorkspaceItem, videoPanel]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1102,6 +1337,100 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   }, [jobs, onWorkspaceChanged]);
 
   useEffect(() => {
+    if (!videoPanel) return;
+    jobs.filter((job) => job.runtime === "ltx-video" && job.status === "succeeded").forEach((job) => {
+      const artifact = job.artifacts.find((candidate) => candidate.role === "preview" && candidate.mimeType.startsWith("video/"))
+        ?? job.artifacts.find((candidate) => candidate.mimeType.startsWith("video/"));
+      if (!artifact) return;
+
+      if (!savedVideoJobsRef.current.has(job.id) && !savingVideoJobsRef.current.has(job.id)) {
+        savingVideoJobsRef.current.add(job.id);
+        void listWorkspaceItems()
+          .then((workspace) => {
+            const next = createRemoteVideoWorkspaceItem({
+              jobId: job.id,
+              title: generationTitle(job),
+              publicUrl: artifact.publicUrl ?? remoteVideoProxyUrl(artifact.objectPath),
+              objectPath: artifact.objectPath,
+              mimeType: artifact.mimeType,
+              sizeBytes: artifact.sizeBytes,
+              sha256: artifact.sha256,
+              durationSeconds: generationParameterNumber(job, ["duration_seconds", "duration"]),
+              frameRate: generationParameterNumber(job, ["frame_rate"]) ?? LTX_VIDEO_FRAME_RATE,
+              aspectRatio: videoAspectRatioFromJob(job),
+              videoLineage: videoLineageFromJob(job),
+              createdAt: job.createdAt,
+              updatedAt: job.updatedAt,
+            });
+            const existing = workspace.find((item) => item.id === next.id);
+            return saveWorkspaceItem(existing ? { ...next, ...existing, updatedAt: next.updatedAt, metadata: { ...next.metadata, ...existing.metadata } } : next);
+          })
+          .then(() => {
+            savedVideoJobsRef.current.add(job.id);
+            onWorkspaceChanged?.();
+          })
+          .catch((nextError) => {
+            savingVideoJobsRef.current.delete(job.id);
+            console.warn("[remote-generation] video workspace sync deferred", nextError);
+          });
+      }
+
+      const parent = videoLineageFromJob(job)?.parent;
+      if (!parent || exportedVideoChainsRef.current.has(job.id) || exportingVideoChainsRef.current.has(job.id)) return;
+      const existingChain = videoChainItems.find((item) => item.metadata.appendJobId === job.id);
+      if (existingChain) {
+        exportedVideoChainsRef.current.add(job.id);
+        return;
+      }
+      exportingVideoChainsRef.current.add(job.id);
+      void api.createRemoteVideoChain({
+        title: `${generationTitle(job)} chain`,
+        frameRate: parent.frameRate,
+        parent,
+        append: { jobId: job.id, artifactObjectPath: artifact.objectPath, artifactId: artifact.id },
+      })
+        .then(async (chain) => {
+          exportedVideoChainsRef.current.add(job.id);
+          const workspace = await listWorkspaceItems();
+          const now = new Date().toISOString();
+          const next = createRemoteVideoChainWorkspaceItem({
+            chainId: chain.chainId,
+            appendJobId: job.id,
+            title: chain.title,
+            publicUrl: chain.publicUrl,
+            proxyUrl: chain.proxyUrl,
+            objectPath: chain.objectPath,
+            manifestObjectPath: chain.manifestObjectPath,
+            mimeType: chain.mimeType,
+            sizeBytes: chain.sizeBytes,
+            sha256: chain.sha256,
+            durationSeconds: chain.durationSeconds,
+            frameRate: chain.frameRate,
+            aspectRatio: parent.aspectRatio ?? videoAspectRatioFromJob(job),
+            audioPreserved: chain.audioPreserved,
+            segments: chain.segments,
+            createdAt: now,
+            updatedAt: now,
+          });
+          const existing = workspace.find((item) => item.id === next.id);
+          await saveWorkspaceItem(existing ? { ...next, ...existing, updatedAt: next.updatedAt, metadata: { ...next.metadata, ...existing.metadata } } : next);
+          void api.remoteVideoAssets()
+            .then(({ assets }) => setPersistedVideoAssets(assets))
+            .catch((refreshError) => console.warn("[remote-generation] persisted video asset refresh deferred", refreshError));
+          setSelectedVideoWorkspaceId(next.id);
+          setSelectedVideoJobId("");
+          onWorkspaceChanged?.();
+        })
+        .catch((nextError) => {
+          if (!exportedVideoChainsRef.current.has(job.id)) exportingVideoChainsRef.current.delete(job.id);
+          const message = nextError instanceof Error ? nextError.message : "The video chain could not be assembled.";
+          console.error("[remote-generation] video chain export failed", { jobId: job.id, error: nextError });
+          setError(`Video generated, but the video chain could not be assembled: ${message}`);
+        });
+    });
+  }, [jobs, onWorkspaceChanged, videoChainItems, videoPanel]);
+
+  useEffect(() => {
     if (busy || error) return;
     setPhase(jobs.some((job) => ["created", "awaiting_payment", "queued"].includes(job.status)) ? "Queued" : hasActiveJobs ? "Generating" : "Ready");
   }, [busy, error, hasActiveJobs, jobs]);
@@ -1128,6 +1457,10 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
       }
       if (videoFrames.intermediate && (videoIntermediateTime < 0 || videoIntermediateTime > videoDurationSeconds)) {
         setError("The intermediate frame time must be within the video duration.");
+        return;
+      }
+      if (videoFrameLineage && !videoTemporalPrefix) {
+        setError("Choose a later source frame so the worker can receive at least 9 frames of temporal context.");
         return;
       }
     } else if (generationMode === "extraction") {
@@ -1439,9 +1772,10 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                       </label>
                       <label>
                         Aspect ratio
-                        <select value={videoAspectRatio} onChange={(event) => setVideoAspectRatio((event.currentTarget as HTMLSelectElement).value as (typeof LTX_VIDEO_ASPECTS)[number])} disabled={busy}>
+                        <select value={videoAspectRatio} onChange={(event) => setVideoAspectRatio((event.currentTarget as HTMLSelectElement).value as (typeof LTX_VIDEO_ASPECTS)[number])} disabled={busy || videoAspectRatioLocked} title={videoAspectRatioLocked ? "Locked to the source video frame aspect ratio" : undefined}>
                           {LTX_VIDEO_ASPECTS.map((aspect) => <option key={aspect} value={aspect}>{aspect}</option>)}
                         </select>
+                        {videoAspectRatioLocked ? <small className="dance-station-video-aspect-lock"><Link2 aria-hidden="true" size={12} strokeWidth={2.1} />Locked to source frame</small> : null}
                       </label>
                     </div>
                     <label className="dance-station-switch-row">
@@ -1598,6 +1932,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                     <span>{currency === "FACELESS" ? "$FACELESS" : "SOL"}</span>
                   </label>
                 ))}
+                {generationMode === "video" && videoFrameLineage ? <span className="dance-station-video-chain-indicator"><Link2 aria-hidden="true" size={13} strokeWidth={2.1} />Chain</span> : null}
               </div>
               <div className="dance-station-create-panel__footer">
                 <button type="button" className="dance-station-generate-button" onClick={() => void submitGeneration()} disabled={busy || diskSourceBusy || voiceUploadBusy || Boolean(videoFrameBusy) || !health?.enabled || !session.authenticated || !currentPricing}>
@@ -1614,7 +1949,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
 
             <section className="dance-station-generation-preview" aria-label="Generation preview">
               {generationMode === "video" ? (
-                <VideoGenerationPreview job={selectedVideoJob} artifact={selectedVideoArtifact} />
+                <VideoGenerationPreview job={selectedVideoJob} artifact={selectedVideoArtifact} workspaceItem={selectedVideoWorkspaceItem} onUseAsFirstFrame={useSelectedVideoFrame} />
               ) : null}
               <div className={`dance-station-transition-workspace-shell${generationMode === "transition" ? "" : " is-hidden"}`} aria-hidden={generationMode !== "transition"}>
                 <TransitionWorkspace choices={transitionChoices} inferenceSteps={transitionInferenceSteps} guidanceScale={transitionGuidanceScale} busy={busy} uploadBusy={transitionUploadBusy} uploadError={transitionUploadError} onUpload={uploadTransitionSource} onChange={onTransitionWorkspaceChange} />
@@ -1666,6 +2001,15 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
             </label>
           </div>
           <div className="dance-station-generation-list" aria-live="polite">
+            {videoPanel && videoChainItems.length ? <div className="dance-station-generation-list__section-label">Video chains</div> : null}
+            {videoPanel ? videoChainItems.map((item) => (
+              <VideoWorkspaceRow
+                key={item.id}
+                item={item}
+                selected={item.id === selectedVideoWorkspaceId}
+                onSelect={() => { setSelectedVideoWorkspaceId(item.id); setSelectedVideoJobId(""); }}
+              />
+            )) : null}
             {visibleJobs.map((candidate) => (
               <RemoteGenerationRow
                 key={candidate.id}
@@ -1673,7 +2017,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                 rewardSubmission={rewardSubmissionsByJob.get(candidate.id)}
                 expanded={expandedJobIds.has(candidate.id)}
                 selected={candidate.id === selectedVideoJobId}
-                onSelect={videoPanel ? () => setSelectedVideoJobId(candidate.id) : undefined}
+                onSelect={videoPanel ? () => { setSelectedVideoJobId(candidate.id); setSelectedVideoWorkspaceId(""); } : undefined}
                 onToggleDetails={() => toggleJobDetails(candidate.id)}
                 onReusePrompt={() => reusePrompt(candidate)}
                 onRewardSubmitted={(submission) => setRewardSubmissions((current) => [submission, ...current.filter((item) => item.jobId !== submission.jobId)])}
@@ -1684,7 +2028,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                 {historyLoadingMore ? "Loading..." : "Load older generations"}
               </button>
             ) : null}
-            {!visibleJobs.length ? <div className="dance-station-history-empty">{videoPanel ? <Film aria-hidden="true" size={42} strokeWidth={1.3} /> : <AudioWaveform aria-hidden="true" size={42} strokeWidth={1.3} />}<strong>{panelJobs.length ? "No generations match" : videoPanel ? "Your videos will appear here" : "Your generations will appear here"}</strong><span>{panelJobs.length ? "Try another search or filter" : videoPanel ? "Generate a video to see it here" : "Start creating music to see your results"}</span></div> : null}
+            {!visibleJobs.length && (!videoPanel || !videoChainItems.length) ? <div className="dance-station-history-empty">{videoPanel ? <Film aria-hidden="true" size={42} strokeWidth={1.3} /> : <AudioWaveform aria-hidden="true" size={42} strokeWidth={1.3} />}<strong>{panelJobs.length ? "No generations match" : videoPanel ? "Your videos will appear here" : "Your generations will appear here"}</strong><span>{panelJobs.length ? "Try another search or filter" : videoPanel ? "Generate a video to see it here" : "Start creating music to see your results"}</span></div> : null}
           </div>
         </section>
       </div>
@@ -1692,20 +2036,52 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   );
 }
 
-function VideoGenerationPreview({ job, artifact }: { job?: RemoteJob; artifact?: RemoteJob["artifacts"][number] }): JSX.Element {
+function VideoWorkspaceRow({ item, selected, onSelect }: { item: BrowserWorkspaceItem; selected: boolean; onSelect: () => void }): JSX.Element {
+  const source = workspaceVideoSource(item);
+  const duration = typeof item.metadata.durationSeconds === "number" ? formatGenerationDuration(item.metadata.durationSeconds) : "Video chain";
+  const segmentCount = Array.isArray(item.metadata.segments) ? item.metadata.segments.length : 0;
+  return <article className={`dance-station-generation-row dance-station-video-workspace-row is-selectable${selected ? " is-selected" : ""}`} onClick={onSelect} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); } }} role="button" tabIndex={0}>
+    <div className="dance-station-generation-row__artwork dance-station-video-workspace-row__artwork"><Film aria-hidden="true" size={21} strokeWidth={1.8} /></div>
+    <div className="dance-station-generation-row__content">
+      <div className="dance-station-generation-row__title-line"><strong>{item.title}</strong></div>
+      <div className="dance-station-generation-row__meta"><span>{duration}</span><span>{segmentCount || 2} links</span><span>{source?.frameRate ?? LTX_VIDEO_FRAME_RATE} fps</span></div>
+    </div>
+  </article>;
+}
+
+function VideoGenerationPreview({
+  job,
+  artifact,
+  workspaceItem,
+  onUseAsFirstFrame,
+}: {
+  job?: RemoteJob;
+  artifact?: RemoteJob["artifacts"][number];
+  workspaceItem?: BrowserWorkspaceItem;
+  onUseAsFirstFrame: (selection: VideoFrameSelectionResult) => void | Promise<void>;
+}): JSX.Element {
   const showStatusBadge = useStatusBadgeVisible(job ?? { id: "video-preview-empty", status: "empty", updatedAt: "" });
+  const workspaceSource = workspaceItem ? workspaceVideoSource(workspaceItem) : null;
+  if (workspaceItem && workspaceSource) {
+    return <div className="dance-station-video-preview">
+      <div className="dance-station-video-preview__head">
+        <div><span className="dance-station-eyebrow">Video chain</span><strong>{workspaceItem.title}</strong></div>
+      </div>
+      <VideoFramePlayer source={workspaceSource} onUseAsFirstFrame={onUseAsFirstFrame} />
+    </div>;
+  }
   if (!job) {
     return <div className="dance-station-generation-preview__empty dance-station-video-preview__empty"><Video aria-hidden="true" size={58} strokeWidth={1.2} /><strong>Your video will play here</strong><span>Generate a clip or select one from your video history.</span></div>;
   }
   const status = generationStatus(job);
-  if (job.status === "succeeded" && artifact?.publicUrl) {
+  if (job.status === "succeeded" && artifact) {
+    const frameRate = generationParameterNumber(job, ["frame_rate"]) ?? LTX_VIDEO_FRAME_RATE;
     return <div className="dance-station-video-preview">
       <div className="dance-station-video-preview__head">
         <div><span className="dance-station-eyebrow">Video preview</span><strong>{generationTitle(job)}</strong></div>
         {showStatusBadge ? <span className="dance-station-generation-state dance-station-generation-state--complete"><CheckCircle2 aria-hidden="true" size={14} strokeWidth={2.2} />Completed</span> : null}
       </div>
-      <video className="dance-station-video-preview__player" src={artifact.publicUrl} controls playsInline preload="metadata" />
-      <a className="dance-station-inline-button dance-station-video-preview__download" href={artifact.publicUrl} download target="_blank" rel="noreferrer"><Download aria-hidden="true" size={14} strokeWidth={2} />Download video</a>
+      <VideoFramePlayer source={{ id: job.id, title: generationTitle(job), url: remoteVideoProxyUrl(artifact.objectPath), downloadUrl: artifact.publicUrl ?? remoteVideoProxyUrl(artifact.objectPath), frameRate, durationSeconds: generationParameterNumber(job, ["duration_seconds", "duration"]) }} onUseAsFirstFrame={onUseAsFirstFrame} />
     </div>;
   }
   if (["failed", "cancelled", "expired"].includes(job.status)) {

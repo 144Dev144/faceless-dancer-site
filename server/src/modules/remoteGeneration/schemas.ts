@@ -2,6 +2,31 @@ import { z } from "zod";
 
 const GENERATIVE_DANCE_MAX_DURATION_SECONDS = 12;
 
+const videoFrameLineageSchema = z.object({
+  sourceType: z.enum(["job", "chain"]),
+  sourceJobId: z.string().uuid().optional(),
+  sourceChainId: z.string().trim().min(1).max(120).optional(),
+  sourceArtifactObjectPath: z.string().trim().min(1).max(500),
+  sourceArtifactId: z.string().trim().min(1).max(120).optional(),
+  sourceUrl: z.string().url().optional(),
+  frameIndex: z.number().int().nonnegative(),
+  timeSeconds: z.number().finite().nonnegative(),
+  frameRate: z.number().finite().positive().max(120),
+  aspectRatio: z.enum(["16:9", "9:16", "1:1"]).optional(),
+}).superRefine((value, context) => {
+  if (value.sourceType === "job" && !value.sourceJobId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["sourceJobId"], message: "A job source requires sourceJobId." });
+  }
+  if (value.sourceType === "chain" && !value.sourceChainId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["sourceChainId"], message: "A chain source requires sourceChainId." });
+  }
+});
+
+const ltxVideoLineageSchema = z.object({
+  kind: z.literal("create-from-frame"),
+  parent: videoFrameLineageSchema,
+});
+
 const inputSchema = z.object({
   id: z.string().trim().min(1).max(80).optional(),
   role: z.string().trim().min(1).max(80),
@@ -16,6 +41,7 @@ const inputSchema = z.object({
 const metadataSchema = z.object({
   title: z.string().trim().min(1).max(120),
   reanalysisOfJobId: z.string().uuid().optional(),
+  videoLineage: ltxVideoLineageSchema.optional(),
 }).optional();
 
 export const remoteGenerationPrioritySchema = z.enum(["low", "standard", "high"]);
@@ -134,6 +160,27 @@ export const remoteGenerationRequestSchema = z.object({
       }
     }
   }
+  if (value.runtime === "ltx-video") {
+    if (taskType !== "video_generation" && taskType !== "generative_dance") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "task_type"], message: "LTX requests must use task_type=video_generation or task_type=generative_dance." });
+    }
+    const duration = value.parameters.duration_seconds;
+    if (typeof duration !== "number" || !Number.isFinite(duration) || duration < 9 / 24 || duration > 20) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "duration_seconds"], message: "LTX duration must be between 9 frames and 20 seconds." });
+    }
+    const frameRate = value.parameters.frame_rate;
+    if (typeof frameRate !== "number" || !Number.isFinite(frameRate) || frameRate <= 0 || frameRate > 60) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "frame_rate"], message: "LTX frame_rate must be between 1 and 60." });
+    }
+    const aspectRatio = value.parameters.aspect_ratio;
+    if (aspectRatio !== "16:9" && aspectRatio !== "9:16" && aspectRatio !== "1:1") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "aspect_ratio"], message: "LTX aspect_ratio must be 16:9, 9:16, or 1:1." });
+    }
+    const lineage = value.metadata?.videoLineage;
+    if (lineage && !value.inputs.some((input) => input.role === "conditioning")) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "A video lineage request requires its captured start-frame input." });
+    }
+  }
 });
 
 export const verifyPaymentRequestSchema = z.object({
@@ -147,6 +194,17 @@ export const createJobRequestSchema = z.object({
 
 export const createRewardSubmissionRequestSchema = z.object({
   postLink: z.string().trim().min(1).max(2048),
+});
+
+export const createVideoChainRequestSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  frameRate: z.number().finite().positive().max(120),
+  parent: videoFrameLineageSchema,
+  append: z.object({
+    jobId: z.string().uuid(),
+    artifactObjectPath: z.string().trim().min(1).max(500),
+    artifactId: z.string().trim().min(1).max(120).optional(),
+  }),
 });
 
 export const appealRewardSubmissionRequestSchema = createRewardSubmissionRequestSchema;
