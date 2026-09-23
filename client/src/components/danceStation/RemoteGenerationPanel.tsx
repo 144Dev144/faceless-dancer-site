@@ -2037,15 +2037,80 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
 }
 
 function VideoWorkspaceRow({ item, selected, onSelect }: { item: BrowserWorkspaceItem; selected: boolean; onSelect: () => void }): JSX.Element {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
+  const optionsButtonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const source = workspaceVideoSource(item);
   const duration = typeof item.metadata.durationSeconds === "number" ? formatGenerationDuration(item.metadata.durationSeconds) : "Video chain";
   const segmentCount = Array.isArray(item.metadata.segments) ? item.metadata.segments.length : 0;
+  const downloadUrl = typeof item.metadata.publicUrl === "string" ? item.metadata.publicUrl : source?.url;
+  const manifestUrl = typeof item.metadata.manifestObjectPath === "string" && item.metadata.manifestObjectPath
+    ? remoteVideoProxyUrl(item.metadata.manifestObjectPath)
+    : undefined;
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const closeMenu = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!optionsButtonRef.current?.contains(target) && !menuRef.current?.contains(target)) setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeMenu);
+    return () => document.removeEventListener("pointerdown", closeMenu);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const updateMenuPosition = () => {
+      const button = optionsButtonRef.current;
+      if (!button) return;
+      const rect = button.getBoundingClientRect();
+      setMenuPosition({ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) });
+    };
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [menuOpen]);
+
   return <article className={`dance-station-generation-row dance-station-video-workspace-row is-selectable${selected ? " is-selected" : ""}`} onClick={onSelect} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); } }} role="button" tabIndex={0}>
-    <div className="dance-station-generation-row__artwork dance-station-video-workspace-row__artwork"><Film aria-hidden="true" size={21} strokeWidth={1.8} /></div>
-    <div className="dance-station-generation-row__content">
-      <div className="dance-station-generation-row__title-line"><strong>{item.title}</strong></div>
-      <div className="dance-station-generation-row__meta"><span>{duration}</span><span>{segmentCount || 2} links</span><span>{source?.frameRate ?? LTX_VIDEO_FRAME_RATE} fps</span></div>
+    <div className="dance-station-generation-row__artwork dance-station-video-workspace-row__artwork" aria-label="Video chain thumbnail">
+      {source?.url ? <video src={source.url} muted preload="metadata" aria-label={`${item.title} video thumbnail`} /> : <Film aria-hidden="true" size={21} strokeWidth={1.8} />}
     </div>
+    <div className="dance-station-generation-row__content">
+      <div className="dance-station-generation-row__head">
+        <div className="dance-station-generation-row__title-line"><strong>{item.title}</strong></div>
+        <div className="dance-station-generation-row__meta"><span><Link2 aria-hidden="true" size={14} strokeWidth={1.8} />Video chain</span><span><CalendarDays aria-hidden="true" size={14} strokeWidth={1.8} />{new Date(item.createdAt).toLocaleString()}</span></div>
+      </div>
+      <div className="dance-station-generation-row__meta dance-station-video-workspace-row__details"><span><Clock3 aria-hidden="true" size={14} strokeWidth={1.8} />{duration}</span><span>{segmentCount || 2} links</span><span>{source?.frameRate ?? LTX_VIDEO_FRAME_RATE} fps</span><span>{item.metadata.audioPreserved === true ? "Audio" : "Silent"}</span></div>
+    </div>
+    <div className="dance-station-generation-media">
+      <button type="button" className="site-audio-play-button dance-station-generation-video-select" aria-label={`View ${item.title}`} onClick={(event) => { event.stopPropagation(); onSelect(); }}>
+        <Video aria-hidden="true" size={17} strokeWidth={2.1} />
+      </button>
+      <button
+        type="button"
+        className="dance-station-tool-button dance-station-generation-options-button"
+        ref={optionsButtonRef}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        aria-label={`Options for ${item.title}`}
+        title="Chain options"
+        onClick={(event) => { event.stopPropagation(); setMenuOpen((current) => !current); }}
+      >
+        <MoreHorizontal aria-hidden="true" size={19} strokeWidth={2.2} />
+      </button>
+    </div>
+    {menuOpen && typeof document !== "undefined" ? createPortal(
+      <div ref={menuRef} className="dance-station-generation-options-menu" role="menu" style={{ top: `${menuPosition.top}px`, right: `${menuPosition.right}px` }}>
+        {downloadUrl ? <a role="menuitem" href={downloadUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download video chain</a> : null}
+        {manifestUrl ? <a role="menuitem" href={manifestUrl} download target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><Download aria-hidden="true" size={14} strokeWidth={2} />Download chain manifest</a> : null}
+      </div>,
+      document.body,
+    ) : null}
   </article>;
 }
 
