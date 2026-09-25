@@ -296,7 +296,7 @@ router.post("/availability", async (req, res, next) => {
   try {
     const request = z.object({
       priority: remoteGenerationPrioritySchema,
-      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate", "ltx-video"]),
+      runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate", "ltx-video", "mulacover"]),
     }).parse({
       priority: req.body?.priority ?? "standard",
       runtime: req.body?.runtime ?? "ace-step",
@@ -602,7 +602,7 @@ router.get("/jobs", async (req, res, next) => {
     const knownJobIds = typeof req.query.knownIds === "string"
       ? [...new Set(req.query.knownIds.split(",").map((id) => id.trim()).filter(Boolean))].slice(0, 100)
       : undefined;
-    return res.json(await launchServerClient.listJobs(req.session!.userId, { limit, cursor, activeOnly, knownJobIds, runtime: runtime as "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | undefined }));
+    return res.json(await launchServerClient.listJobs(req.session!.userId, { limit, cursor, activeOnly, knownJobIds, runtime: runtime as "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | "ltx-video" | "mulacover" | undefined }));
   } catch (error) {
     return respondRemoteGenerationError(error, res, "Generation history is temporarily unavailable. Please try again shortly.");
   }

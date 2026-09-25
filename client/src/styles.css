@@ -14217,6 +14217,59 @@ body:has(.dance-station-app-shell--generation) {
   text-overflow: ellipsis;
 }
 
+.dance-station-music-subnav {
+  display: grid;
+  gap: 3px;
+  margin: 13px 2px 0;
+  padding-top: 11px;
+  border-top: 1px solid rgba(113, 136, 169, .22);
+}
+
+.dance-station-music-subnav__title {
+  margin: 0 5px 5px;
+  color: #7188a9;
+  font-size: .58rem;
+  font-weight: 800;
+  letter-spacing: .1em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.dance-station-music-subnav__item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #9aaac2;
+  cursor: pointer;
+  font: inherit;
+  font-size: .69rem;
+  text-align: left;
+}
+
+.dance-station-music-subnav__item > span {
+  width: 4px;
+  height: 4px;
+  flex: 0 0 4px;
+  border-radius: 50%;
+  background: #516783;
+}
+
+.dance-station-music-subnav__item:hover,
+.dance-station-music-subnav__item.is-active {
+  border-color: rgba(155, 245, 210, .22);
+  background: rgba(82, 168, 137, .1);
+  color: #f0f5ff;
+}
+
+.dance-station-music-subnav__item.is-active > span {
+  background: #9bf5d2;
+}
+
 .dance-station-app-shell .dance-station-main-grid,
 .dance-station-app-shell .dance-station-main-grid--generation {
   min-width: 0;
@@ -14260,6 +14313,24 @@ body:has(.dance-station-app-shell--generation) {
     width: auto;
     min-width: 142px;
     min-height: 40px;
+  }
+
+  .dance-station-music-subnav {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 8px 0 0;
+    padding-top: 8px;
+    overflow-x: auto;
+  }
+
+  .dance-station-music-subnav__title {
+    display: none;
+  }
+
+  .dance-station-music-subnav__item {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .dance-station-app-shell .dance-station-workspace-content {

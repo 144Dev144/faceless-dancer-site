@@ -32,6 +32,7 @@ import { VideoFramePlayer, type VideoFrameSelectionResult } from "./VideoFramePl
 
 interface Props {
   mode?: GenerationMode;
+  onMusicModeChange?: (mode: MusicGenerationMode) => void;
   session: SessionState;
   workspaceItems: BrowserWorkspaceItem[];
   publicItems: LibraryItem[];
@@ -54,7 +55,8 @@ const extractionTracks = [
   "woodwinds",
 ] as const;
 
-type GenerationMode = "music" | "video" | "extraction" | "voice-change" | "transition";
+export type MusicGenerationMode = "music" | "remix" | "transition" | "extraction" | "voice-change";
+type GenerationMode = MusicGenerationMode | "video";
 type ExtractionSourceMode = "private" | "disk";
 type RemoteSubmissionStage = "payment-request" | "wallet-payment" | "payment-verification" | "queue-submission";
 const MAX_REMOTE_AUDIO_DURATION_SECONDS = 360;
@@ -173,7 +175,7 @@ function remoteGenerationFailureMessage(
     case "payment-verification":
       return "We could not verify the payment. Check your wallet activity before trying again.";
     case "queue-submission":
-      return `Payment was accepted, but the ${generationMode === "music" ? "music generation" : generationMode === "video" ? "video generation" : generationMode === "extraction" ? "music extraction" : generationMode === "transition" ? "music transition" : "voice change"} could not be queued. Please try again.`;
+      return `Payment was accepted, but the ${generationMode === "music" || generationMode === "remix" ? "music generation" : generationMode === "video" ? "video generation" : generationMode === "extraction" ? "music extraction" : generationMode === "transition" ? "music transition" : "voice change"} could not be queued. Please try again.`;
   }
 }
 
@@ -231,6 +233,7 @@ function generationTitle(job: RemoteJob): string {
   const taskType = parameters && typeof parameters.task_type === "string" ? parameters.task_type : "text2music";
   const trackName = parameters && typeof parameters.track_name === "string" ? parameters.track_name.trim().replaceAll("_", " ") : "";
   if (taskType === "voice_change") return title || "Voice change";
+  if (taskType === "music_remix") return title || "Music remix";
   if (taskType === "transition_chain") return title || "Music transition";
   if (title) return taskType === "extract" && trackName ? `${title} · ${trackName}` : title;
   const prompt = parameters && typeof parameters.prompt === "string" ? parameters.prompt.trim() : "";
@@ -239,7 +242,7 @@ function generationTitle(job: RemoteJob): string {
 }
 
 function generationPrompt(job: RemoteJob): string {
-  const prompt = job.request.parameters?.prompt;
+  const prompt = job.request.parameters?.prompt ?? job.request.parameters?.tags ?? job.request.parameters?.style;
   return typeof prompt === "string" ? prompt.trim() : "";
 }
 
@@ -296,6 +299,7 @@ function formatGenerationDuration(seconds?: number): string | null {
 function generationModelLabel(job: RemoteJob): string {
   if (job.runtime === "ltx-video") return "Video Generation";
   if (job.runtime === "voice-change") return "UVR + Seed-VC";
+  if (job.runtime === "mulacover") return "MuLaCover Remix";
   if (job.request.parameters?.task_type === "transition_chain") return "ACE-Step Transition";
   const model = typeof job.request.parameters?.model === "string" ? job.request.parameters.model : job.modelRevision;
   if (model.includes("turbo")) return "ACE-Step Turbo";
@@ -310,6 +314,10 @@ function generationTags(job: RemoteJob): string[] {
   if (typeof parameters.track_name === "string" && parameters.track_name.trim()) tags.push(parameters.track_name.trim().replaceAll("_", " "));
   if (job.runtime === "ltx-video" && parameters.audio_mode === "generated") tags.push("Audio");
   if (job.runtime === "ltx-video" && typeof parameters.aspect_ratio === "string") tags.push(parameters.aspect_ratio);
+  if (job.runtime === "mulacover") {
+    if (typeof parameters.lyrics !== "string" || !parameters.lyrics.trim()) tags.push("Auto lyrics");
+    if (typeof parameters.cfg_scale === "number") tags.push(`CFG ${parameters.cfg_scale}`);
+  }
   return tags.slice(0, 3);
 }
 
@@ -466,7 +474,7 @@ function formatPaymentToken(amountAtomic: string, decimals: number): string {
   return amount.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-export function RemoteGenerationPanel({ mode, session, workspaceItems, publicItems, onWorkspaceChanged }: Props): JSX.Element {
+export function RemoteGenerationPanel({ mode, onMusicModeChange, session, workspaceItems, publicItems, onWorkspaceChanged }: Props): JSX.Element {
   const [health, setHealth] = useState<RemoteGenerationHealth | null>(null);
   const [generationMode, setGenerationMode] = useState<GenerationMode>(mode ?? "music");
   const [title, setTitle] = useState("");
@@ -509,6 +517,26 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   const [voiceUvrOverlap, setVoiceUvrOverlap] = useState(0.25);
   const [voiceUvrDenoise, setVoiceUvrDenoise] = useState(false);
   const [voiceLoudnessOptimization, setVoiceLoudnessOptimization] = useState(false);
+  const [remixSourceId, setRemixSourceId] = useState("");
+  const [remixSourceInput, setRemixSourceInput] = useState<RemoteGenerationInput | null>(null);
+  const [remixSourceMode, setRemixSourceMode] = useState<ExtractionSourceMode>("private");
+  const [remixSourceFileName, setRemixSourceFileName] = useState("");
+  const [remixSourceBusy, setRemixSourceBusy] = useState(false);
+  const [remixSourceError, setRemixSourceError] = useState("");
+  const [remixStylePrompt, setRemixStylePrompt] = useState("");
+  const [remixUseCustomLyrics, setRemixUseCustomLyrics] = useState(false);
+  const [remixLyrics, setRemixLyrics] = useState("");
+  const [remixDurationSeconds, setRemixDurationSeconds] = useState(30);
+  const [remixCfgScale, setRemixCfgScale] = useState(0.4);
+  const [remixTemperature, setRemixTemperature] = useState(1);
+  const [remixTopK, setRemixTopK] = useState(250);
+  const [remixBpm, setRemixBpm] = useState("");
+  const [remixSemitoneShift, setRemixSemitoneShift] = useState(0);
+  const [remixOctaveShift, setRemixOctaveShift] = useState(0);
+  const [remixSaveMidi, setRemixSaveMidi] = useState(true);
+  const [remixOutputFormat, setRemixOutputFormat] = useState<"wav" | "flac">("wav");
+  const [remixSeed, setRemixSeed] = useState("");
+  const [remixDecodeSeed, setRemixDecodeSeed] = useState("");
   const [videoPrompt, setVideoPrompt] = useState("");
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(4);
   const [videoAspectRatio, setVideoAspectRatio] = useState<(typeof LTX_VIDEO_ASPECTS)[number]>("16:9");
@@ -565,8 +593,13 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   const videoPanel = mode === "video";
   const historyRuntime = videoPanel ? "ltx-video" as const : undefined;
   const generationCount = videoPanel ? jobs.filter((job) => job.runtime === "ltx-video").length : jobs.length;
-  const defaultTitle = `${videoPanel ? "Video" : "Song"} ${generationCount + 1}`;
+  const defaultTitle = `${videoPanel ? "Video" : generationMode === "remix" ? "Remix" : "Song"} ${generationCount + 1}`;
   const resolvedTitle = title.trim() || defaultTitle;
+
+  const selectGenerationMode = useCallback((nextMode: GenerationMode) => {
+    setGenerationMode(nextMode);
+    if (nextMode !== "video") onMusicModeChange?.(nextMode);
+  }, [onMusicModeChange]);
 
   useEffect(() => {
     if (!videoPanel || !session.authenticated) {
@@ -629,9 +662,11 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   }, [publicItems, workspaceItems]);
 
   const selectedExtractionSource = audioChoices.find((choice) => choice.id === selectedExtractionSourceId);
+  const selectedRemixSource = audioChoices.find((choice) => choice.id === remixSourceId);
   const selectedVoiceSongSource = audioChoices.find((choice) => choice.id === voiceSongSourceId);
   const selectedVoiceReferenceSource = audioChoices.find((choice) => choice.id === voiceReferenceSourceId);
   const extractionSourceInput = extractionSourceMode === "private" ? selectedExtractionSource?.input : diskSourceInput;
+  const effectiveRemixSourceInput = remixSourceMode === "private" ? selectedRemixSource?.input : remixSourceInput;
   const voiceSongInput = voiceSongSourceMode === "private" ? selectedVoiceSongSource?.input : voiceSongDiskInput;
   const voiceReferenceInput = voiceReferenceSourceMode === "private" ? selectedVoiceReferenceSource?.input : voiceReferenceDiskInput;
   const transitionChoices = useMemo<TransitionAudioChoice[]>(() => transitionDiskChoice ? [...audioChoices, transitionDiskChoice] : audioChoices, [audioChoices, transitionDiskChoice]);
@@ -669,6 +704,13 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
   }, [session.authenticated]);
   const extractionSourceTooLong = typeof extractionSourceInput?.durationSeconds === "number"
     && extractionSourceInput.durationSeconds > MAX_REMOTE_AUDIO_DURATION_SECONDS;
+
+  useEffect(() => {
+    const sourceDuration = effectiveRemixSourceInput?.durationSeconds;
+    if (typeof sourceDuration === "number" && Number.isFinite(sourceDuration) && sourceDuration > 0) {
+      setRemixDurationSeconds(Math.min(300, Math.max(1, Math.round(sourceDuration))));
+    }
+  }, [effectiveRemixSourceInput?.durationSeconds, effectiveRemixSourceInput?.sourceUrl]);
 
   useEffect(() => {
     setGenerationMode(mode ?? "music");
@@ -801,6 +843,29 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
     }
   };
 
+  const uploadRemixSource = async (file?: File) => {
+    if (!file) return;
+    if (!session.authenticated) {
+      setRemixSourceError("Connect your wallet before uploading a source.");
+      return;
+    }
+    setRemixSourceBusy(true);
+    setRemixSourceError("");
+    try {
+      if (!file.type.startsWith("audio/")) throw new Error("Choose an audio file for the remix source.");
+      const duration = await readAudioDuration(file);
+      const response = await api.uploadRemoteGenerationSource(file);
+      setRemixSourceFileName(file.name);
+      setRemixSourceInput({ ...response.input, durationSeconds: duration });
+      setRemixSourceMode("disk");
+      if (duration && Number.isFinite(duration)) setRemixDurationSeconds(Math.min(300, Math.max(1, Math.round(duration))));
+    } catch (nextError) {
+      setRemixSourceError(nextError instanceof Error ? nextError.message : "Could not upload the remix source audio.");
+    } finally {
+      setRemixSourceBusy(false);
+    }
+  };
+
   const uploadVoiceSource = async (kind: "song" | "reference", file?: File) => {
     if (!file) return;
     if (!session.authenticated) {
@@ -843,6 +908,35 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
           ...(videoTemporalPrefix ? { temporal_prefix: videoTemporalPrefix } : {}),
           ...(videoFrameLineage ? { video_lineage: videoFrameLineage } : {}),
           sequence: { durationSeconds: videoDurationSeconds },
+        },
+      };
+    }
+    if (generationMode === "remix") {
+      const bpm = Number(remixBpm);
+      const seed = Number(remixSeed);
+      const decodeSeed = Number(remixDecodeSeed);
+      return {
+        runtime: "mulacover",
+        modelRevision: "mulacover",
+        inputs: effectiveRemixSourceInput ? [{ ...effectiveRemixSourceInput, role: "reference_audio" }] : [],
+        priority: "standard",
+        paymentCurrency,
+        metadata: { title: resolvedTitle },
+        parameters: {
+          task_type: "music_remix",
+          tags: remixStylePrompt.trim(),
+          ...(remixUseCustomLyrics && remixLyrics.trim() ? { lyrics: remixLyrics.trim() } : {}),
+          duration_seconds: remixDurationSeconds,
+          cfg_scale: remixCfgScale,
+          temperature: remixTemperature,
+          top_k: remixTopK,
+          ...(remixBpm.trim() && Number.isFinite(bpm) ? { bpm } : {}),
+          semitone_shift: remixSemitoneShift,
+          octave_shift: remixOctaveShift,
+          save_symbolic_midi: remixSaveMidi,
+          output_format: remixOutputFormat,
+          ...(remixSeed.trim() && Number.isInteger(seed) && seed >= 0 ? { seed } : {}),
+          ...(remixDecodeSeed.trim() && Number.isInteger(decodeSeed) && decodeSeed >= 0 ? { decode_seed: decodeSeed } : {}),
         },
       };
     }
@@ -966,7 +1060,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
         ...(selectedLokr ? { lokr_scale: lokrScale } : {}),
       },
     };
-  }, [durationSeconds, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, resolvedTitle, selectedLokr, transitionGuidanceScale, transitionInferenceSteps, transitionWorkspace, videoAspectRatio, videoAudioMode, videoConditioningImages, videoDurationSeconds, videoFrameLineage, videoInputs, videoPrompt, videoTemporalPrefix, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
+  }, [durationSeconds, effectiveRemixSourceInput, extractionGuidanceScale, extractionInferenceSteps, extractionSourceInput, extractionTrack, generationMode, guidanceScale, inferenceSteps, instrumental, lokrScale, lyrics, paymentCurrency, prompt, remixBpm, remixCfgScale, remixDecodeSeed, remixDurationSeconds, remixLyrics, remixOctaveShift, remixOutputFormat, remixSaveMidi, remixSeed, remixSemitoneShift, remixStylePrompt, remixTemperature, remixTopK, remixUseCustomLyrics, resolvedTitle, selectedLokr, transitionGuidanceScale, transitionInferenceSteps, transitionWorkspace, videoAspectRatio, videoAudioMode, videoConditioningImages, videoDurationSeconds, videoFrameLineage, videoInputs, videoPrompt, videoTemporalPrefix, vocalLanguage, voiceAutoF0Adjust, voiceCfgRate, voiceDiffusionSteps, voiceF0Condition, voiceLoudnessOptimization, voiceLengthAdjust, voicePitchShift, voiceReferenceInput, voiceSongInput, voiceUvrDenoise, voiceUvrModel, voiceUvrOverlap, voiceUvrSegmentSize]);
 
   const holderFreeAvailable = Boolean(session.isHolder && pricingConfig && holderFreeForRequest(pricingConfig, request));
 
@@ -1269,6 +1363,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
     const effectiveMarketPrice = marketPrice ?? (pricingConfig && holderFreeAvailable ? createFreeMarketPrice(pricingConfig, "holder-free") : null);
     if (!pricingConfig || !effectiveMarketPrice
       || (generationMode === "extraction" && (!extractionSourceInput || extractionSourceTooLong))
+      || (generationMode === "remix" && (!effectiveRemixSourceInput || !remixStylePrompt.trim()))
       || (generationMode === "transition" && !transitionWorkspace?.valid)
       || voiceChangeNeedsSongDuration) {
       setPricing(null);
@@ -1288,7 +1383,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
     } catch {
       setPricing(null);
     }
-  }, [extractionSourceInput, extractionSourceTooLong, generationMode, holderFreeAvailable, marketPrice, pricingConfig, request, transitionWorkspace, voiceReferenceInput, voiceSongInput]);
+  }, [effectiveRemixSourceInput, extractionSourceInput, extractionSourceTooLong, generationMode, holderFreeAvailable, marketPrice, pricingConfig, remixStylePrompt, request, transitionWorkspace, voiceReferenceInput, voiceSongInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1515,6 +1610,19 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
         setError("Enter lyrics or enable Instrumental.");
         return;
       }
+    } else if (generationMode === "remix") {
+      if (!effectiveRemixSourceInput) {
+        setError(remixSourceMode === "private" ? "Choose an audio asset to remix." : "Upload an audio file to remix.");
+        return;
+      }
+      if (!remixStylePrompt.trim()) {
+        setError("Describe the remix style.");
+        return;
+      }
+      if (remixUseCustomLyrics && !remixLyrics.trim()) {
+        setError("Enter custom lyrics or turn off Custom lyrics to extract them from the source.");
+        return;
+      }
     } else if (generationMode === "video") {
       if (!videoPrompt.trim()) {
         setError("Enter a video prompt.");
@@ -1686,7 +1794,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                   role="tab"
                   aria-selected={generationMode === "music"}
                   className={`dance-station-generation-mode-tab${generationMode === "music" ? " is-active" : ""}`}
-                  onClick={() => setGenerationMode("music")}
+                  onClick={() => selectGenerationMode("music")}
                   disabled={busy}
                 >
                   Create Music
@@ -1694,9 +1802,19 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={generationMode === "remix"}
+                  className={`dance-station-generation-mode-tab${generationMode === "remix" ? " is-active" : ""}`}
+                  onClick={() => selectGenerationMode("remix")}
+                  disabled={busy}
+                >
+                  Music Remix
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={generationMode === "transition"}
                   className={`dance-station-generation-mode-tab${generationMode === "transition" ? " is-active" : ""}`}
-                  onClick={() => setGenerationMode("transition")}
+                  onClick={() => selectGenerationMode("transition")}
                   disabled={busy}
                 >
                   Transition
@@ -1706,7 +1824,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                   role="tab"
                   aria-selected={generationMode === "extraction"}
                   className={`dance-station-generation-mode-tab${generationMode === "extraction" ? " is-active" : ""}`}
-                  onClick={() => setGenerationMode("extraction")}
+                  onClick={() => selectGenerationMode("extraction")}
                   disabled={busy}
                 >
                   Music Extraction
@@ -1716,7 +1834,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                   role="tab"
                   aria-selected={generationMode === "voice-change"}
                   className={`dance-station-generation-mode-tab${generationMode === "voice-change" ? " is-active" : ""}`}
-                  onClick={() => setGenerationMode("voice-change")}
+                  onClick={() => selectGenerationMode("voice-change")}
                   disabled={busy}
                 >
                   Voice Change
@@ -1817,6 +1935,85 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                       </label>
                     </div>
                     {!lokrChoices.length ? <p className="dance-station-availability-line">Import a published LoKr adapter into the library to use it remotely.</p> : null}
+                  </>
+                ) : generationMode === "remix" ? (
+                  <>
+                    <div className="dance-station-source-mode" role="radiogroup" aria-label="Remix source audio">
+                      <label className={`dance-station-source-mode__option${remixSourceMode === "private" ? " is-active" : ""}`}>
+                        <input type="radio" name="remix-source-mode" value="private" checked={remixSourceMode === "private"} onChange={() => setRemixSourceMode("private")} disabled={busy || remixSourceBusy} />
+                        <span>Private Asset</span>
+                      </label>
+                      <label className={`dance-station-source-mode__option${remixSourceMode === "disk" ? " is-active" : ""}`}>
+                        <input type="radio" name="remix-source-mode" value="disk" checked={remixSourceMode === "disk"} onChange={() => setRemixSourceMode("disk")} disabled={busy || remixSourceBusy} />
+                        <span>From Disk</span>
+                      </label>
+                    </div>
+                    {remixSourceMode === "private" ? (
+                      <label>
+                        Source audio
+                        <select value={remixSourceId} onChange={(event) => setRemixSourceId((event.currentTarget as HTMLSelectElement).value)} disabled={busy || remixSourceBusy || !audioChoices.length}>
+                          <option value="">Choose an audio asset</option>
+                          {audioChoices.map((choice) => <option key={choice.id} value={choice.id}>{choice.title}{choice.creatorName ? ` · ${choice.creatorName}` : ""}</option>)}
+                        </select>
+                      </label>
+                    ) : (
+                      <div className="dance-station-source-upload">
+                        <input
+                          id="dance-station-remix-source-file"
+                          className="dance-station-source-file-input"
+                          type="file"
+                          accept="audio/*"
+                          onChange={(event) => {
+                            const fileInput = event.currentTarget as HTMLInputElement;
+                            const file = fileInput.files?.[0];
+                            fileInput.value = "";
+                            void uploadRemixSource(file);
+                          }}
+                          disabled={busy || remixSourceBusy}
+                        />
+                        <label className="dance-station-source-upload-button" htmlFor="dance-station-remix-source-file">
+                          <Upload aria-hidden="true" size={14} strokeWidth={2} />
+                          <span>{remixSourceBusy ? "Uploading..." : "Upload audio"}</span>
+                        </label>
+                        <span className={`dance-station-source-file-name${remixSourceInput ? " is-ready" : ""}`}>{remixSourceBusy ? `Uploading ${remixSourceFileName}` : remixSourceInput ? remixSourceFileName : "Choose the song to remix"}</span>
+                        {remixSourceError ? <p className="dance-station-error">{remixSourceError}</p> : null}
+                      </div>
+                    )}
+                    {!audioChoices.length && remixSourceMode === "private" ? <p className="dance-station-availability-line">Import or upload an audio asset before creating a remix.</p> : null}
+                    <label>
+                      <span className="dance-station-field-label-row">Style prompt <Info aria-hidden="true" size={13} strokeWidth={2} /></span>
+                      <textarea value={remixStylePrompt} rows={4} placeholder="high-energy techno dance remix with driving bass and bright synths" onInput={(event) => setRemixStylePrompt((event.currentTarget as HTMLTextAreaElement).value)} disabled={busy} />
+                    </label>
+                    <label className="dance-station-switch-row">
+                      <input type="checkbox" checked={remixUseCustomLyrics} onChange={(event) => setRemixUseCustomLyrics((event.currentTarget as HTMLInputElement).checked)} disabled={busy} />
+                      <span className="dance-station-switch" aria-hidden="true"></span>
+                      <span>Use custom lyrics <em>(off extracts from source)</em></span>
+                    </label>
+                    {remixUseCustomLyrics ? <label>
+                      <span className="dance-station-field-label-row">Lyrics</span>
+                      <textarea value={remixLyrics} rows={5} placeholder="Enter replacement lyrics" onInput={(event) => setRemixLyrics((event.currentTarget as HTMLTextAreaElement).value)} disabled={busy} />
+                    </label> : null}
+                    <div className="dance-station-control-row">
+                      <label>Duration (sec)<input type="number" min="1" max="300" step="1" value={remixDurationSeconds} onInput={(event) => setRemixDurationSeconds(Math.max(1, Math.min(300, Number((event.currentTarget as HTMLInputElement).value) || 1)))} disabled={busy} /></label>
+                      <label>CFG scale<input type="number" min="0.01" max="20" step="0.05" value={remixCfgScale} onInput={(event) => setRemixCfgScale(Math.max(0.01, Number((event.currentTarget as HTMLInputElement).value) || 0.01))} disabled={busy} /></label>
+                      <label>Temperature<input type="number" min="0.01" max="2" step="0.05" value={remixTemperature} onInput={(event) => setRemixTemperature(Math.max(0.01, Number((event.currentTarget as HTMLInputElement).value) || 0.01))} disabled={busy} /></label>
+                    </div>
+                    <div className="dance-station-control-row">
+                      <label>Top K<input type="number" min="1" max="8192" step="1" value={remixTopK} onInput={(event) => setRemixTopK(Math.max(1, Math.min(8192, Number((event.currentTarget as HTMLInputElement).value) || 1)))} disabled={busy} /></label>
+                      <label>BPM <small>(optional)</small><input type="number" min="1" max="300" step="1" value={remixBpm} onInput={(event) => setRemixBpm((event.currentTarget as HTMLInputElement).value)} disabled={busy} /></label>
+                      <label>Semitone shift<input type="number" min="-24" max="24" step="1" value={remixSemitoneShift} onInput={(event) => setRemixSemitoneShift(Math.max(-24, Math.min(24, Number((event.currentTarget as HTMLInputElement).value) || 0)))} disabled={busy} /></label>
+                    </div>
+                    <div className="dance-station-control-row">
+                      <label>Octave shift<input type="number" min="-2" max="2" step="1" value={remixOctaveShift} onInput={(event) => setRemixOctaveShift(Math.max(-2, Math.min(2, Number((event.currentTarget as HTMLInputElement).value) || 0)))} disabled={busy} /></label>
+                      <label>Output format<select value={remixOutputFormat} onChange={(event) => setRemixOutputFormat((event.currentTarget as HTMLSelectElement).value as "wav" | "flac")} disabled={busy}><option value="wav">WAV</option><option value="flac">FLAC</option></select></label>
+                      <label>Seed <small>(optional)</small><input type="number" min="0" step="1" value={remixSeed} onInput={(event) => setRemixSeed((event.currentTarget as HTMLInputElement).value)} disabled={busy} /></label>
+                      <label>Decode seed <small>(optional)</small><input type="number" min="0" step="1" value={remixDecodeSeed} onInput={(event) => setRemixDecodeSeed((event.currentTarget as HTMLInputElement).value)} disabled={busy} /></label>
+                    </div>
+                    <label className="dance-station-switch-row">
+                      <input type="checkbox" checked={remixSaveMidi} onChange={(event) => setRemixSaveMidi((event.currentTarget as HTMLInputElement).checked)} disabled={busy} />
+                      <span className="dance-station-switch" aria-hidden="true"></span>
+                      <span>Save detected MIDI metadata</span>
+                    </label>
                   </>
                 ) : generationMode === "video" ? (
                   <>
@@ -2003,7 +2200,7 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                 <button type="button" className="dance-station-generate-button" onClick={() => void submitGeneration()} disabled={busy || diskSourceBusy || voiceUploadBusy || Boolean(videoFrameBusy) || !health?.enabled || !session.authenticated || !currentPricing}>
                   {busy ? <span className="dance-station-generation-spinner" aria-hidden="true" /> : <Sparkles aria-hidden="true" size={17} strokeWidth={2.1} />}
                   <span className="dance-station-generate-button__copy">
-                    <strong>{busy ? "Submitting" : generationMode === "music" ? "Create" : generationMode === "video" ? "Generate video" : generationMode === "extraction" ? "Extract" : generationMode === "transition" ? "Create transition" : "Change voice"}</strong>
+                    <strong>{busy ? "Submitting" : generationMode === "music" ? "Create" : generationMode === "remix" ? "Create remix" : generationMode === "video" ? "Generate video" : generationMode === "extraction" ? "Extract" : generationMode === "transition" ? "Create transition" : "Change voice"}</strong>
                     {!busy ? <small>{costLabel}</small> : null}
                   </span>
                 </button>
@@ -2026,6 +2223,10 @@ export function RemoteGenerationPanel({ mode, session, workspaceItems, publicIte
                     <li>Be specific with genre, mood, instruments, and energy</li>
                     <li>Use references like “in the style of...” for better results</li>
                     <li>Instrumental mode works best with descriptive prompts</li>
+                  </> : generationMode === "remix" ? <>
+                    <li>Choose a source song and describe the new style</li>
+                    <li>Leave custom lyrics off to extract lyrics from the source</li>
+                    <li>Seeds are optional and remain random when blank</li>
                   </> : generationMode === "extraction" ? <>
                     <li>Choose the source audio asset you want to analyze</li>
                     <li>Select a track layer to isolate from the source</li>

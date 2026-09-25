@@ -149,6 +149,7 @@ export function holderFreeForRequest(config: RemotePricingConfig, request: Remot
     case "voice_change": return config.settings.voiceChangeFreeForHolders;
     case "transition_chain": return config.settings.transitionFreeForHolders;
     case "rhythm_beats": return config.settings.rhythmBeatsFreeForHolders;
+    case "music_remix": return config.settings.musicFreeForHolders;
     case "avatar":
     case "avatar_reskin":
     case "reskin": return config.settings.avatarFreeForHolders ?? config.settings.musicFreeForHolders;
@@ -174,7 +175,7 @@ export function calculateRemotePricing(
   const transitionStageCount = transitionPlan?.transitionClips?.length ?? 1;
   const transitionSeconds = transitionPlan?.transitionClips?.reduce((sum, clip) => sum + Math.max(0, clip.endSeconds - clip.startSeconds), 0) ?? 0;
   const generativeDanceSequence = taskType === "generative_dance" && parameters.sequence && typeof parameters.sequence === "object" ? parameters.sequence as { durationSeconds?: unknown } : undefined;
-  const duration = taskType === "transition_chain" ? transitionSeconds : taskType === "generative_dance" ? positiveNumber(generativeDanceSequence?.durationSeconds, 0) : positiveNumber(parameters.audio_duration ?? parameters.source_duration_seconds, config.defaults.musicDurationSeconds);
+  const duration = taskType === "transition_chain" ? transitionSeconds : taskType === "generative_dance" ? positiveNumber(generativeDanceSequence?.durationSeconds, 0) : positiveNumber(parameters.audio_duration ?? parameters.duration_seconds ?? parameters.source_duration_seconds, config.defaults.musicDurationSeconds);
   const defaultSteps = taskType === "extract" || taskType === "rhythm_beats" ? config.defaults.extractionInferenceSteps : taskType === "voice_change" ? config.defaults.voiceChangeInferenceSteps : taskType === "transition_chain" ? config.defaults.transitionInferenceSteps : config.defaults.musicInferenceSteps;
   const configuredSteps = taskType === "voice_change" ? parameters.diffusion_steps : parameters.inference_steps;
   const steps = Math.max(1, Math.round(positiveNumber(configuredSteps, defaultSteps)));

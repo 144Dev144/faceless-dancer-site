@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { AudioWaveform, Check, CircleHelp, Eye, EyeOff, FileUp, ImagePlus, LibraryBig, MoreHorizontal, Pencil, Piano, RotateCcw, Search, Settings2, SlidersHorizontal, Sparkles, Upload, Video, Waves, X as XIcon, type LucideIcon } from "lucide-preact";
 import { HomeTopNav } from "../components/home/HomeTopNav";
 import { LibraryAssetCard } from "../components/library/LibraryAssetCard";
-import { RemoteGenerationPanel } from "../components/danceStation/RemoteGenerationPanel";
+import { RemoteGenerationPanel, type MusicGenerationMode } from "../components/danceStation/RemoteGenerationPanel";
 import { RhythmBeatsPanel } from "../components/danceStation/RhythmBeatsPanel";
 import { DanceCreationPanel } from "../components/danceStation/DanceCreationPanel";
 import { AudioMassInlineEditor, audioMassInlineController, type AudioMassEvent } from "../components/danceStation/AudioMassInlineEditor";
@@ -41,8 +41,20 @@ const panelHashById: Record<DanceStationPanel, string> = {
   "instrument-lab": "instrument-lab",
 };
 
+const musicGenerationHashByMode: Record<MusicGenerationMode, string> = {
+  music: "music-generation",
+  remix: "music-remix",
+  transition: "music-transition",
+  extraction: "music-extraction",
+  "voice-change": "music-voice-change",
+};
+
 const panelIdByHash: Record<string, DanceStationPanel> = {
   "music-generation": "generation",
+  "music-remix": "generation",
+  "music-transition": "generation",
+  "music-extraction": "generation",
+  "music-voice-change": "generation",
   generation: "generation",
   "video-generation": "video-generation",
   "rhythm-beats": "rhythm-beats",
@@ -55,6 +67,15 @@ const panelIdByHash: Record<string, DanceStationPanel> = {
 function panelFromHash(): DanceStationPanel {
   const hash = window.location.hash.replace(/^#/, "").trim().toLowerCase();
   return panelIdByHash[hash] ?? "generation";
+}
+
+function musicGenerationModeFromHash(): MusicGenerationMode {
+  const hash = window.location.hash.replace(/^#/, "").trim().toLowerCase();
+  if (hash === "music-remix") return "remix";
+  if (hash === "music-transition") return "transition";
+  if (hash === "music-extraction") return "extraction";
+  if (hash === "music-voice-change") return "voice-change";
+  return "music";
 }
 
 const tools: Array<{
@@ -117,6 +138,7 @@ const tools: Array<{
 
 export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const [activePanel, setActivePanel] = useState<DanceStationPanel>(panelFromHash);
+  const [musicGenerationMode, setMusicGenerationMode] = useState<MusicGenerationMode>(musicGenerationModeFromHash);
   const [workspaceItems, setWorkspaceItems] = useState<BrowserWorkspaceItem[]>([]);
   const [workspaceStatus, setWorkspaceStatus] = useState<BrowserWorkspaceStatus | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
@@ -179,7 +201,10 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
     if (!window.location.hash || !panelIdByHash[window.location.hash.replace(/^#/, "").trim().toLowerCase()]) {
       window.history.replaceState({}, "", `${window.location.pathname}#${panelHashById[activePanel]}`);
     }
-    const onHashChange = () => setActivePanel(panelFromHash());
+    const onHashChange = () => {
+      setActivePanel(panelFromHash());
+      setMusicGenerationMode(musicGenerationModeFromHash());
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -248,6 +273,13 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
   const selectPanel = (panel: DanceStationPanel) => {
     setActivePanel(panel);
     const nextHash = `#${panelHashById[panel]}`;
+    if (window.location.hash !== nextHash) window.location.hash = nextHash;
+  };
+
+  const selectMusicGenerationMode = (nextMode: MusicGenerationMode) => {
+    setActivePanel("generation");
+    setMusicGenerationMode(nextMode);
+    const nextHash = `#${musicGenerationHashByMode[nextMode]}`;
     if (window.location.hash !== nextHash) window.location.hash = nextHash;
   };
 
@@ -1547,6 +1579,28 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                 </button>
               ))}
             </nav>
+            {activePanel === "generation" ? (
+              <nav className="dance-station-music-subnav" aria-label="Music generation modes">
+                <p className="dance-station-music-subnav__title">Music Generation</p>
+                {([
+                  ["music", "Create Music"],
+                  ["remix", "Music Remix"],
+                  ["transition", "Transition"],
+                  ["extraction", "Music Extraction"],
+                  ["voice-change", "Voice Change"],
+                ] as Array<[MusicGenerationMode, string]>).map(([subtab, label]) => (
+                  <button
+                    key={subtab}
+                    type="button"
+                    className={`dance-station-music-subnav__item${musicGenerationMode === subtab ? " is-active" : ""}`}
+                    onClick={() => selectMusicGenerationMode(subtab)}
+                  >
+                    <span aria-hidden="true" />
+                    {label}
+                  </button>
+                ))}
+              </nav>
+            ) : null}
           </aside>
 
           <div className="dance-station-workspace-content">
@@ -1602,7 +1656,7 @@ export function DanceStationPage({ session, setSession }: Props): JSX.Element {
                 ) : activePanel === "instrument-lab" ? (
                   <InstrumentLabPanel frameRef={instrumentLabFrameRef} />
                 ) : activePanel === "generation" ? (
-                  <RemoteGenerationPanel session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
+                  <RemoteGenerationPanel mode={musicGenerationMode} onMusicModeChange={selectMusicGenerationMode} session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
                 ) : activePanel === "video-generation" ? (
                   <RemoteGenerationPanel mode="video" session={session} workspaceItems={workspaceItems} publicItems={publicItems} onWorkspaceChanged={refreshWorkspace} />
                 ) : activePanel === "rhythm-beats" ? (

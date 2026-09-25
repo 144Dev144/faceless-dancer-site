@@ -192,7 +192,7 @@ export interface RemoteGenerationMetadata {
 }
 
 export interface RemoteGenerationRequest {
-  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | "ltx-video";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | "ltx-video" | "mulacover";
   modelRevision: string;
   inputs: RemoteGenerationInput[];
   priority: "low" | "standard" | "high";
@@ -310,7 +310,7 @@ export interface RemotePaymentIntent {
   id: string;
   userId: string;
   walletAddress: string;
-  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | "ltx-video";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | "ltx-video" | "mulacover";
   requestHash: string;
   currency: RemotePaymentCurrency;
   tokenMint: string;
@@ -382,7 +382,7 @@ export interface RemoteJob {
   id: string;
   userId: string;
   paymentIntentId: string;
-  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | "ltx-video";
+  runtime: "ace-step" | "voice-change" | "rhythm-beats" | "avatar" | "flux-image" | "wan-animate" | "ltx-video" | "mulacover";
   modelRevision: string;
   requestHash: string;
   request: RemoteGenerationRequest;

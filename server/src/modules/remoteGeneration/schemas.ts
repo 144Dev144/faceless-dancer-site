@@ -48,7 +48,7 @@ export const remoteGenerationPrioritySchema = z.enum(["low", "standard", "high"]
 export const remotePaymentCurrencySchema = z.enum(["FACELESS", "SOL"]);
 
 export const remoteGenerationRequestSchema = z.object({
-  runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate", "ltx-video"]).default("ace-step"),
+  runtime: z.enum(["ace-step", "voice-change", "rhythm-beats", "avatar", "flux-image", "wan-animate", "ltx-video", "mulacover"]).default("ace-step"),
   modelRevision: z.string().trim().min(1).max(200).default("ace-step-1.5"),
   inputs: z.array(inputSchema).max(16).default([]),
   priority: remoteGenerationPrioritySchema.default("standard"),
@@ -179,6 +179,22 @@ export const remoteGenerationRequestSchema = z.object({
     const lineage = value.metadata?.videoLineage;
     if (lineage && !value.inputs.some((input) => input.role === "conditioning")) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "A video lineage request requires its captured start-frame input." });
+    }
+  }
+  if (value.runtime === "mulacover") {
+    if (taskType !== "music_remix") context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "task_type"], message: "MuLaCover requests must use task_type=music_remix." });
+    if (value.inputs.length !== 1 || value.inputs[0]?.role !== "reference_audio") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["inputs"], message: "MuLaCover requires one reference_audio input." });
+    }
+    if (typeof value.parameters.tags !== "string" || !value.parameters.tags.trim()) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "tags"], message: "MuLaCover requests require a style prompt in tags." });
+    }
+    const duration = value.parameters.duration_seconds;
+    if (typeof duration !== "number" || !Number.isFinite(duration) || duration < 1 || duration > 300) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "duration_seconds"], message: "MuLaCover duration must be between 1 and 300 seconds." });
+    }
+    if (value.parameters.lyrics !== undefined && typeof value.parameters.lyrics !== "string") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["parameters", "lyrics"], message: "MuLaCover lyrics must be text when supplied." });
     }
   }
 });
